@@ -36,7 +36,7 @@ export function createSolver(
 ) {
   const task = decode(taskSchema, taskValue);
   const options: RoleOptions = {
-    maxExplorerResponses: 4,
+    maxExplorerResponses: settings.explorer === "retrieval" ? 16 : 4,
     literature: false,
     explorer: "prefilled",
     ...settings,

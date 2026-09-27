@@ -55,7 +55,7 @@ test("both Explorer implementations share the solver boundary and prefilled rema
       );
       expect(tools).toEqual(
         explorer === "retrieval"
-          ? ["submit_result", "read_notes", "find_notes"]
+          ? ["submit_result", "read_notes"]
           : ["submit_result"],
       );
       return reply(
@@ -64,6 +64,9 @@ test("both Explorer implementations share the solver boundary and prefilled rema
     });
     const solver = createSolver(task, runtime, explorer ? { explorer } : {});
     expect(solver.options.explorer).toBe(explorer ?? "prefilled");
+    expect(solver.options.maxExplorerResponses).toBe(
+      explorer === "retrieval" ? 16 : 4,
+    );
     expect(solver.options.literature).toBe(false);
     expect(
       await solver.functions.explorer(
@@ -75,8 +78,8 @@ test("both Explorer implementations share the solver boundary and prefilled rema
   }
 });
 
-test("retrieval freezes notes, pages literal searches, and rejects invalid reads and dead dependencies within four responses", async () => {
-  const notes = [note("live", "Lemma [x]"), note("dead", "Lemma x")];
+test("retrieval freezes batched reads and rejects invalid IDs and dead dependencies", async () => {
+  const notes = [note("live", "Live lemma"), note("dead", "Rejected lemma")];
   notes[1]!.dead = true;
   notes[1]!.verified = false;
   notes[1]!.checks = [
@@ -122,26 +125,12 @@ test("retrieval freezes notes, pages literal searches, and rejects invalid reads
         notes[0]!.dead = true;
         notes.push(note("late", "Lemma published after invocation"));
         return reply(
-          call("page1", "find_notes", { query: "lEmMa", offset: 0, limit: 1 }),
-          call("page2", "find_notes", { query: "lemma", offset: 1, limit: 1 }),
-          call("literal", "find_notes", { query: "[x]", offset: 0, limit: 50 }),
           call("detail", "read_notes", {
             ids: ["live", "dead"],
             level: "detailed",
           }),
         );
       case 2: {
-        expect(value("page1")).toMatchObject({
-          notes: [{ id: "live" }],
-          nextOffset: 1,
-        });
-        expect(value("page2")).toMatchObject({
-          notes: [{ id: "dead" }],
-          nextOffset: null,
-        });
-        expect(value("literal").notes.map(({ id }: Note) => id)).toEqual([
-          "live",
-        ]);
         const details = value("detail");
         expect(
           details.map(({ detailedSummary }: Note) => detailedSummary),
@@ -156,11 +145,6 @@ test("retrieval freezes notes, pages literal searches, and rejects invalid reads
           call("full", "read_notes", { ids: ["live", "dead"], level: "full" }),
           call("unknown", "read_notes", { ids: ["missing"], level: "full" }),
           call("late", "read_notes", { ids: ["late"], level: "full" }),
-          call("tooManyMatches", "find_notes", {
-            query: "",
-            offset: 0,
-            limit: 51,
-          }),
           call("tooManyIds", "read_notes", {
             ids: Array.from({ length: 21 }, (_, index) => `id-${index}`),
             level: "full",
@@ -172,7 +156,7 @@ test("retrieval freezes notes, pages literal searches, and rejects invalid reads
           "FULL-live",
           "FULL-dead",
         ]);
-        for (const id of ["unknown", "late", "tooManyMatches", "tooManyIds"])
+        for (const id of ["unknown", "late", "tooManyIds"])
           expect(result(id).isError).toBe(true);
         expect(JSON.stringify(result("unknown"))).toContain(
           "Unknown note: missing",
@@ -204,6 +188,7 @@ test("retrieval freezes notes, pages literal searches, and rejects invalid reads
   });
   const result = await createSolver(task, runtime, {
     explorer: "retrieval",
+    maxExplorerResponses: 4,
   }).functions.explorer(
     { task, notes, support: ["live"], guidance: "Continue" },
     execution,
@@ -213,21 +198,33 @@ test("retrieval freezes notes, pages literal searches, and rejects invalid reads
   expect(responses).toBe(4);
 });
 
-test("four retrieval responses without a submission exhaust the Explorer allowance", async () => {
-  let responses = 0;
-  const runtime = fixtureRuntime(() => {
-    if (++responses > 4) throw new Error("Unexpected extra retrieval response");
-    return reply(
-      fauxToolCall("find_notes", { query: "", offset: 0, limit: 50 }),
-    );
-  });
-  const solver = createSolver(task, runtime, { explorer: "retrieval" });
-  await expect(
-    solver.functions.explorer(
-      { task, notes: [], support: [], guidance: "Continue" },
-      execution,
-      BACKGROUND_CONTEXT,
-    ),
-  ).rejects.toThrow("exhausted its responses without a valid result");
-  expect(responses).toBe(4);
+test("retrieval responses consume the default or explicitly configured allowance", async () => {
+  for (const maxExplorerResponses of [undefined, 2]) {
+    const maximum = maxExplorerResponses ?? 16;
+    let responses = 0;
+    const runtime = fixtureRuntime(() => {
+      if (++responses > maximum)
+        throw new Error("Unexpected extra retrieval response");
+      return reply(
+        fauxToolCall("read_notes", { ids: ["live"], level: "detailed" }),
+      );
+    });
+    const solver = createSolver(task, runtime, {
+      explorer: "retrieval",
+      ...(maxExplorerResponses === undefined ? {} : { maxExplorerResponses }),
+    });
+    await expect(
+      solver.functions.explorer(
+        {
+          task,
+          notes: [note("live", "Live lemma")],
+          support: [],
+          guidance: "",
+        },
+        execution,
+        BACKGROUND_CONTEXT,
+      ),
+    ).rejects.toThrow("exhausted its responses without a valid result");
+    expect(responses).toBe(maximum);
+  }
 });

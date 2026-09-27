@@ -6,7 +6,6 @@
       "reasoning": "max"
     }
   },
-  "maxExplorerResponses": 4,
   "literature": false,
   "research": {
     "model": "gpt-6-astra",

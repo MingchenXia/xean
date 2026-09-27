@@ -8,10 +8,11 @@ correction APIs, CLI input files, and persisted solver inputs. Solver declaratio
 use version 8 and observer exports use `xean-observe/v2`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
-- Select `explorer: "retrieval"` to query an invocation's frozen notes through
-  bounded search and batched detailed/full reads. The default `prefilled` Explorer
-  retains selected full context upfront. Both use the same verification and
-  four-response allowance, including retrieval responses.
+- Select `explorer: "retrieval"` to read an invocation's frozen notes by ID
+  through the single `read_notes` tool. All index summaries are supplied upfront.
+  Retrieval defaults to 16 responses, including reads. The default `prefilled`
+  Explorer retains selected full context upfront and four responses.
+  `maxExplorerResponses` overrides either default. Both use the same verification.
 - Explicit antecedents in conditional claims remain part of the claim.
   Correctness checks the implication, source checks its external results, and
   requirements decides whether it solves the original task.

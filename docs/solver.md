@@ -11,7 +11,7 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
 
 - Explorer receives note summaries, verification feedback, selected support
   texts, and Coordinator guidance by default. Setting `explorer: "retrieval"`
-  gives it internal note tools instead of upfront full texts. It owns mathematical
+  gives it `read_notes` instead of upfront full texts. It owns mathematical
   strategy. Both variants have no external search tools. Its submissions stay private until the whole worker
   returns. A `candidate` claim, an empty submission, prose after a valid
   submission, or `maxExplorerResponses` ends the worker. Every response counts
@@ -26,10 +26,10 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
   It prioritizes pivotal or repeatedly reused unchecked claims without prescribing
   Explorer's proof steps or imposing a verification quota. Workers return results,
   not proposed work requests.
-  Its first prompt contains summaries and feedback. Pi's `read_notes` tool
-  retrieves detailed summaries or full texts from the same frozen input.
-  `find_notes` searches that snapshot. Both can read dead notes for diagnosis. Reading does not authorize using a dead
-  note as support or change the verification requirements.
+  Its first prompt contains every note's ID, index summary, and feedback.
+  `read_notes` retrieves detailed summaries or full texts from the same frozen
+  input. Dead notes may be read for diagnosis, but cannot supply mathematical
+  support or change the verification requirements.
 - Verifier requests select a stopping stage: `correctness`, `source`,
   `requirements`, or `reconstruction`. Each stage checks multiple notes in one
   model request and returns a verdict per note. Dependencies must pass correctness
@@ -139,10 +139,9 @@ normal submission, without a separate summarization call or fixed length ratio.
 Verification receives full notes and dependencies. Summary views change neither
 verification status nor dependency obligations.
 
-Coordinator and the retrieval Explorer begin with index summaries and feedback.
-`find_notes` performs case-insensitive literal substring search across IDs,
-summaries, and full text. It returns up to 50 index entries, with `nextOffset`
-for paging. An empty query lists notes. `read_notes` takes up to 20 unique `ids`
+Coordinator and the retrieval Explorer begin with every note's ID, index summary,
+status, and feedback. They select IDs directly from that complete index.
+Their only retrieval tool, `read_notes`, takes up to 20 unique `ids`
 and a `level` of `detailed` or `full`. Reads include verification state, support
 IDs, and failure feedback. Independent IDs should be batched. Full text is never
 truncated, and support IDs can be read in further calls. Read the full note when
@@ -154,9 +153,10 @@ selected `support` IDs, task, and guidance. The prefilled variant receives the
 selected support closure as full texts. The retrieval variant receives those IDs
 and may query the snapshot. Notes committed after dispatch remain invisible,
 including on a worker retry. Internal retrieval works with literature and source
-retrieval disabled. Every retrieval response counts toward the unchanged default
-four-response allowance. The same single-Explorer scheduling and verification
-contracts apply to both variants.
+retrieval disabled. Every response, including a read request, counts toward
+`maxExplorerResponses`. Retrieval mode has a larger default allowance for reads
+and subsequent mathematical work. Both variants use the same single-Explorer
+scheduling and verification contracts.
 
 Failed approaches belong in notes, and guidance supplies scheduling direction.
 Dead notes remain readable for diagnosis but cannot be mathematical dependencies.
@@ -624,7 +624,8 @@ disabling ChatGPT-native retrieval. It is not qualified for enforced
 closed-book experiments. Library callers can register `chatGptWebProvider`
 from `xean/pi` directly with Pi's `models.setProvider()`.
 
-`maxExplorerResponses` defaults to four. `literature` defaults to false. `limits`
+`maxExplorerResponses` defaults to four for `prefilled` and 16 for `retrieval`.
+An explicit value overrides either default. `literature` defaults to false. `limits`
 uses the kernel's concurrency, attempts, and logical provider calls. Campaigns,
 roles, experiments, and smoke runs have no added wall-clock deadlines. Existing
 provider timeouts remain in place and are tuned from observed provider data.
