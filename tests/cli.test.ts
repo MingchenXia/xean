@@ -112,6 +112,8 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
 });
 
 test("CLI drains large inspection and argument output through a slow pipe", async () => {
+  // Collect earlier fixtures before this large SQLite fixture allocates its pages.
+  Bun.gc(true);
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-output-"));
   const database = join(directory, "campaign.sqlite");
   const argument = "For every integer n, 2n is even.\n".repeat(65_536);
