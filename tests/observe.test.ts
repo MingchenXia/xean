@@ -1,842 +1,179 @@
-import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import { observe } from "../packages/observe/src/snapshot.ts";
+import { readRun, type Run } from "../packages/observe/src/read.ts";
+import { api, readSources } from "../packages/observe/src/server.ts";
 
-import {
-  createCampaign,
-  type Campaign,
-  type EntryId,
-  type Reader,
-} from "../src";
-import {
-  inspectCoreCampaign,
-  inspectCoreCampaignRecords,
-  inspectCoreCampaignSummary,
-  inspectCoreCampaignSummaryRecords,
-  inspectCoreCallSummaries,
-} from "../src/observe";
-import { piStoredResult, storePiResult } from "../src/pi";
-
-const directories: string[] = [];
-
-afterEach(() => {
-  for (const directory of directories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-function campaignPath(): string {
-  const directory = mkdtempSync(join(tmpdir(), "xean-observe-v1-"));
-  directories.push(directory);
-  return join(directory, "campaign.db");
-}
-
-function piRequest() {
-  return {
-    protocol: "xean/pi-run/v6" as const,
-    model: { provider: "provider", id: "model", api: "responses" },
-    modelProfile: null,
-    prompt: "test",
-  };
-}
-
-interface Operation {
-  readonly usage?: {
-    readonly input: number;
-    readonly output: number;
-    readonly cacheRead: number;
-    readonly cacheWrite: number;
-    readonly reasoning?: number;
-    readonly totalTokens: number;
-    readonly estimatedCostUsd: number;
-  };
-  readonly error?: string;
-}
-
-/** Append one completed request checkpoint per operation, then the compact result. */
-async function piResult(
-  campaign: Campaign,
-  call: EntryId,
-  operations: readonly Operation[],
-  transcript: readonly unknown[] = [],
-) {
-  const model = piRequest().model;
-  for (const operation of operations) {
-    await campaign.call(
-      {
-        label: "xean/pi-request",
-        request: {
-          protocol: "xean/pi-request/v1",
-          parent: call,
-          model,
-          payloadRef: campaign.storePayload({ input: [] }),
-        },
+test("the external observer reads coherent live snapshots without changing a locked campaign", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-observe-"));
+  const database = join(directory, "campaign.sqlite");
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const engine = await Xean.open(await openXeanStorage(database), {
+    task: {
+      kind: "xean.solve",
+      task: {
+        problem: "Observer fixture",
+        completionCriteria: "Retain exact text",
       },
-      async () => ({
-        protocol: "xean/pi-request-completion/v2",
-        parent: call,
-        operation: {
-          provider: model.provider,
-          requestedModel: model.id,
-          api: model.api,
-          stopReason: operation.error === undefined ? "stop" : "error",
-          error: operation.error !== undefined,
-          usage: operation.usage ?? null,
-        },
-        ...(operation.error === undefined
-          ? {}
-          : { errorMessage: operation.error }),
+    },
+    coordinator: {
+      name: "fixture",
+      run: (signal) => ({
+        state: null,
+        ...(signal.kind === "start"
+          ? { dispatch: [{ id: "work", role: "explorer", input: null }] }
+          : {}),
       }),
-    );
-  }
-  return storePiResult(campaign, {
-    call,
-    ...piStoredResult.parse({ state: "succeeded", text: "done", transcript }),
-  });
-}
-
-const firstUsage = {
-  input: 8,
-  output: 5,
-  cacheRead: 2,
-  cacheWrite: 1,
-  reasoning: 3,
-  totalTokens: 16,
-  cost: { input: 1, output: 8, cacheRead: 0.5, cacheWrite: 0.5, total: 10 },
-};
-
-test("call summaries preserve full metadata at the captured boundary", async () => {
-  const campaign = createCampaign(campaignPath(), "call-summary", null);
-  try {
-    campaign.submitCandidate(new TextEncoder().encode("proof"), ["check"]);
-    await campaign.call(
-      { label: "measured", role: "explorer", request: piRequest() },
-      async ({ call }) =>
-        piResult(campaign, call, [measured(firstUsage)], [message(firstUsage)]),
-    );
-    await expect(
-      campaign.call({ label: "failed-local", request: null }, async () => {
-        throw new Error("local failure");
-      }),
-    ).rejects.toThrow("local failure");
-    const records = campaign.records();
-    const full = inspectCoreCampaignRecords(campaign, records);
-    const metadata = full.calls.map(({ pi, ...call }) => {
-      if (pi === undefined) return call;
-      const { responseText: _, ...summary } = pi;
-      return { ...call, pi: summary };
-    });
-    expect(inspectCoreCallSummaries(records)).toEqual(metadata);
-    expect(full.calls[0]?.pi?.responseText).toBe("done");
-    await campaign.call({ label: "later", request: null }, async () => null);
-    expect(inspectCoreCallSummaries(records)).toEqual(metadata);
-    expect(inspectCoreCallSummaries(campaign.records())).toHaveLength(3);
-  } finally {
-    campaign.close();
-  }
-});
-const secondUsage = {
-  input: 0,
-  output: 5,
-  cacheRead: 0,
-  cacheWrite: 0,
-  reasoning: 0,
-  totalTokens: 5,
-  cost: { input: 0, output: 10, cacheRead: 0, cacheWrite: 0, total: 10 },
-};
-const measured = (usage: typeof firstUsage) => ({
-  usage: {
-    input: usage.input,
-    output: usage.output,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-    reasoning: usage.reasoning,
-    totalTokens: usage.totalTokens,
-    estimatedCostUsd: usage.cost.total,
-  },
-});
-const message = (usage: typeof firstUsage) => ({ role: "assistant", usage });
-
-test("derives token buckets and prices reasoning per response", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", null);
-  try {
-    await campaign.call(
-      { label: "workflow/measured", request: piRequest() },
-      async ({ call }) =>
-        piResult(
-          campaign,
-          call,
-          [measured(firstUsage), measured(secondUsage)],
-          [message(firstUsage), message(secondUsage)],
-        ),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  const expected = {
-    freshInputTokens: 9,
-    cachedInputTokens: 2,
-    reasoningOutputTokens: 3,
-    nonReasoningOutputTokens: 7,
-    estimatedReasoningCostUsd: 4.8,
-    reasoningCostShareOfMeasuredCost: 0.24,
-  };
-  const observation = inspectCoreCampaign(path);
-  expect(observation.spend.breakdown).toEqual(expected);
-  expect(observation.calls[0]!.pi?.accounting).toMatchObject({
-    state: "available",
-    spend: { breakdown: expected },
-  });
-  expect(inspectCoreCampaignSummary(path).spend.breakdown).toEqual(expected);
-});
-
-test("omits reasoning cost when measured retry usage is absent from transcript", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", null);
-  try {
-    await campaign.call(
-      { label: "workflow/measured", request: piRequest() },
-      async ({ call }) =>
-        piResult(
-          campaign,
-          call,
-          [measured(firstUsage), measured(secondUsage)],
-          [message(firstUsage)],
-        ),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  expect(inspectCoreCampaign(path).spend.breakdown).toEqual({
-    freshInputTokens: 9,
-    cachedInputTokens: 2,
-    reasoningOutputTokens: 3,
-    nonReasoningOutputTokens: 7,
-  });
-});
-
-test("projects opaque application data, calls, candidates, and verdicts", async () => {
-  const path = campaignPath();
-  const config = { protocol: "rapid-v37", future: { value: true } };
-  const campaign = createCampaign(path, "changing-workflow", config);
-  try {
-    const candidate = campaign.submitCandidate(new TextEncoder().encode("x"), [
-      "proof",
-    ]);
-    const { call } = await campaign.call(
+    },
+    roles: [
       {
-        label: "proof",
-        role: "proof-auditor",
-        candidate,
-        request: { custom: true },
-      },
-      async () => ({ state: "succeeded" }),
-    );
-    campaign.recordVerdict(call, "PASS", { checked: "directly" });
-  } finally {
-    campaign.close();
-  }
-
-  expect(inspectCoreCampaign(path)).toMatchObject({
-    schema: "xean.core-observation/v1",
-    application: "changing-workflow",
-    applicationConfig: config,
-    calls: [
-      {
-        label: "proof",
-        role: "proof-auditor",
-        settlement: "returned",
-        candidateId: 2,
-        tools: [],
-      },
-    ],
-    candidates: [
-      {
-        id: 2,
-        requiredVerifiers: ["proof"],
-        material: { bytes: 1, encoding: "utf8", text: "x" },
-        status: { verified: true, missing: [], failed: [] },
-        verdicts: [
-          {
-            call: 3,
-            verifier: "proof",
-            verdict: "PASS",
-            evidence: { checked: "directly" },
-          },
-        ],
+        name: "explorer",
+        async run(_, execution) {
+          const call = await execution.recorder.begin({
+            provider: "fixture",
+            api: "fixture",
+            id: "fixture",
+          });
+          await call.recordRequest({ private: "request body" });
+          entered.resolve();
+          await release.promise;
+          await call.settle(
+            { private: "response body" },
+            { input_tokens: 0, output_tokens: 9 },
+          );
+          return {
+            kind: "notes",
+            candidate: false,
+            notes: [
+              {
+                id: "n1",
+                summary: "Fixture note",
+                text: "<script>unsafe()</script> For every $n$, $4n$ is even.",
+                support: [],
+              },
+            ],
+          };
+        },
       },
     ],
   });
-});
-
-test("captured observation boundaries do not reread later calls or verdicts", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "captured-boundary", { opaque: true });
-  let forbiddenReads = 0;
-  const forbidden = (): never => {
-    forbiddenReads += 1;
-    throw new Error("captured projection must not reread journal or payload");
-  };
-  const materialReads: number[] = [];
-  const reader: Reader = {
-    records: forbidden,
-    record: forbidden,
-    lastSequence: forbidden,
-    payload: forbidden,
-    material(seq) {
-      materialReads.push(seq);
-      return campaign.material(seq);
-    },
-    close: forbidden,
-  };
+  const running = engine.run();
   try {
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("captured proof"),
-      ["proof"],
-    );
-    const { call } = await campaign.call(
-      { label: "proof", candidate, request: null },
-      async () => ({ state: "succeeded" }),
-    );
-    const through = campaign.lastSequence();
-    const records = campaign.records({ through });
-    const before = inspectCoreCampaignRecords(reader, records);
-    const summary = inspectCoreCampaignSummaryRecords(records);
-    expect(before.lastSeq).toBe(through);
-    expect(before.calls.map((value) => value.id)).toEqual([call]);
-    expect(before.candidates[0]!.status.verified).toBe(false);
-    expect(before.candidates[0]!.material).toMatchObject({
-      text: "captured proof",
+    await entered.promise;
+    const failures: unknown[] = [];
+    await observe(engine, directory, (error) => {
+      failures.push(error);
+    })();
+    const before = await readRun({ id: "fixture", directory }, directory);
+    expect(before.error).toBeUndefined();
+    expect(before.snapshot?.notes).toHaveLength(0);
+    expect(before.snapshot?.status.calls.unsettled).toBe(1);
+    release.resolve();
+    await running;
+    const stop = observe(engine, directory, (error) => {
+      failures.push(error);
     });
-    expect(summary).toMatchObject({
-      lastSeq: through,
-      callCount: 1,
-      candidateCount: 1,
-      verifiedCandidateCount: 0,
+    await stop();
+    await stop();
+    const after = await readRun({ id: "fixture", directory }, directory);
+    const published = await Bun.file(
+      join(directory, "observation.json"),
+    ).json();
+    expect(published).toEqual({
+      ...after.snapshot,
+      observedAt: published.observedAt,
     });
-
-    campaign.recordVerdict(call, "PASS", { checked: "after capture" });
-    campaign.submitCandidate(new TextEncoder().encode("later proof"), [
-      "later",
-    ]);
-    await campaign.call({ label: "later", request: null }, async () => null);
-
-    expect(campaign.lastSequence()).toBeGreaterThan(through);
-    expect(inspectCoreCampaignRecords(reader, records)).toEqual(before);
-    expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
-    expect(materialReads).toEqual([candidate, candidate]);
-    expect(forbiddenReads).toBe(0);
-    const current = inspectCoreCampaignSummary(path);
-    expect(current).toMatchObject({
-      callCount: 2,
-      candidateCount: 2,
-      verifiedCandidateCount: 1,
+    expect(after.snapshot?.notes[0]?.id).toBe("work/n1");
+    expect(after.snapshot?.status.calls.byModel[0]?.reportedUsage).toEqual({
+      input_tokens: 0,
+      output_tokens: 9,
     });
-    expect(current.lastSeq).toBeGreaterThan(summary.lastSeq);
-  } finally {
-    campaign.close();
-  }
-});
-
-test("a captured pending call stays pending after its result is appended", async () => {
-  const campaign = createCampaign(campaignPath(), "pending-boundary", null);
-  let finish!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const pending = campaign.call(
-    { label: "pending", request: null },
-    async () => {
-      await gate;
-      return { done: true };
-    },
-  );
-  let forbiddenReads = 0;
-  const forbidden = (): never => {
-    forbiddenReads += 1;
-    throw new Error("unexpected live read");
-  };
-  const reader: Reader = {
-    records: forbidden,
-    record: forbidden,
-    lastSequence: forbidden,
-    payload: forbidden,
-    material: forbidden,
-    close: forbidden,
-  };
-  try {
-    const records = campaign.records({ through: campaign.lastSequence() });
-    const summary = inspectCoreCampaignSummaryRecords(records);
-    expect(summary.callsWithoutResult?.count).toBe(1);
-    expect(
-      inspectCoreCampaignRecords(reader, records).calls[0]!.settlement,
-    ).toBe("unsettled");
-    finish();
-    await pending;
-    expect(campaign.lastSequence()).toBeGreaterThan(summary.lastSeq);
-    expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
-    expect(
-      inspectCoreCampaignRecords(reader, records).calls[0]!.settlement,
-    ).toBe("unsettled");
-    expect(forbiddenReads).toBe(0);
-    const latest = inspectCoreCampaignSummaryRecords(campaign.records());
-    expect(latest).not.toHaveProperty("callsWithoutResult");
-    expect(latest.lastSeq).toBeGreaterThan(summary.lastSeq);
-  } finally {
-    finish();
-    await pending;
-    campaign.close();
-  }
-});
-
-test("preserves non-UTF-8 candidate bytes without invented text", () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "binary-workflow", null);
-  try {
-    campaign.submitCandidate(new Uint8Array([0xff]), ["proof"]);
-  } finally {
-    campaign.close();
-  }
-
-  expect(inspectCoreCampaign(path).candidates[0]!.material).toEqual({
-    bytes: 1,
-    encoding: "base64",
-    base64: "/w==",
-  });
-});
-
-test("summarizes without response, evidence, operation, or material payloads", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", { opaque: true });
-  try {
-    campaign.submitCandidate(new TextEncoder().encode("large material"), [
-      "proof",
-    ]);
-    await campaign.call(
-      { label: "workflow/call", request: { opaque: true } },
-      async () => ({ response: "large response" }),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  const summary = inspectCoreCampaignSummary(path);
-  expect(summary).toMatchObject({
-    schema: "xean.core-observation-summary/v1",
-    application: "changing-workflow",
-    callCount: 1,
-    candidateCount: 1,
-    verifiedCandidateCount: 0,
-  });
-  expect(JSON.stringify(summary)).not.toContain("large material");
-  expect(JSON.stringify(summary)).not.toContain("large response");
-  expect(summary).not.toHaveProperty("applicationConfig");
-});
-
-test("keeps understood spend when another Pi result is unsupported", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", null);
-  try {
-    await campaign.call(
-      { label: "workflow/measured", request: piRequest() },
-      async ({ call }) =>
-        piResult(campaign, call, [
-          {
-            usage: {
-              input: 8,
-              output: 5,
-              cacheRead: 2,
-              cacheWrite: 0,
-              totalTokens: 13,
-              estimatedCostUsd: 0.25,
-            },
-          },
-        ]),
-    );
-    await campaign.call(
-      { label: "workflow/future", request: piRequest() },
-      async () => ({ state: "succeeded", text: "done", transcript: [] }),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  const observation = inspectCoreCampaign(path);
-  expect(observation.calls.map((call) => call.pi?.accounting.state)).toEqual([
-    "available",
-    "unsupported",
-  ]);
-  expect(observation.spend).toMatchObject({
-    logicalProviderRequests: 1,
-    requestErrors: 0,
-    unmeasuredRequests: 0,
-    measuredUsage: {
-      input: 8,
-      output: 5,
-      cacheRead: 2,
-      cacheWrite: 0,
-      totalTokens: 13,
-      estimatedCostUsd: 0.25,
-    },
-    unsupportedCalls: [6],
-    unaccountedCalls: [],
-  });
-});
-
-test("reports missing usage as unmeasured instead of zero", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", null);
-  try {
-    await campaign.call(
-      { label: "workflow/unmeasured", request: piRequest() },
-      async ({ call }) => piResult(campaign, call, [{}]),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  expect(inspectCoreCampaign(path).spend).toMatchObject({
-    logicalProviderRequests: 1,
-    requestErrors: 0,
-    unmeasuredRequests: 1,
-    unsupportedCalls: [],
-    unaccountedCalls: [],
-  });
-});
-
-test("reports an unsettled Pi call as unaccounted", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", null);
-  let finish!: () => void;
-  const pending = campaign.call(
-    { label: "workflow/running", request: piRequest() },
-    () => new Promise<null>((resolve) => (finish = () => resolve(null))),
-  );
-  try {
-    await Bun.sleep(0);
-    expect(inspectCoreCampaign(path)).toMatchObject({
-      calls: [
-        {
-          settlement: "unsettled",
-          pi: { accounting: { state: "unaccounted" } },
-        },
+    expect(JSON.stringify(after)).not.toContain("request body");
+    expect(JSON.stringify(after)).not.toContain("response body");
+    const handle = api(
+      [
+        { id: "fixture", directory },
+        { id: "missing", directory: join(directory, "missing") },
       ],
-      spend: { unsupportedCalls: [], unaccountedCalls: [2] },
-    });
+      directory,
+    );
+    const response = await handle(new Request("http://127.0.0.1/api/runs"));
+    const rows = (await response.json()) as Run[];
+    expect(rows[0]?.snapshot?.notes).toHaveLength(1);
+    expect(rows[1]?.error).toBeString();
+    expect(
+      (await handle(new Request("http://127.0.0.1/api/runs/unknown"))).status,
+    ).toBe(404);
+    expect(
+      (
+        await handle(
+          new Request("http://127.0.0.1/api/runs", { method: "POST" }),
+        )
+      ).status,
+    ).toBe(405);
+    expect(
+      (
+        await handle(
+          new Request("http://127.0.0.1/api/runs", {
+            headers: { origin: "https://example.com" },
+          }),
+        )
+      ).status,
+    ).toBe(403);
+    expect(failures).toEqual([]);
   } finally {
-    finish();
-    await pending;
-    campaign.close();
+    release.resolve();
+    await running;
+    await engine.close();
+    await rm(directory, { recursive: true });
   }
 });
 
-test.each([
-  "stream_incomplete: Upstream closed stream without completion",
-  "Response incomplete: max_messages",
-])("separates fresh-call cache coverage from recovered %s", async (failure) => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "recovered-workflow", null);
-  const cached = {
-    input: 1,
-    output: 5,
-    cacheRead: 9,
-    cacheWrite: 0,
-    reasoning: 3,
-    totalTokens: 15,
-    cost: {
-      input: 0.01,
-      output: 0.25,
-      cacheRead: 0.009,
-      cacheWrite: 0,
-      total: 0.269,
-    },
-  };
-  const fresh = {
-    input: 17,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    reasoning: 0,
-    totalTokens: 17,
-    cost: { input: 0.17, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.17 },
-  };
+test("observer sources preserve unavailable evidence and reject unsupported snapshots and unsafe remote commands", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-observe-artifacts-"));
   try {
-    await campaign.call(
-      { label: "workflow/recovered", request: piRequest() },
-      async ({ call }) =>
-        piResult(campaign, call, [{ error: failure }, measured(cached)]),
-    );
-    await campaign.call(
-      { label: "workflow/fresh", request: piRequest() },
-      async ({ call }) => piResult(campaign, call, [measured(fresh)]),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  const observation = inspectCoreCampaign(path);
-  const recovered = observation.calls[0]!.pi;
-  expect(recovered?.outcome).toBe("succeeded");
-  expect(recovered?.accounting).toMatchObject({
-    state: "available",
-    recoveredErrors: [
-      { request: 1, stopReason: "error", errorMessage: failure },
-    ],
-    spend: {
-      recoveredRequestErrors: 1,
-      requests: {
-        first: {
-          logicalProviderRequests: 1,
-          requestErrors: 1,
-          unmeasuredRequests: 1,
-        },
-        continuation: {
-          logicalProviderRequests: 1,
-          unmeasuredRequests: 0,
-          cachedInputShare: 0.9,
-        },
-      },
-    },
-  });
-  if (recovered?.accounting.state !== "available")
-    throw new Error("missing accounting");
-  expect(recovered.accounting.spend.requests?.first).not.toHaveProperty(
-    "measuredUsage",
-  );
-  expect(recovered.accounting.spend.requests?.first).not.toHaveProperty(
-    "cachedInputShare",
-  );
-  expect(observation.spend).toMatchObject({
-    logicalProviderRequests: 3,
-    requestErrors: 1,
-    unmeasuredRequests: 1,
-    recoveredRequestErrors: 1,
-    requests: {
-      first: {
-        logicalProviderRequests: 2,
-        requestErrors: 1,
-        unmeasuredRequests: 1,
-        cachedInputShare: 0,
-        measuredUsage: { input: 17, cacheRead: 0 },
-      },
-      continuation: { logicalProviderRequests: 1, cachedInputShare: 0.9 },
-    },
-  });
-  const summary = inspectCoreCampaignSummary(path);
-  expect(summary.spend.requests).toEqual(observation.spend.requests);
-  expect(summary.spend.recoveredRequestErrors).toBe(1);
-  expect(JSON.stringify(summary)).not.toContain(failure);
-});
-
-test("keeps terminal provider failures separate from recovered errors", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "failed-workflow", null);
-  const failure = "Response incomplete: max_messages";
-  try {
-    await campaign.call(
-      { label: "workflow/failed", request: piRequest() },
-      async ({ call }) => ({
-        ...(await piResult(campaign, call, [
-          { error: failure },
-          { error: failure },
-        ])),
-        state: "failed" as const,
-        error: failure,
-        providerRetryable: true,
+    await writeFile(
+      join(directory, "task.json"),
+      JSON.stringify({
+        problem: "An older running campaign",
+        completionCriteria: "Exact task",
       }),
     );
-  } finally {
-    campaign.close();
-  }
-
-  const observation = inspectCoreCampaign(path);
-  expect(observation.calls[0]!.pi).toMatchObject({
-    outcome: "failed",
-    accounting: { state: "available", spend: { recoveredRequestErrors: 0 } },
-  });
-  expect(observation.calls[0]!.pi?.accounting).not.toHaveProperty(
-    "recoveredErrors",
-  );
-  expect(observation.spend).toMatchObject({
-    requestErrors: 2,
-    unmeasuredRequests: 2,
-    recoveredRequestErrors: 0,
-  });
-  expect(observation.spend).not.toHaveProperty("measuredUsage");
-  expect(observation.spend.requests?.first).not.toHaveProperty(
-    "cachedInputShare",
-  );
-  expect(observation.spend.requests?.continuation).not.toHaveProperty(
-    "cachedInputShare",
-  );
-});
-
-test("keeps measured zero usage distinct from missing usage in each request phase", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "zero-workflow", null);
-  const zero = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    reasoning: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  try {
-    await campaign.call(
-      { label: "workflow/zero", request: piRequest() },
-      async ({ call }) => piResult(campaign, call, [measured(zero)]),
+    await writeFile(
+      join(directory, "round-1.json"),
+      JSON.stringify({ round: 1 }),
     );
-  } finally {
-    campaign.close();
-  }
-
-  const requests = inspectCoreCampaign(path).spend.requests;
-  expect(requests?.first).toMatchObject({
-    logicalProviderRequests: 1,
-    unmeasuredRequests: 0,
-    measuredUsage: { input: 0, cacheRead: 0, estimatedCostUsd: 0 },
-  });
-  expect(requests?.first).not.toHaveProperty("cachedInputShare");
-  expect(requests?.continuation).toEqual({
-    logicalProviderRequests: 0,
-    requestErrors: 0,
-    unmeasuredRequests: 0,
-  });
-});
-
-test("cache-read share counts fresh tokens and cache writes in the prompt denominator", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "cache-write-workflow", null);
-  const usage = {
-    input: 10,
-    output: 5,
-    cacheRead: 30,
-    cacheWrite: 20,
-    reasoning: 0,
-    totalTokens: 65,
-    cost: {
-      input: 0.01,
-      output: 0.01,
-      cacheRead: 0.003,
-      cacheWrite: 0.025,
-      total: 0.048,
-    },
-  };
-  try {
-    await campaign.call(
-      { label: "workflow/cache-write", request: piRequest() },
-      async ({ call }) => piResult(campaign, call, [measured(usage)]),
+    const run = await readRun({ id: "old", directory }, directory);
+    expect(run.kind).toBe("heartbeat");
+    expect(run.snapshot).toBeUndefined();
+    expect(run.heartbeat?.rounds).toBe(1);
+    await writeFile(
+      join(directory, "observation.json"),
+      JSON.stringify({ schema: "unsupported" }),
     );
+    expect(
+      (await readRun({ id: "old", directory }, directory)).error,
+    ).toContain("Unsupported observation");
+    expect(() =>
+      readSources(
+        [
+          { id: "run", directory },
+          { id: "run", directory },
+        ],
+        directory,
+      ),
+    ).toThrow();
+    expect(() =>
+      readSources(
+        [{ id: "run", directory, host: "jupiter", runtime: "/tmp/bun;exit" }],
+        directory,
+      ),
+    ).toThrow();
   } finally {
-    campaign.close();
+    await rm(directory, { recursive: true });
   }
-  expect(inspectCoreCampaign(path).spend.requests?.first.cachedInputShare).toBe(
-    0.5,
-  );
 });
-
-test.each([
-  ["textRef", "damaged"],
-  ["textRef", "missing"],
-  ["transcriptRef", "damaged"],
-  ["transcriptRef", "missing"],
-] as const)(
-  "summary and accounting avoid %s %s attachments; full inspection checks integrity",
-  async (attachment, corruption) => {
-    const { Database } = await import("bun:sqlite");
-    const { derivePiSpend, piResultRecord, readPiResult } =
-      await import("../src/pi");
-    const path = campaignPath();
-    const campaign = createCampaign(path, "attachments", null);
-    try {
-      const receipt = await campaign.call(
-        { label: "measured", request: piRequest() },
-        async ({ call }) =>
-          piResult(
-            campaign,
-            call,
-            [measured(firstUsage)],
-            [message(firstUsage)],
-          ),
-      );
-      const records = campaign.records();
-      const summary = inspectCoreCampaignSummaryRecords(records);
-      const full = inspectCoreCampaignRecords(campaign, records);
-      const callSummaries = inspectCoreCallSummaries(records);
-      expect(summary.spend).toEqual({
-        ...full.spend,
-        unsupportedCalls: 0,
-        unaccountedCalls: 0,
-      });
-      const record = piResultRecord.parse(receipt.output);
-      const database = new Database(path);
-      try {
-        database.run(
-          `DROP TRIGGER payloads_no_${corruption === "missing" ? "delete" : "update"}`,
-        );
-        database.run(
-          corruption === "missing"
-            ? "DELETE FROM payloads WHERE digest=?"
-            : "UPDATE payloads SET body='null' WHERE digest=?",
-          [record[attachment]],
-        );
-      } finally {
-        database.close();
-      }
-      expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
-      expect(inspectCoreCallSummaries(records)).toEqual(callSummaries);
-      expect(derivePiSpend(records).summary).toMatchObject({
-        logicalProviderRequests: 1,
-      });
-      expect(() => readPiResult(receipt.output, campaign)).toThrow();
-      expect(() => inspectCoreCampaignRecords(campaign, records)).toThrow();
-    } finally {
-      campaign.close();
-    }
-  },
-);
-
-test.each([
-  { role: "assistant", usage: null },
-  { role: "assistant", usage: { ...firstUsage, reasoning: -1 } },
-  {
-    role: "assistant",
-    usage: { ...firstUsage, cost: { ...firstUsage.cost, output: -1 } },
-  },
-  { role: "assistant", usage: { ...firstUsage, reasoning: 6 } },
-])(
-  "invalid assistant usage preserves unavailable reasoning cost: %j",
-  async (invalid) => {
-    const campaign = createCampaign(campaignPath(), "invalid-usage", null);
-    try {
-      await campaign.call(
-        { label: "measured", request: piRequest() },
-        async ({ call }) =>
-          piResult(
-            campaign,
-            call,
-            [measured(firstUsage)],
-            [message(firstUsage), invalid],
-          ),
-      );
-      const records = campaign.records();
-      const full = inspectCoreCampaignRecords(campaign, records);
-      const summary = inspectCoreCampaignSummaryRecords(records);
-      expect(full.calls[0]?.pi?.accounting.state).toBe("available");
-      expect(full.spend.breakdown?.estimatedReasoningCostUsd).toBeUndefined();
-      expect(summary.spend).toEqual({
-        ...full.spend,
-        unsupportedCalls: 0,
-        unaccountedCalls: 0,
-      });
-    } finally {
-      campaign.close();
-    }
-  },
-);

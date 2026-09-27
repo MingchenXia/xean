@@ -1,117 +1,127 @@
-# xean
+# Xean
 
-`xean` (pronounced “zine”) is a Bun and TypeScript toolkit for mathematical exploration with durable evidence. A campaign is a SQLite journal that records the task, model calls, tool activity, candidate material, verdicts, request checkpoints, and provider accounting. The journal lets an application inspect progress, add notes or guidance, and continue work after an interruption.
+Xean coordinates durable mathematical work over Pi. The kernel handles campaign
+scheduling, atomic publication, limits, and recovery. The solver adds notes,
+exploration, verification, and exact-task acceptance. Pi supplies model and tool
+execution, storage records, and atomic batches. Chord supplies invocation context
+and prepared state changes.
 
-The product family has clear boundaries:
+The library lives in `packages/core`. The separate `xean-cli` package in
+`packages/cli` exposes campaign operations through public library APIs.
+The [observer](packages/observe/README.md) in `packages/observe` reads local
+campaigns through the read-only API and displays exported remote snapshots.
 
-| Package | Role |
-| --- | --- |
-| `xean` | Kernel, Pi runner, storage, observation, and accounting APIs |
-| `xean-solve` | Explorer, coordinator, and verifier workflow at `packages/solve` |
-| `xean-lab` | Experiment execution and provenance |
-| `xean-observe` | Read-only HTTP observation and rendering |
+- [Philosophy](docs/philosophy.md): mathematical autonomy, shared memory, trust, and evaluation.
+- [Kernel contract](docs/kernel.md): execution, publication, limits, and storage.
+- [Solver guide](docs/solver.md): roles, verification, CLI commands, and configuration.
+- [Glossary](docs/glossary.md): canonical terminology.
+- [Pi alignment](docs/pi-alignment.md): native APIs and deferred adoption.
+- [Xean comparison](docs/xean-comparison.md): reference snapshot and remaining ideas.
+- [Contributor rules](AGENTS.md): design priorities and repository boundaries.
 
-The kernel records facts and enforces journal, call, tool, candidate, verdict, and accounting contracts. The model chooses mathematical methods. Applications provide context, tools, budgets, verification policy, publication, and filesystem boundaries. A complete mathematical result requires independent verification of the candidate and its supporting work.
+Matching Pi packages are pinned to one tested main commit in `package.json`.
+The [artifact record](vendor/pi/provenance.json) records that source revision,
+build, frozen model data, and hashes. The `main` branch at https://github.com/chaoxu/xean is the current distribution. Existing numbered releases remain historical archives.
 
 ## Install and run
 
-The [`main` branch on GitHub](https://github.com/chaoxu/xean) is the current release. Install and update from that branch. Existing numbered releases are historical archives.
-
-Use Bun 1.3.13 or newer on macOS or Linux:
+Use a source checkout on Linux or macOS with Bun 1.4.2 or newer. Bun 1.4.2 is
+the tested runtime. The checkout includes the pinned Pi packages and patches.
 
 ```sh
-git clone --branch main https://github.com/chaoxu/xean.git
+git clone https://github.com/chaoxu/xean.git
 cd xean
-bun install --frozen-lockfile
-bun packages/solve/solve.ts contract
+bun run setup
+bun run xean --help
 ```
 
-The Codex profile uses Pi's OpenAI Codex provider. Authenticate it with Pi:
+`setup` installs the frozen dependency lockfile without lifecycle scripts and
+records the exact installation. Run it again after updating the checkout.
+Keep the source commit, lockfile, and runtime version with each campaign. Older
+campaigns must use their original checkout because persisted formats can change.
+
+The [example settings](examples/solver-settings.json) use the public OpenAI API
+with `gpt-6-astra` at max reasoning. Supply `OPENAI_API_KEY` through your shell
+or secret manager. Source checking and independent review use the separately
+installed Codex CLI, authenticated with `codex login` or its native provider
+configuration. Provider credentials stay outside task and settings files.
 
 ```sh
-bunx --package @earendil-works/pi-coding-agent@0.87.0 pi
+bun run xean init examples/tree-task.json tree examples/solver-settings.json
+bun run xean run tree
+bun run xean status tree
+bun run xean export tree
 ```
 
-Enter `/login`, choose **OpenAI Codex**, and exit. The OpenAI API profile uses `OPENAI_API_KEY` and `packages/solve/examples/settings-openai.json`. Provider access, credentials, and model availability come from Pi and the selected profile. The solver examples use public OpenAI endpoints and need no xean-lab service.
+Campaigns live under `.xean/` by default. Only `campaign.status: "completed"`
+establishes an accepted argument. `export` requires that accepted result.
+See the [solver guide](docs/solver.md#running) for live guidance, pause/resume,
+cancellation, explicit database paths, and other model providers.
 
-Source verification and independent review also require the Codex CLI with configured credentials. Install the CLI and authenticate with `codex login` before running either profile. Xean selects the CLI through `XEAN_CODEX_COMMAND` or the path, reads its configuration from `CODEX_HOME` or `~/.codex`, and enables web search for these checks. [Provider setup](packages/solve/docs/installation.md#choose-a-provider) also covers custom endpoints.
+For supervised deployment, run `bun run xean run /data/campaign.sqlite` with a
+persistent writable data directory and the provider's credentials. Use one
+owner process per campaign. `SIGINT` and `SIGTERM` close the owner and retain
+committed work for recovery. The command prints the campaign state when it
+finishes, including paused, blocked, or waiting states. Inspect that state before
+deciding whether a supervisor should restart it.
 
-After authenticating, run the small example:
+The library, CLI, and observer are distributed together as a source checkout.
+Individual workspace packages are private. The [MIT license](LICENSE) covers
+Xean, and bundled dependencies retain their own licenses.
+
+## Development on Fleet
+
+Run from the adjacent Fleet Infra checkout. Its `flake.lock` is the Bun runtime
+authority, while Xean's `bun.lock` locks JavaScript dependencies.
 
 ```sh
-bun packages/solve/solve.ts run packages/solve/examples/task-even-sum.json campaign.db packages/solve/examples/settings-openai-codex.json
-bun packages/solve/solve.ts inspect campaign.db
-bun packages/solve/solve.ts export campaign.db
+cd ~/playground/fleet-infra
+bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts install
+bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts check
 ```
 
-To update the checkout, run `git pull --ff-only` followed by `bun install --frozen-lockfile`. Record `git rev-parse HEAD` with a run so its runtime can be reproduced. Keep the original revision available when resuming an older campaign. The [installation guide](packages/solve/docs/installation.md) gives the complete setup and update instructions.
+`install` requires the existing lockfile, performs a clean frozen installation,
+and skips lifecycle scripts. After an intentional dependency edit, use
+`install --update-lockfile`. An installation receipt rejects changed dependency
+inputs until a clean reinstall. `check` runs typechecking, formatting, and tests
+inside a socket-free Nix build. `format` formats project sources and documentation.
 
-The task is one JSON object:
-
-```json
-{
-  "problem": "Prove that the sum of two even integers is even.",
-  "completionCriteria": "Give a standalone proof for arbitrary even integers."
-}
-```
-
-`run` creates a campaign or resumes it, `inspect` derives its phase, notes, verdicts, result, and spend from the journal, and `export` emits an accepted note with its transitive support.
-
-## Supply work and guidance
-
-Create a campaign and add mathematical notes before the first model call when useful:
+Use the same locked runtime for local CLI work:
 
 ```sh
-bun packages/solve/solve.ts init task.json campaign.db settings.json
-bun packages/solve/solve.ts submit --id initial-work campaign.db notes.json
-bun packages/solve/solve.ts run task.json campaign.db settings.json
+bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts --help
 ```
 
-Add guidance while a campaign is active or paused:
+Closed-book experiments use the
+[bounded runner](docs/solver.md#closed-book-experiments).
+
+The [deterministic kernel example](examples/deterministic.ts) makes no model calls:
 
 ```sh
-bun packages/solve/solve.ts guide --id next-route campaign.db guidance.txt
-bun packages/solve/solve.ts inspect --include-guidance campaign.db
+bin/fleet-nix run .#fleet-run -- ../xean/examples/deterministic.ts
 ```
 
-The [inbox rules](packages/solve/docs/role-runner.md#inbox) state when notes and guidance reach a role.
+It runs two workers concurrently and accepts their sum of squares, writing
+`runs/deterministic.sqlite`. Repeating it reopens the committed result.
+Pass another database path to start fresh. `run()` can return while waiting for
+input, so only `status: "completed"` establishes accepted completion.
 
-## Build an application
+## Live kernel smoke
 
-The kernel API supports append-only campaigns, exact candidate bytes, structured tools, Pi calls, request checkpoints, result attachments, and derived verification status. Start with [`docs/application-author.md`](docs/application-author.md). The normative contract is [`SPEC.md`](SPEC.md). [`docs/philosophy.md`](docs/philosophy.md) explains the division of responsibility, and [`docs/terms.md`](docs/terms.md) defines the vocabulary.
-
-The deterministic verifier example is [`examples/scripted-verifier.ts`](examples/scripted-verifier.ts). [`examples/pi-smoke.ts`](examples/pi-smoke.ts) exercises an LLM verdict through Pi.
-
-## xean-solve workflow
-
-`xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The coordinator opens every campaign and, after each role settles, dispatches Explorer, literature, or a verifier; each dispatch is one turn of the journaled allowance. Explorer writes self-contained notes, four verifiers record structured verdicts, and the journal alone determines the notes, phase, and result. The [workflow guide](packages/solve/docs/role-runner.md) is the authority on this behavior, and the solver [README](packages/solve/README.md) lists its commands and settings. The separate `review` command runs a full independent Codex audit of a final argument and its citations:
+On `saturn`, run from Fleet Infra:
 
 ```sh
-bun packages/solve/solve.ts review task.json argument.md review.db packages/solve/examples/profile-review.json
+bin/fleet-nix run .#fleet-run -- ../xean/scripts/codex-lb-smoke.ts codex-lb/xean
 ```
 
-## Development
+The launcher verifies dependencies, reads the gateway key from OpenBao into
+memory, and passes it over stdin with the provisioned lab CA. Two concurrent
+Luna workers use max reasoning and Pi's cached WebSocket agent loop. The smoke
+checks results, usage, connection reuse, delta requests, and unchanged reopening
+in a second process without credentials.
 
-```sh
-bun install --frozen-lockfile
-bun run check:all
-bun run e2e:roles
-```
-
-Run logs, measurements, reviews, and research material belong in ignored `runs/` artifacts. The MIT license is in [`LICENSE`](LICENSE).
-
-## Cite
-
-Cite the repository rather than a version. GitHub's "Cite this repository" button reads [`CITATION.cff`](CITATION.cff), and this BibTeX matches it:
-
-```bibtex
-@software{xu2026xean,
-  author  = {Xu, Chao},
-  title   = {xean: mathematical exploration with durable evidence},
-  year    = {2026},
-  url     = {https://github.com/chaoxu/xean},
-  license = {MIT}
-}
-```
-
-Where reproducibility matters, add the tag or commit of the checkout to the entry's `note` field. A result produced with xean should also name the model and provider recorded in the campaign journal, since the journal, not xean, is the evidence for the mathematics.
+Campaigns and records remain under ignored `runs/`. Successful execution prints
+`completed` for both phases. JSON snapshots can also exist after assertion
+failure, so their presence alone does not establish success.
+See [kernel verification](docs/kernel-smoke.md) for observed results and
+[solver verification](docs/solver.md#current-verification) for role checks.

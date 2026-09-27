@@ -1,14 +1,121 @@
-# Distribution
+# Working on Xean
 
-The `main` branch at `https://github.com/chaoxu/xean` is the current release. Install and update from that branch. Do not create new numbered releases or release tags. Preserve existing releases and tags as historical archives.
+Read [README.md](README.md) for setup and the documentation map, and
+[the philosophy](docs/philosophy.md) for the research principles. Before changing
+architecture, read the relevant [kernel](docs/kernel.md) or
+[solver](docs/solver.md) contract. [Pi alignment](docs/pi-alignment.md) separates
+available APIs from deferred designs. Use [the glossary](docs/glossary.md) for
+canonical terminology. Reuse an existing term before defining and justifying a new one.
 
-Use exact Git commits and the dependency lockfile for reproducible runs. Package version fields are packaging metadata.
+## Core priorities
 
-Support only current schemas. Remove retired readers, aliases, adapters, and migration branches instead of maintaining backward compatibility. Reject unsupported formats without rewriting archived data. Schema versions identify persisted contracts. Change them when the stored format or the meaning of recorded evidence changes, including verifier policy changes. Prompt wording edits alone do not require a version bump.
+- Simplicity and correctness take precedence over feature count and speculative
+  extensibility. Use the smallest clear implementation for the current contract.
+- Keep one authoritative definition for each contract, policy, and default.
+  Derive validation, types, and projections from it. Preserve immutable history
+  and frozen inputs as records of past state.
+- Keep documentation in its existing home: setup in README, contributor rules
+  here, behavior in the kernel and solver guides, future Pi adoption in the
+  alignment notes. Link those sources instead of adding parallel handoffs or
+  repeating implementation details. Git and run artifacts retain checkpoint history.
+- Treat code growth as a design cost. Report runtime and test line deltas for
+  substantial changes. Remove redundant representations and bookkeeping while
+  preserving readable formatting and essential correctness checks.
+- Push standard behavior into Pi and maintained libraries. Before adding runtime
+  machinery, inspect the pinned Pi/Chord implementation and record any missing
+  guarantee in the alignment notes. Check ownership, publication, cleanup, and
+  whether consumers retain histories despite native paging.
+- Pin matching Pi packages to one tested commit with verified artifact hashes
+  and frozen model data. Never use floating dependencies. Every patch needs a
+  concrete reason and reassessment when upgrading.
+- Xean is experimental software. Choose the simplest correct design as if
+  writing it from scratch, even when APIs, schemas, or persisted formats break.
+  Previous runs need not open in new code. Keep their artifacts as provenance,
+  without legacy readers, aliases, migrations, or compatibility scaffolding
+  unless the user explicitly requests them.
+- Use TypeScript on Fleet's locked Bun runtime. Follow
+  `~/.config/fleet/agent-reference.md` for runtime and fleet operations.
+- The main branch is the current distribution. Preserve existing releases and
+  tags as historical archives. Do not create numbered releases or release tags.
+  Preserve active campaigns and their source-frozen runtimes. Historical artifacts
+  retain the original Yean and Xean names and formats.
 
-Backward compatibility is not a project requirement. Do not spend implementation
-time on legacy formats, compatibility shims, migration paths, or capability
-parity with retired behavior; update the current contract and its callers
-together instead. Tests are required only for essential current contracts and
-failure boundaries. Prefer a small focused regression test, and remove tests
-that merely mirror implementation details or preserve retired behavior.
+## Tests
+
+- Keep the suite small. Add a test only for a distinct, consequential failure or
+  required contract. Prefer a focused regression or compact integration check.
+- Avoid tests that mirror implementation, trivial library behavior, duplicate
+  coverage, or retired contracts. Keep fixtures simple and consolidate overlap.
+- Run proportionate checks. Repeat or broaden them only after relevant changes,
+  failures, or unresolved concerns.
+- Before a long model-backed run, smoke-test every required path in its deployed
+  image with its runtime, model, credentials, and native configuration. Include
+  Codex source checking when used. Inspect results and recorded failures, not
+  just process health or version output.
+
+## Architecture boundaries
+
+- The kernel treats a role as an opaque async function. Input goes in and one
+  result or failure comes back. Codex, shell execution, authentication, and tools
+  belong inside roles. Reuse maintained libraries without a command-specific runtime.
+- Roles are trusted code. Avoid plugin sandboxes, permission frameworks,
+  workflow languages, extra storage layers, or registries without a concrete need.
+- Preserve atomic publication of each complete worker result and its Coordinator
+  signal. Terminal failures also produce durable signals. Operational records
+  remain visible after failure. External effects need role-owned idempotency.
+- Coordinator owns scheduling, work requests, and logical retries. Workers
+  return results, never proposed work requests. Processing a completion signal
+  need not call a model. Pi owns transient provider retries.
+- Private-progress recovery is deferred. Retain whole-worker recovery until
+  suitable Pi support or a concrete workload justifies adopting it. Future
+  private resumption must preserve atomic shared publication.
+- Call caps stop admission and drain admitted work. Deadlines and cancellation
+  prevent late publication. Keyed call grants preserve frozen startup limits
+  and cannot bypass other stopping conditions. Token and dollar budgets are out of scope.
+- Permit independent read-only inspection while retaining one campaign owner.
+  Inspection must not acquire ownership or perform recovery. Keep SQL as the backend direction.
+- The CLI remains a separate package using public kernel and solver APIs.
+  Keep operation semantics in the library and model runtime construction lazy.
+  Live mutations use the active owner, following the lifecycle contract.
+
+## Mathematical roles
+
+- Explorer owns mathematical strategy. Coordinator selects relevant notes and
+  feedback and prioritizes pivotal or repeatedly reused claims for verification,
+  without prescribing proof steps or imposing a verification quota.
+- The built-in Coordinator admits at most one Explorer per group, with other
+  roles allowed alongside it. This is replaceable Coordinator policy.
+- Experiment round allowances belong only to the outer runner. No role receives
+  remaining rounds, approaching-limit warnings, or an end-of-run strategy.
+- Notes and summaries must suffice as shared mathematical memory, including
+  failed approaches. Select existing notes for context instead of a separate
+  digest or mathematical information held only in guidance. Rejected notes may
+  be read for diagnosis but cannot supply mathematical dependencies.
+- Preserve exact statements, hypotheses, and completion criteria. Keep private
+  requester/catalog metadata outside solver tasks. Acceptance of the exact task,
+  independent review, and catalog closure remain distinct.
+- Pi runs Coordinator, Explorer, and mathematical checks. Codex owns literature,
+  source verification, and independent review, including internal retrieval tools.
+  Self-contained source checks skip Codex. Actual capabilities govern scheduling.
+- Closed-book correctness may establish task-permitted background after checking
+  exact statements and hypotheses. Forbidden black boxes fail. Uncertain premises
+  remain unresolved under the task's proof rules.
+- Reuse completed PASS checks, batch per-note judgments, validate every requested
+  result ID, and establish dependencies before verification or acceptance.
+  Blind reconstruction proves a set of exact statements together. Final acceptance
+  requires reconstruction throughout the generated dependency chain. Imported
+  supporting theorems remain assumptions, with their dependencies still checked.
+- Caller-imported notes are trusted for correctness and sources over verified
+  support. Keep their origin explicit. Exact-task acceptance still requires
+  requirements and reconstruction checks.
+- Source reuse shares immutable quotations and original bindings. Each new
+  application requires judgment. Independent review obtains its own evidence.
+- Trust harmless corrections to preserve meaning, dependencies, and checks.
+  Mathematical changes require new notes. Preserve revision checks, frozen inputs,
+  and atomic publication as specified in the solver guide.
+- Each invocation must finish with room for its structured result. Use Pi's
+  capacity estimator, preserve valid Explorer submissions at handoff, and never
+  silently truncate mathematics. Conversation compaction is outside Xean's design.
+- Use `gpt-6-astra` for new flagship work unless another model is selected.
+  Every new role and smoke run uses `max` reasoning unless the user requests
+  otherwise. Preserve completed runs' settings and model names as provenance.

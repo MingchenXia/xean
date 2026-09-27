@@ -1,0 +1,16 @@
+{
+  "name": "xean-observe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/snapshot.ts"
+  },
+  "dependencies": {
+    "xean": "workspace:*",
+    "xean-cli": "workspace:*",
+    "execa": "catalog:",
+    "lit-html": "3.3.3",
+    "katex": "0.18.9"
+  }
+}

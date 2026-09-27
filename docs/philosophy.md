@@ -1,17 +1,69 @@
-# xean's philosophy
+# Xean's philosophy
 
-xean helps strong models solve difficult mathematical problems. The Explorer develops mathematics, verifiers check its claims, and a durable campaign preserves the work for later turns and external review.
+Xean helps strong models solve difficult mathematical problems. Explorer develops
+mathematics, verifiers assess its claims, and durable notes preserve the results
+and obstacles for later work. Xean carries forward Xean's research philosophy
+while delegating standard execution and storage behavior to Pi.
 
-1. **Let the model choose the mathematics.** The explorer chooses subproblems, proposes lemmas, searches for counterexamples, and changes methods. The task and completion criteria stay fixed. The coordinator organizes notes, selects supporting texts, and recommends work for the next turn. People and other agents can also submit guidance. That guidance is fallible advice: the explorer may reject it or move beyond a suggested intermediate step. The framework supplies context and enforces workflow boundaries.
+1. **Let Explorer choose the mathematics.** Explorer chooses subproblems,
+   proposes lemmas, searches for counterexamples, and changes methods.
+   Coordinator schedules work and selects relevant notes and feedback. People
+   and other agents can supply guidance, which Explorer may question or move
+   beyond. The exact task, hypotheses, and completion criteria remain fixed.
+   A useful intermediate result is progress toward that task.
 
-2. **Give exploration and verification distinct jobs.** Exploration can produce a complete argument, a partial result with its gaps stated, or a failed approach with its reason. Separate verifier calls assess sources and their hypotheses, correctness, completion of the task, and reconstruction of the argument. Correctness judges what a note claims. Requirements judges whether it completes the task. Reconstruction includes a fresh proof attempt from the statement and supporting notes, without the original note's text. The campaign ends with `accepted` when one verification passes all four checks for a note over verified support.
+2. **Give exploration and verification distinct jobs.** Exploration can produce
+   a complete argument, a partial result with stated gaps, or a failed approach
+   with its reason. Correctness assesses the claim a note makes. Source checking
+   establishes external premises and their hypotheses. Requirements assesses
+   whether the result completes the exact task. Blind reconstruction proves a
+   set of exact statements together before comparing arguments. Final acceptance
+   requires this check for the result and every generated supporting claim.
+   Uncertainty stays unresolved, and a sound partial result remains useful
+   even when it fails the completion criteria.
 
-3. **Build on established results and retain failures.** Notes name the earlier notes whose results they use without proving them. A note is verified when one verification passes source and correctness or its caller supplies external verification, provided its support is verified and it is not dead. Verifiers receive the complete support closure, so later arguments can use established mathematics without asking the explorer to prove it again. A note's text and declared support are immutable, and a correction becomes a new note. A source, correctness, or reconstruction failure makes the note and its dependent notes dead. These notes remain visible as failure evidence but cannot support new notes. An inconclusive check leaves the claim unresolved and gives the next Explorer turn its report so exploration can address the missing evidence. A requirements failure can leave a useful verified partial result.
+3. **Build on established mathematics.** Notes declare the earlier results they
+   use. Reuse established supporting results and successful checks, while
+   checking the hypotheses of each new application. A caller who imports a note
+   supplies it as verified mathematics: its correctness and sources are trusted.
+   Imported supporting theorems remain assumptions during reconstruction.
+   Their declared dependencies still need the same checks as other dependencies.
+   Imported solution candidates still need requirements and reconstruction
+   checks for acceptance. Explorer
+   and literature notes establish correctness and sources through verification.
+   A failed claim invalidates dependent claims, and the record preserves the
+   failure for diagnosis.
 
-4. **Start each turn from the task and recorded mathematics.** A new Explorer turn receives the original task, current guidance, every note's metadata, and the full supporting texts selected by the coordinator. It does not inherit the earlier turns' full reasoning transcripts. This gives the model the recorded results and obstacles while leaving it free to reconsider the method. The journal retains the complete recorded work for inspection.
+4. **Make notes sufficient to continue the task.** Notes and their summaries
+   are the shared mathematical memory. Record useful results, limitations,
+   counterexamples, and failed approaches there. A new invocation starts from
+   the task and selected recorded mathematics, with room to reconsider the
+   method. Guidance directs work, and the journal retains execution evidence
+   for inspection. Harmless corrections preserve a note's mathematical meaning
+   and checks. Changes to its mathematics require a new note with explicit
+   dependencies.
 
-5. **Make useful work survive interruptions.** Resuming with the same task and settings reconstructs the next action from the journal. Saved submissions and recorded verification checks are reused. An interrupted verification resumes at its missing checks. Each Explorer turn keeps its guidance across retries. A fresh call also receives notes saved by the interrupted turn. Later advice waits for a subsequent turn whose input is still unfrozen. A terminal campaign returns its recorded result.
+5. **Preserve work with clear publication boundaries.** Committed notes, checks,
+   inputs, and execution records survive interruptions. A worker publishes its
+   complete result together with the signal that tells Coordinator it is ready.
+   Failures also reach Coordinator, which decides what work to request next.
+   Running workers retain their frozen inputs. Current recovery repeats an
+   interrupted worker as a whole. Resuming private progress remains deferred,
+   and any future implementation must preserve atomic shared publication.
 
-6. **Keep the framework simple and judge changes by mathematical results.** Internal acceptance records which checks passed. Evaluate methods through external review of the complete argument, including its supporting proofs. Compare success on held-out problems at comparable monetary cost. When diagnosing failures against known proofs, keep reference answers outside the run and turn the diagnosis into a general strategy hypothesis. Add a mechanism when evidence shows that the existing workflow cannot express a useful improvement. Strategy evaluation and external review belong outside the solver.
+6. **Keep the framework small and judge it by mathematical results.** Pi and
+   maintained libraries supply standard runtime behavior. Xean supplies campaign
+   policy and the mathematical workflow, with a kernel that treats roles as
+   callable functions. Add a mechanism when a concrete workload or measured
+   failure justifies it. Evaluate methods through independent review of the
+   complete argument and its supporting proofs, without giving reviewers the
+   solver's verdicts. Compare checked solutions on held-out problems at
+   comparable total cost. Keep reference answers outside the run when diagnosing
+   failures. Internal acceptance, independent review, and catalog closure are
+   distinct records.
 
-The [xean-solve workflow guide](../packages/solve/docs/role-runner.md) defines the role, verification, and replay rules. The [core specification](../SPEC.md) defines durability guarantees, and the [external review procedure](../packages/solve/README.md#external-final-review) explains how to assess an accepted argument.
+The [solver guide](solver.md) defines verification, imported notes, and acceptance.
+The [kernel contract](kernel.md) defines publication and recovery.
+[Pi alignment](pi-alignment.md) separates available runtime capabilities from
+deferred designs. [Xean's philosophy](https://github.com/chaoxu/xean/blob/8a846d36f300de1a5b37f5cbeb46fb0a4a1659ab/docs/philosophy.md) is the
+starting point for these research principles.

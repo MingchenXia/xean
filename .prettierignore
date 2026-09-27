@@ -1,6 +1,1 @@
-node_modules/
-bun.lock
-*.md
-*.db*
-runs/
-.playwright-cli/
+packages/observe/web/chao-ui.css

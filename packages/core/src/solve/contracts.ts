@@ -1,0 +1,197 @@
+import {
+  Type,
+  StringEnum,
+  type Static,
+  type TSchema,
+} from "@earendil-works/pi-ai";
+import { Value } from "typebox/value";
+
+export const defaultReasoning = "max";
+const text = Type.String({ minLength: 1 });
+export const object = <T extends Record<string, TSchema>>(properties: T) =>
+  Type.Object(properties, { additionalProperties: false });
+export const batchSchema = <S extends TSchema>(schema: S) =>
+  Type.Unsafe<{ results: { noteId: string; result: Static<S> }[] }>(
+    object({ results: Type.Array(object({ noteId: text, result: schema })) }),
+  );
+
+/** Match each requested note exactly once, independent of response order. */
+export function batchResults<T>(
+  ids: readonly string[],
+  results: { noteId: string; result: T }[],
+): T[] {
+  const byId = new Map(results.map(({ noteId, result }) => [noteId, result]));
+  if (
+    new Set(ids).size !== ids.length ||
+    byId.size !== results.length ||
+    results.length !== ids.length ||
+    ids.some((id) => !byId.has(id))
+  )
+    throw new Error(
+      "Batch results must contain exactly one result per requested note",
+    );
+  return ids.map((id) => byId.get(id)!);
+}
+
+export const taskSchema = object({ problem: text, completionCriteria: text });
+export type Task = Static<typeof taskSchema>;
+export const noteDraftSchema = object({
+  id: Type.String({ pattern: "^n[1-9][0-9]*$" }),
+  summary: Type.String({
+    minLength: 1,
+    description:
+      "Concise mathematical claim with decisive hypotheses and limitations. Put proof details in text. This summary is repeated in later role inputs.",
+  }),
+  text,
+  support: Type.Array(text),
+});
+export const explorationSchema = object({
+  notes: Type.Array(noteDraftSchema),
+  candidate: Type.Boolean(),
+});
+export type Exploration = Static<typeof explorationSchema>;
+export const verdictSchema = object({
+  verdict: StringEnum(["PASS", "FAIL", "INCONCLUSIVE"] as const),
+  report: text,
+  correctedText: Type.Optional(Type.String({ minLength: 1, pattern: "\\S" })),
+});
+export type Verdict = Static<typeof verdictSchema>;
+export const correctnessSchema = object({
+  ...verdictSchema.properties,
+  premises: Type.Array(text),
+});
+export type Correctness = Static<typeof correctnessSchema>;
+export const statementSchema = object({
+  statement: text,
+  premises: Type.Array(text),
+});
+export const proofSchema = object({ proof: text, complete: Type.Boolean() });
+const passageSchema = object({
+  premise: Type.Integer({ minimum: 0 }),
+  url: text,
+  quote: text,
+});
+const sourceProperties = {
+  ...verdictSchema.properties,
+  // Codex structured output requires every field; null means no correction.
+  correctedText: Type.Union([
+    verdictSchema.properties.correctedText,
+    Type.Null(),
+  ]),
+};
+export const sourceSchema = object({
+  ...sourceProperties,
+  passages: Type.Array(
+    Type.Union([
+      passageSchema,
+      object({ premise: passageSchema.properties.premise, passageId: text }),
+    ]),
+  ),
+});
+export const reviewSchema = object({
+  ...sourceProperties,
+  passages: Type.Array(passageSchema),
+  premises: Type.Array(text),
+});
+export type SourceEvidence = Omit<Static<typeof passageSchema>, "premise"> & {
+  id: string;
+  /** Exact premise at the original source assessment. */
+  statement: string;
+};
+export type ResearchReport = Verdict & {
+  premises: Static<typeof reviewSchema>["premises"];
+  passages: (SourceEvidence & { premise: number })[];
+  kind: "codex-report";
+  operationId: string;
+  reportedAt: string;
+};
+export type Source = Verdict | ResearchReport;
+export type ReviewInput = { task: Task; argument: string };
+export type Check = {
+  noteId: string;
+  correction?: { revision: number; text: string };
+  correctness?: Correctness;
+  source?: Source;
+  requirements?: Verdict;
+  reconstruction?: Verdict & Static<typeof statementSchema> & { proof: string };
+};
+export type Note = Static<typeof noteDraftSchema> & {
+  revision: number;
+  imported: boolean;
+  checks: Check[];
+  verified: boolean;
+  dead: boolean;
+  accepted: boolean;
+  candidate: boolean;
+};
+export const explorePlan = object({
+  kind: Type.Literal("explorer"),
+  guidance: text,
+  support: Type.Array(text, { uniqueItems: true }),
+});
+export const verificationStages = [
+  "correctness",
+  "source",
+  "requirements",
+  "reconstruction",
+] as const;
+export type VerificationStage = (typeof verificationStages)[number];
+export const verificationStageSchema = StringEnum(verificationStages);
+export const verifyPlan = object({
+  kind: Type.Literal("verifier"),
+  notes: Type.Array(text, { minItems: 1, uniqueItems: true }),
+  through: verificationStageSchema,
+});
+export const literaturePlan = object({
+  kind: Type.Literal("literature"),
+  query: text,
+});
+export const planSchema = (literature: boolean) =>
+  object({
+    work: Type.Array(
+      literature
+        ? Type.Union([explorePlan, verifyPlan, literaturePlan])
+        : Type.Union([explorePlan, verifyPlan]),
+      { minItems: 1 },
+    ),
+  });
+export type Plan = Static<ReturnType<typeof planSchema>>;
+/** One verification batch checks common support once across all requests. */
+export const verificationTargets = (plan: Plan) =>
+  plan.work.flatMap((request) =>
+    request.kind === "verifier"
+      ? request.notes.map((id) => ({ id, through: request.through }))
+      : [],
+  );
+export type SolverInput = { task: Task; notes: Note[] };
+export type NoteInfo = Pick<
+  Note,
+  "id" | "summary" | "support" | "imported" | "verified" | "dead" | "candidate"
+> & { passed: VerificationStage[]; feedback: string[] };
+export type ExplorerInput = {
+  task: Task;
+  notes: NoteInfo[];
+  guidance: string;
+  support: Note[];
+};
+export type VerifierInput = SolverInput & {
+  targets: { id: string; through: VerificationStage }[];
+  evidence?: SourceEvidence[];
+};
+export type ReconstructionInput = SolverInput & { targets: string[] };
+export type SolverResult =
+  ({ kind: "notes" } & Exploration) | { kind: "verification"; checks: Check[] };
+
+/** Strict validation at trust boundaries: no conversion, defaults, or dropped nulls. */
+export function decode<S extends TSchema>(
+  schema: S,
+  value: unknown,
+): Static<S> {
+  if (!Value.Check(schema, value))
+    throw new Error(
+      `Invalid value:\n${Value.Errors(schema, value)
+        .map((error) => `  - ${error.instancePath || "/"}: ${error.message}`)
+        .join("\n")}`,
+    );
+  return structuredClone(value) as Static<S>;
+}

@@ -1,0 +1,76 @@
+{
+  "repository": "https://github.com/earendil-works/pi",
+  "commit": "2b0a123de98318c2ff8069661721ce0c3794c34e",
+  "build": {
+    "node": "26.5.0",
+    "npm": "11.17.0",
+    "dependencyInstall": "npm ci --ignore-scripts --no-audit --no-fund",
+    "order": ["chord", "telemetry", "ai", "durable", "agent"],
+    "aiScript": "build:offline",
+    "otherScript": "build",
+    "pack": "npm pack --ignore-scripts"
+  },
+  "upstreamPackageLockSha256": "0f4f0a1878e667a02a5dd72049249c80fb6f50ee2518533ec5eefaa7482379aa",
+  "modelData": {
+    "generatedAt": "2026-09-24T12:47:59.708Z",
+    "manifestSha256": "3cbb2ad64106325c197a52bbdd0dcac28ef5b8a4862c0a390f57c4e53da8eee7",
+    "frozenIn": "@earendil-works/pi-ai:package/dist/providers/data"
+  },
+  "artifacts": [
+    {
+      "name": "@earendil-works/chord",
+      "version": "0.87.1",
+      "bytes": 203309,
+      "sha256": "4043a838ce23963029f5c667c6475a93e6391f555f55cc6bdc34cb6b476ab8b9",
+      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-chord-0.87.1.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-telemetry",
+      "version": "0.87.1",
+      "bytes": 27277,
+      "sha256": "67bf2718c363a26520b1c124801e4c9c11ff15d10144319d7533d2138771f53d",
+      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-telemetry-0.87.1.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-ai",
+      "version": "0.87.1",
+      "bytes": 730742,
+      "sha256": "a0283ab48549ca656e118156503c901a73b9c284ca0ff9e0150fcc0b391c15f2",
+      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-ai-0.87.1.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-durable",
+      "version": "0.87.1",
+      "bytes": 261375,
+      "sha256": "d9f23bf2a0c0eae6455a0006802c3e97f642853a8e4b9218b13d1821319bc519",
+      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-durable-0.87.1.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-agent-core",
+      "version": "0.87.1",
+      "bytes": 807872,
+      "sha256": "04e71323a581df848173a7b14539614926f6719cac05d4978a9ad895e4da2cc6",
+      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-agent-core-0.87.1.tgz"
+    }
+  ],
+  "patches": [
+    {
+      "path": "patches/@earendil-works%2Fpi-ai@0.87.1.patch",
+      "sha256": "533b4c7cd3c5d8d9cfab1cf41a8ec13451d83fd6dbb9eb59e86f23790ae5ade9",
+      "appliedBy": "Bun patchedDependencies at installation"
+    },
+    {
+      "path": "patches/@earendil-works%2Fpi-durable@0.87.1.patch",
+      "sha256": "85b4f0bce03931b18ec5ff06a3b8344d3c6ee395b4dcf9cb1071e96475011781",
+      "appliedBy": "Bun patchedDependencies at installation"
+    },
+    {
+      "path": "patches/pi-claude-code-provider@0.5.0.patch",
+      "sha256": "90d8940efe9fcfd71ecf23587746e348545a4e3f932ad1a8c5bd8f1d239867e5",
+      "appliedBy": "Bun patchedDependencies at installation"
+    }
+  ],
+  "verification": {
+    "frozenModelDataRebuild": "All five tarball SHA-256 values matched across two clean-output builds from the preserved frozen model data using the recorded toolchain."
+  }
+}

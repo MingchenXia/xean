@@ -1,3041 +1,1174 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
-import { z } from "zod";
-
+import { expect, test } from "bun:test";
+import { zstdDecompressSync } from "node:zlib";
+import { MemoryStorage } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
-  createAssistantMessageEventStream,
-  getCurrentTools,
+  fauxAssistantMessage,
+  fauxToolCall,
   normalizeContext,
-  registerSessionResourceCleanup,
+  Type,
   type AssistantMessage,
-  type Context,
+  type JsonValue,
   type Model,
   type Models,
-  type SimpleStreamOptions,
-  type AssistantMessageEvent,
+  type Usage,
 } from "@earendil-works/pi-ai";
-import { streamSimple as streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
+import { streamSimple as responses } from "@earendil-works/pi-ai/api/openai-responses";
+import { streamSimple as codex } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import { streamSimple as anthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { auditedStream, reportedPiUsage } from "../packages/core/src/pi";
+import type { CallIdentity, CallRecorder } from "../packages/core/src/calls";
+import { piRuntime, readSettings } from "../packages/core/src/solve/config.ts";
+import { createSolver } from "../packages/core/src/solve/solver.ts";
+import { ask } from "../packages/core/src/solve/pi.ts";
+import { createRoles } from "../packages/core/src/solve/roles.ts";
+import { validateNotes } from "../packages/core/src/solve/notes.ts";
+import { offlineResearch } from "../scripts/bounded-solve.ts";
+import type { Note, Plan } from "../packages/core/src/solve/contracts.ts";
+import { Xean, type Limits } from "../packages/core/src/index.ts";
+import { fixtureRuntime, model } from "./fixtures/pi.ts";
+const context = {
+  messages: [{ role: "user" as const, content: "Test", timestamp: 0 }],
+};
+const apiKey = "xean-offline-fixture-key";
 
-import {
-  createCampaign,
-  defineTool,
-  deriveCandidateStatus,
-  openReader,
-  type Entry,
-} from "../src";
-import {
-  derivePiSpend,
-  piRequest,
-  piRequestAttempts,
-  piRequestCompletion,
-  piStoredResult,
-  piResultRecord,
-  readPiResult,
-  storePiResult,
-  runPi,
-  type PiSubmissionGate,
-} from "../src/pi";
-import {
-  inspectCoreCampaign,
-  inspectCoreCampaignSummary,
-} from "../src/observe";
-
-test("forwards provider events before completion and cleans the logical session", async () => {
-  const store = campaign();
-  let consumed!: () => void;
-  const observed = new Promise<void>((resolve) => {
-    consumed = resolve;
-  });
-  let session: string | undefined;
-  const cleaned: (string | undefined)[] = [];
-  const unregister = registerSessionResourceCleanup((id) => {
-    cleaned.push(id);
-  });
-  const models: PiModels = {
-    streamSimple(requestModel, _context, options) {
-      session = options?.sessionId;
-      const stream = createAssistantMessageEventStream();
-      const final = assistant([{ type: "text", text: "done" }], "stop");
-      void (async () => {
-        await options?.onPayload?.({ input: "streaming" }, requestModel);
-        expect(piRequestAttempts(store.records())[0]?.state).toBe("unsettled");
-        const start: AssistantMessageEvent = {
-          type: "start",
-          get partial() {
-            consumed();
-            return final;
-          },
-        };
-        stream.push(start);
-        await observed;
-        stream.push({ type: "done", reason: "stop", message: final });
-        stream.end();
-      })().catch((error: unknown) => {
-        stream.push({
-          type: "error",
-          reason: "error",
-          error: {
-            ...final,
-            stopReason: "error",
-            errorMessage: String(error),
-          },
-        });
-        stream.end();
-      });
-      return stream;
-    },
-  };
-  try {
-    const result = await runPi(store, {
-      models,
-      model,
-      label: "forwarding",
-      prompt: "Test",
-    });
-    expect(result.state).toBe("succeeded");
-    expect(session).toBeDefined();
-    expect(cleaned).toEqual([session]);
-    expect(piRequestAttempts(store.records())[0]?.state).toBe("completed");
-  } finally {
-    unregister();
-    store.close();
-  }
-}, 1000);
-
-test("HTTP status belongs to its logical request and does not persist response headers", async () => {
-  const store = campaign();
-  const failure = {
-    ...assistant([], "error"),
-    errorMessage: "503 Service Unavailable",
-  };
-  const provider = payloadModels(
-    [failure, failure, assistant([{ type: "text", text: "done" }], "stop")],
-    [{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }],
-    [],
-  );
-  const responses = [[503], [], [429, 200]];
-  let index = 0;
-  try {
-    const result = await runPi(store, {
-      model,
-      label: "http-status",
-      prompt: "Test request recovery",
-      maxRecoveries: 2,
-      models: {
-        streamSimple(requestModel, context, options) {
-          const statuses = responses[index++]!;
-          return provider.streamSimple(requestModel, context, {
-            ...options,
-            onPayload: async (payload, model) => {
-              const replacement = await options?.onPayload?.(payload, model);
-              for (const status of statuses)
-                await options?.onResponse?.(
-                  { status, headers: { authorization: "response-secret" } },
-                  model,
-                );
-              return replacement;
-            },
-          });
-        },
+test("configuration and library limits share safe integer boundaries", async () => {
+  const profiles = { default: { provider: "openai", model: "unused" } };
+  const solver = (maxExplorerResponses: number) =>
+    createSolver(
+      { problem: "Exact task", completionCriteria: "Complete proof" },
+      () => {
+        throw new Error("Numeric validation needs no model runtime");
       },
-    });
-    expect(result.state).toBe("succeeded");
-    const records = store.records();
-    const requests = new Set(piRequestAttempts(records).map((r) => r.call));
-    const completions = records.flatMap((entry) =>
-      entry.kind === "call-result" &&
-      entry.state === "returned" &&
-      requests.has(entry.parent)
-        ? [piRequestCompletion.parse(entry.output)]
-        : [],
+      { maxExplorerResponses },
     );
-    expect(completions.map((entry) => entry.httpStatus)).toEqual([
-      503,
-      undefined,
-      200,
-    ]);
-    expect(completions[1]).not.toHaveProperty("httpStatus");
-    expect(JSON.stringify(records)).not.toContain("response-secret");
+  const open = (limits: Partial<Limits>) =>
+    Xean.open(new MemoryStorage(), { ...solver(1), limits });
+  const maximum = Number.MAX_SAFE_INTEGER;
+  for (const value of [0, maximum + 1, Infinity, NaN, "2", 1.5] as number[]) {
+    expect(() =>
+      readSettings({ profiles, maxExplorerResponses: value }),
+    ).toThrow();
+    expect(() => solver(value)).toThrow();
+    expect(() =>
+      readSettings({ profiles, limits: { concurrency: value } }),
+    ).toThrow();
+    await expect(open({ concurrency: value })).rejects.toThrow();
+  }
+  for (const value of [0, maximum, null]) {
+    const limits = {
+      concurrency: maximum,
+      attempts: 1,
+      providerCalls: value,
+      deadline: value,
+    };
     expect(
-      piRequestCompletion.safeParse({
-        ...completions[0],
-        protocol: "xean/pi-request-completion/v1",
-      }).success,
-    ).toBe(false);
-  } finally {
-    store.close();
-  }
-});
-
-test("request accounting is durable before tool execution and counted once after continuation", async () => {
-  const store = campaign();
-  let checked = false;
-  const record = defineTool({
-    name: "record",
-    description: "Record",
-    input: z.strictObject({}),
-    async run() {
-      const spend = derivePiSpend(store.records());
-      expect(spend.unaccountedCalls).toHaveLength(1);
-      expect(spend.summary).toMatchObject({
-        logicalProviderRequests: 1,
-        unmeasuredRequests: 0,
-      });
-      expect(piRequestAttempts(store.records())[0]?.state).toBe("completed");
-      checked = true;
-      throw new Error("continue after recording");
-    },
-  });
-  try {
-    await runPi(store, {
-      model,
-      label: "durable-usage",
-      prompt: "Record",
-      tools: [record],
-      models: payloadModels(
-        [
-          assistant(
-            [{ type: "toolCall", id: "first", name: "record", arguments: {} }],
-            "toolUse",
-          ),
-          assistant([{ type: "text", text: "done" }], "stop"),
-        ],
-        [{ input: "first" }, { input: "second" }],
-        [],
-      ),
-    });
-    expect(checked).toBe(true);
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      2,
-    );
-  } finally {
-    store.close();
-  }
-});
-
-test.each(["checkpoint", "provider-result"] as const)(
-  "settles calls and cleans the session after a %s rejection",
-  async (failure) => {
-    const store = campaign();
-    const call = store.call.bind(store);
-    store.call = (options, runner) =>
-      failure === "checkpoint" && options.label === "xean/pi-request"
-        ? Promise.reject(new Error("checkpoint rejected"))
-        : call(options, runner);
-    const provider = invalidPayloadModels(1);
-    const cleaned: (string | undefined)[] = [];
-    const unregister = registerSessionResourceCleanup((id) => {
-      cleaned.push(id);
-    });
-    let session: string | undefined;
+      readSettings({ profiles, limits, maxExplorerResponses: maximum }),
+    ).toMatchObject({ limits, maxExplorerResponses: maximum });
+    const engine = await open(limits);
     try {
-      await expect(
-        runPi(store, {
-          models: {
-            streamSimple(model, context, options) {
-              session = options?.sessionId;
-              const stream = provider.streamSimple(model, context, options);
-              if (failure === "provider-result")
-                stream.result = async () => {
-                  throw new Error("provider-result rejected");
-                };
-              return stream;
-            },
-          },
-          model,
-          label: "rejected-request",
-          prompt: "Test",
-        }),
-      ).rejects.toThrow(`${failure} rejected`);
-      const entries = store.records();
-      const calls = entries.filter((entry) => entry.kind === "call");
-      expect(calls).toHaveLength(failure === "checkpoint" ? 1 : 2);
-      for (const call of calls)
-        expect(entries).toContainEqual(
-          expect.objectContaining({
-            kind: "call-result",
-            parent: call.seq,
-            state: "threw",
-          }),
-        );
-      expect(session).toBeDefined();
-      expect(cleaned).toEqual([session]);
+      expect((await engine.inspect()).limits).toEqual(limits);
     } finally {
-      unregister();
-      store.close();
+      await engine.close();
     }
-  },
-  1000,
-);
-
-type PiModels = Pick<Models, "streamSimple">;
-
-const model: Model<"openai-responses"> = {
-  id: "test-v1",
-  name: "Test",
-  api: "openai-responses",
-  provider: "fake",
-  baseUrl: "https://invalid.test",
-  reasoning: true,
-  thinkingLevelMap: { max: "max" },
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 10_000,
-  maxTokens: 2_000,
-};
-const submitVerdict = defineTool({
-  name: "submit_verdict",
-  description: "Submit a verdict",
-  input: z.strictObject({
-    verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
-    evidence: z.json(),
-  }),
-  async run() {
-    return null;
-  },
-});
-
-const directories: string[] = [];
-
-afterEach(() => {
-  for (const directory of directories.splice(0)) {
-    rmSync(directory, { recursive: true });
   }
+  expect(() => solver(maximum)).not.toThrow();
 });
 
-function campaign() {
-  const directory = mkdtempSync(join(tmpdir(), "xean-pi-"));
-  directories.push(directory);
-  return createCampaign(join(directory, "campaign.db"), "pi-test", null);
+function eventResponse(...events: unknown[]): Response {
+  return new Response(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    {
+      headers: { "content-type": "text/event-stream" },
+    },
+  );
 }
 
-function spendEntries(
-  usage: Record<string, number> | null,
-  error = false,
-): Entry[] {
-  const model = { provider: "fake", id: "test-v1", api: "openai-responses" };
-  return [
-    {
-      seq: 1,
-      atMs: 1,
-      kind: "campaign",
-      application: "test",
-      config: null,
-    },
-    {
-      seq: 2,
-      atMs: 2,
-      kind: "call",
-      label: "test/v1",
-      request: {
-        protocol: "xean/pi-run/v6",
-        model,
-        modelProfile: null,
-        prompt: "test",
-      },
-      tools: [],
-    },
-    {
-      seq: 3,
-      atMs: 3,
-      kind: "call",
-      label: "xean/pi-request",
-      request: {
-        protocol: "xean/pi-request/v1",
-        parent: 2,
-        model,
-        payloadRef: "c".repeat(64),
-      },
-      tools: [],
-    },
-    {
-      seq: 4,
-      atMs: 4,
-      kind: "call-result",
-      parent: 3,
-      state: "returned",
-      output: {
-        protocol: "xean/pi-request-completion/v2",
-        parent: 2,
-        operation: {
-          provider: model.provider,
-          requestedModel: model.id,
-          api: model.api,
-          stopReason: error ? "error" : "stop",
-          error,
-          usage,
-        },
-      },
-    },
-    {
-      seq: 5,
-      atMs: 5,
-      kind: "call-result",
-      parent: 2,
-      state: "returned",
-      output: {
-        state: "succeeded",
-        call: 2,
-        textRef: "a".repeat(64),
-        transcriptRef: "b".repeat(64),
-        assistantUsage: [],
-      },
-    },
-  ];
+async function requestBody(init: RequestInit | undefined) {
+  const bytes = await new Response(init?.body).bytes();
+  return JSON.parse(
+    new TextDecoder().decode(
+      new Headers(init?.headers).get("content-encoding") === "zstd"
+        ? zstdDecompressSync(bytes)
+        : bytes,
+    ),
+  );
 }
 
-function assistant(
-  content: AssistantMessage["content"],
-  stopReason: AssistantMessage["stopReason"],
-  reasoning?: number,
-  measured = true,
-): AssistantMessage {
-  return {
-    role: "assistant",
-    content,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    responseModel: "served-test-v1",
-    usage: measured
-      ? {
-          input: 11,
-          output: 7,
-          cacheRead: 5,
-          cacheWrite: 0,
-          ...(reasoning === undefined ? {} : { reasoning }),
-          totalTokens: 23,
-          cost: {
-            input: 0.011,
-            output: 0.014,
-            cacheRead: 0.001,
-            cacheWrite: 0,
-            total: 0.026,
-          },
-        }
-      : {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
+function completedResponse(): Response {
+  return eventResponse({
+    type: "response.completed",
+    response: {
+      id: "xean-success",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+    },
+  });
+}
+
+test("Codex profiles keep native auth on official hosts and opaque keys on gateways", async () => {
+  const token = `fixture.${Buffer.from(
+    JSON.stringify({
+      "https://api.openai.com/auth": { chatgpt_account_id: "fixture-account" },
+    }),
+  ).toString("base64url")}.fixture`;
+  for (const baseUrl of [
+    undefined,
+    "https://CHATGPT.com/backend-api",
+    "https://api.chatgpt.com/backend-api",
+    "https://xean.invalid/backend-api",
+  ]) {
+    const gateway = baseUrl?.includes("xean.invalid");
+    const key = gateway ? apiKey : token;
+    const runtime = piRuntime(
+      readSettings({
+        profiles: {
+          default: {
+            provider: "openai-codex",
+            model: "gpt-6-astra",
+            ...(baseUrl ? { baseUrl, reasoning: "max" } : {}),
           },
         },
-    stopReason,
-    timestamp: 1,
-  };
-}
-
-function models(
-  replies: readonly AssistantMessage[],
-  inspect?: (
-    context: Context,
-    options: SimpleStreamOptions | undefined,
-  ) => void,
-): PiModels {
-  let index = 0;
-  return {
-    streamSimple(requestModel, context, options) {
-      inspect?.(context, options);
-      const reply = replies[index++];
-      if (reply === undefined) throw new Error("no scripted Pi reply");
-      const stream = createAssistantMessageEventStream();
-      void (async () => {
-        await options?.onPayload?.(
-          { model: requestModel.id, context },
-          requestModel,
-        );
-        if (reply.stopReason === "error" || reply.stopReason === "aborted") {
-          stream.push({
-            type: "error",
-            reason: reply.stopReason,
-            error: reply,
-          });
-        } else if (reply.stopReason !== "pending") {
-          stream.push({
-            type: "done",
-            reason: reply.stopReason,
-            message: reply,
-          });
-        } else {
-          throw new Error("pending is not a terminal Pi event");
-        }
-      })();
-      return stream;
-    },
-  } as PiModels;
-}
-
-const gatedTool = defineTool({
-  name: "submit_result",
-  description: "Return the result when complete or near the context limit",
-  input: z.strictObject({ solution: z.boolean(), text: z.string() }),
-  async run() {
-    return null;
-  },
-});
-const submissionGate = {
-  completeArgument: "solution",
-  continuationPrompt: "Keep trying, you can do it.",
-};
-
-function gateReply(
-  index: number,
-  tokens: number,
-  solution: boolean,
-  stop: "toolUse" | "stop" | "length" = "toolUse",
-) {
-  const message = assistant(
-    stop === "toolUse"
-      ? [
-          {
-            type: "thinking",
-            thinking: `Intermediate reasoning ${index}`,
-            thinkingSignature: `retained-${index}`,
-          },
-          {
-            type: "toolCall",
-            id: `result-${index}`,
-            name: gatedTool.name,
-            arguments: { solution, text: `Result ${index}` },
-          },
-        ]
-      : [{ type: "text", text: `Intermediate reasoning ${index}` }],
-    stop,
-  );
-  message.usage = {
-    ...message.usage,
-    input: Math.max(0, tokens - 50),
-    output: Math.min(50, tokens),
-    cacheRead: 0,
-    totalTokens: tokens,
-  };
-  return message;
-}
-
-async function gatedRun(
-  replies: AssistantMessage[],
-  enabled = true,
-  maxRecoveries = 2,
-  tool = gatedTool,
-  cancelOnRequest?: AbortController,
-  gate: PiSubmissionGate = submissionGate,
-  extra: { readonly replayReasoning?: boolean } = {},
-) {
-  const requests: { context: Context; maxTokens: number | undefined }[] = [];
-  const wire = models(replies, (context, options) => {
-    cancelOnRequest?.abort();
-    replies[requests.length]!.timestamp = Date.now();
-    requests.push({
-      context: JSON.parse(JSON.stringify(context)),
-      maxTokens: options?.maxTokens,
-    });
-  });
-  const c = campaign();
-  try {
-    const result = await runPi(c, {
-      models: wire,
-      model,
-      label: "submission-gate",
-      prompt: "Work on the task and use submit_result.",
-      tools: [tool],
-      maxRecoveries,
-      maxLengthContinuations: 8,
-      ...(cancelOnRequest === undefined
-        ? {}
-        : { signal: cancelOnRequest.signal }),
-      ...(enabled ? { submissionGate: gate } : {}),
-      ...extra,
-    });
-    return { result, requests, records: [...c.records()] };
-  } finally {
-    c.close();
-  }
-}
-
-test("submission gate saves every partial in the same context before the near-limit handoff", async () => {
-  const { result, requests, records } = await gatedRun([
-    gateReply(1, 1000, false),
-    gateReply(2, 3200, false),
-    gateReply(3, 4000, false),
-  ]);
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(3);
-  expect(requests[2]!.maxTokens).toBeLessThan(model.maxTokens);
-  expect(requests[1]!.context.messages.slice(-2)).toMatchObject([
-    { role: "toolResult", isError: false },
-    {
-      role: "user",
-      content: submissionGate.continuationPrompt,
-    },
-  ]);
-  const first = requests[1]!.context.messages.find(
-    (message) => message.role === "assistant",
-  );
-  expect(first).toMatchObject({
-    content: [
-      { type: "thinking", thinkingSignature: "retained-1" },
-      { type: "toolCall" },
-    ],
-  });
-  expect(
-    requests[1]!.context.messages.some(
-      (message) => message.role === "toolResult" && message.isError,
-    ),
-  ).toBe(false);
-  const submissions = records.filter((entry) => entry.kind === "tool-call");
-  expect(submissions).toMatchObject([
-    { input: { solution: false, text: "Result 1" } },
-    { input: { solution: false, text: "Result 2" } },
-    { input: { solution: false, text: "Result 3" } },
-  ]);
-  expect(
-    records.find(
-      (entry) => entry.kind === "call" && entry.label === "submission-gate",
-    ),
-  ).toMatchObject({ request: { submissionGate } });
-  expect(
-    requests.every((request) => request.maxTokens! <= model.maxTokens),
-  ).toBe(true);
-});
-
-test("replayReasoning false keeps completed reasoning out of later model input", async () => {
-  const { result, requests, records } = await gatedRun(
-    [
-      gateReply(1, 1000, false),
-      gateReply(2, 3200, false),
-      gateReply(3, 4000, true),
-    ],
-    true,
-    2,
-    gatedTool,
-    undefined,
-    submissionGate,
-    { replayReasoning: false },
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(3);
-  for (const request of requests.slice(1)) {
-    const assistants = request.context.messages.filter(
-      (message) => message.role === "assistant",
-    );
-    expect(assistants.length).toBeGreaterThan(0);
-    expect(JSON.stringify(assistants)).not.toContain('"thinking"');
-    expect(JSON.stringify(assistants)).toContain('"toolCall"');
-  }
-  expect(JSON.stringify(result.transcript)).toContain("retained-1");
-  expect(
-    records.find(
-      (entry) => entry.kind === "call" && entry.label === "submission-gate",
-    ),
-  ).toMatchObject({ request: { replayReasoning: false } });
-});
-
-test.each([1, 4, 5])(
-  "a response limit of %s stops nonempty no-progress submissions without another push",
-  async (maxResponses) => {
-    const replies = Array.from({ length: maxResponses }, (_, index) =>
-      gateReply(index, 1000, false),
-    );
-    for (const reply of replies) {
-      const tool = reply.content.find((block) => block.type === "toolCall");
-      if (tool?.type !== "toolCall") throw new Error("fixture");
-      tool.arguments = {
-        solution: false,
-        text: "No new mathematical progress.",
-      };
-    }
-    const { result, requests, records } = await gatedRun(
-      replies,
-      true,
-      2,
-      gatedTool,
-      undefined,
-      {
-        ...submissionGate,
-        maxResponses,
-        continuationPrompt: "Keep trying, you can do it.",
-      },
-    );
-    expect(result.state).toBe("succeeded");
-    expect(requests).toHaveLength(maxResponses);
-    expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(
-      maxResponses,
-    );
-    expect(
-      result.transcript.filter(
-        (message: any) =>
-          message.role === "user" &&
-          message.content === "Keep trying, you can do it.",
-      ),
-    ).toHaveLength(maxResponses - 1);
-    expect(requests.at(-1)!.maxTokens).toBeGreaterThan(1);
-  },
-);
-
-test("provider retries do not consume the response limit", async () => {
-  const failure = {
-    ...assistant([], "error"),
-    errorMessage: "upstream_error: Codex upstream request failed",
-  };
-  const { result, requests, records } = await gatedRun(
-    [
-      failure,
-      gateReply(1, 1000, false),
-      { ...failure },
-      gateReply(2, 2000, false),
-    ],
-    true,
-    1,
-    gatedTool,
-    undefined,
-    { ...submissionGate, maxResponses: 2 },
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(4);
-  expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(2);
-});
-
-test.each([1, 2])(
-  "rejected submissions count toward a response limit of %s",
-  async (maxResponses) => {
-    const invalid = gateReply(1, 1000, false);
-    const tool = invalid.content.find((block) => block.type === "toolCall");
-    if (tool?.type !== "toolCall") throw new Error("fixture");
-    tool.arguments = { text: "Missing the required solution field." };
-    const { result, requests, records } = await gatedRun(
-      [invalid, gateReply(2, 2000, false)],
-      true,
-      2,
-      gatedTool,
-      undefined,
-      { ...submissionGate, maxResponses },
-    );
-    expect(result.state).toBe(maxResponses === 1 ? "failed" : "succeeded");
-    expect(requests).toHaveLength(maxResponses);
-    expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(
-      maxResponses - 1,
-    );
-  },
-);
-
-test.each(["stop", "length"] as const)(
-  "plain %s responses cannot bypass the response limit",
-  async (stop) => {
-    const { result, requests } = await gatedRun(
-      [gateReply(1, 1000, false, stop), gateReply(2, 1000, false, stop)],
-      true,
-      2,
-      gatedTool,
-      undefined,
-      { ...submissionGate, maxResponses: 2 },
-    );
-    expect(requests).toHaveLength(2);
-    expect(result.state).toBe("failed");
-  },
-);
-
-test("a large response limit retains the context handoff", async () => {
-  const { result, requests } = await gatedRun(
-    [gateReply(1, 1000, false), gateReply(2, 4000, false)],
-    true,
-    2,
-    gatedTool,
-    undefined,
-    { ...submissionGate, maxResponses: 1_000_000_000_000_000 },
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(2);
-});
-
-test.each([false, true])(
-  "an empty submission hands off only when configured: %s",
-  async (stopOnEmpty) => {
-    const saved: string[] = [];
-    const tool = defineTool({
-      name: gatedTool.name,
-      description: "Save new work while continuing the original task",
-      input: z.strictObject({
-        solution: z.boolean(),
-        notes: z.array(z.string()),
       }),
-      async run({ notes }) {
-        const noteIds = notes.map((_, index) => `n${saved.length + index + 1}`);
-        saved.push(...notes);
-        return { noteIds };
-      },
-    });
-    const replies = [
-      gateReply(1, 1000, false),
-      gateReply(2, 1500, false),
-      gateReply(3, 2000, true),
-    ];
-    for (const [index, reply] of replies.entries()) {
-      const call = reply.content.find((block) => block.type === "toolCall");
-      if (call?.type !== "toolCall")
-        throw new Error("missing fixture tool call");
-      call.arguments = {
-        solution: index === 2,
-        notes: index === 1 ? [] : [`Result ${index + 1}`],
-      };
-    }
-    const gate = {
-      ...submissionGate,
-      ...(stopOnEmpty ? { emptyArgument: "notes" } : {}),
-      continuationPrompt:
-        "Begin another substantial research attempt using the saved work.",
-    };
-    const { result, requests, records } = await gatedRun(
-      replies,
-      true,
-      2,
-      tool,
-      undefined,
-      gate,
+      key,
     );
-    expect(result.state).toBe("succeeded");
-    expect(requests).toHaveLength(stopOnEmpty ? 2 : 3);
-    expect(saved).toEqual(
-      stopOnEmpty ? ["Result 1"] : ["Result 1", "Result 3"],
-    );
-    const continued = requests[1]!.context.messages;
-    expect(JSON.stringify(continued)).toContain("retained-1");
-    expect(JSON.stringify(continued)).toContain("Result 1");
-    const feedback = continued.findLast(
-      (message) => message.role === "toolResult",
-    );
-    expect(feedback).toMatchObject({ isError: false });
-    expect(JSON.stringify(feedback)).toContain("n1");
-    expect(JSON.stringify(feedback)).not.toContain(gate.continuationPrompt);
-    expect(continued.slice(-2)).toMatchObject([
-      { role: "toolResult", isError: false },
-      { role: "user", content: gate.continuationPrompt },
-    ]);
-    if (!stopOnEmpty)
-      expect(requests[2]!.context.messages.slice(-2)).toMatchObject([
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: '{"noteIds":[]}' }],
+    const profile = runtime.profiles.explorer;
+    let sent = false;
+    const result = await runtime.models
+      .streamSimple(profile.model, context, {
+        ...profile.options,
+        transport: "sse",
+        maxRetries: 0,
+        onPayload(payload) {
+          expect(payload).toMatchObject({ reasoning: { effort: "max" } });
         },
-        { role: "user", content: gate.continuationPrompt },
-      ]);
-    expect(
-      records.find(
-        (entry) => entry.kind === "call" && entry.label === "submission-gate",
-      ),
-    ).toMatchObject({ request: { submissionGate: gate } });
-    expect(
-      records.filter((entry) => entry.kind === "tool-result"),
-    ).toMatchObject([
-      { output: { noteIds: ["n1"] } },
-      { output: { noteIds: [] } },
-      ...(stopOnEmpty ? [] : [{ output: { noteIds: ["n2"] } }]),
-    ]);
-  },
-);
-
-test("the first submission may hand off empty without a solution claim", async () => {
-  const tool = defineTool({
-    name: gatedTool.name,
-    description: "Save notes or hand off",
-    input: z.strictObject({
-      solution: z.boolean(),
-      notes: z.array(z.string()),
-    }),
-    async run() {
-      return { noteIds: [] };
-    },
-  });
-  const reply = gateReply(1, 1000, false);
-  const call = reply.content.find((block) => block.type === "toolCall");
-  if (call?.type !== "toolCall") throw new Error("missing fixture tool call");
-  call.arguments = { solution: false, notes: [] };
-  const { result, requests, records } = await gatedRun(
-    [reply],
-    true,
-    2,
-    tool,
-    undefined,
-    { ...submissionGate, emptyArgument: "notes" },
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(1);
-  expect(records.filter((entry) => entry.kind === "tool-call")).toMatchObject([
-    { input: { solution: false, notes: [] } },
-  ]);
-});
-
-test("empty submissions receive user continuation until the context threshold", async () => {
-  const tool = defineTool({
-    name: gatedTool.name,
-    description: "Save partial notes",
-    input: z.strictObject({
-      solution: z.boolean(),
-      notes: z.array(z.string()),
-    }),
-    async run() {
-      return { noteIds: [] };
-    },
-  });
-  const replies = [gateReply(1, 1000, false), gateReply(2, 4000, false)];
-  for (const reply of replies) {
-    const call = reply.content.find((block) => block.type === "toolCall");
-    if (call?.type !== "toolCall") throw new Error("missing fixture tool call");
-    call.arguments = { solution: false, notes: [] };
-  }
-  const prompt = "Keep trying, you can do it.";
-  const { result, requests, records } = await gatedRun(
-    replies,
-    true,
-    2,
-    tool,
-    undefined,
-    { ...submissionGate, continuationPrompt: prompt },
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(2);
-  expect(requests[1]!.context.messages.slice(-2)).toMatchObject([
-    { role: "toolResult", content: [{ type: "text", text: '{"noteIds":[]}' }] },
-    { role: "user", content: prompt },
-  ]);
-  expect(records.filter((entry) => entry.kind === "tool-call")).toMatchObject([
-    { input: { solution: false, notes: [] } },
-    { input: { solution: false, notes: [] } },
-  ]);
-});
-
-test("the application continuation prompt reaches native turn hooks but yields to finalization", async () => {
-  const gate = {
-    ...submissionGate,
-    continuationPrompt: "Investigate another route.",
-  };
-  const { result, requests } = await gatedRun(
-    [
-      gateReply(1, 1000, false, "length"),
-      gateReply(2, 4000, false, "stop"),
-      gateReply(3, 4000, false),
-    ],
-    true,
-    2,
-    gatedTool,
-    undefined,
-    gate,
-  );
-  expect(result.state).toBe("succeeded");
-  expect(JSON.stringify(requests[1]!.context.messages.at(-1))).toContain(
-    gate.continuationPrompt,
-  );
-  const finalization = JSON.stringify(requests[2]!.context.messages.at(-1));
-  expect(finalization).toContain("Finalize now.");
-  expect(finalization).not.toContain(gate.continuationPrompt);
-});
-
-test.each([
-  [266_000, "toolUse", 1_904, 267_904],
-  [268_000, "stop", 127_904, 268_100],
-] as const)(
-  "a 400k context budget preserves finalization space after %i tokens and %s",
-  async (tokens, stop, nextMaxTokens, settledTokens) => {
-    const requests: (number | undefined)[] = [];
-    const replies = [
-      gateReply(1, tokens, false, stop),
-      gateReply(2, settledTokens, false),
-    ];
-    const c = campaign();
-    const largeModel = {
-      ...model,
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-    };
-    try {
-      const result = await runPi(c, {
-        models: models(replies, (_context, options) => {
-          replies[requests.length]!.timestamp = Date.now();
-          requests.push(options?.maxTokens);
-        }),
-        model: largeModel,
-        label: "budgeted-explorer",
-        prompt: "Do useful work, then submit partial notes.",
-        tools: [gatedTool],
-        submissionGate: {
-          ...submissionGate,
-          contextBudgetTokens: 400_000,
-        },
-      });
-      expect(result.state).toBe("succeeded");
-      expect(requests).toHaveLength(2);
-      expect(requests[0]).toBe(128_000);
-      // Native estimation also charges the intervening tool/continuation feedback.
-      expect(requests[1]).toBeGreaterThan(nextMaxTokens - 256);
-      expect(requests[1]).toBeLessThanOrEqual(nextMaxTokens);
-      const records = c.records();
-      expect(
-        records.filter((entry) => entry.kind === "tool-call"),
-      ).toHaveLength(stop === "toolUse" ? 2 : 1);
-      expect(
-        records.find(
-          (entry) =>
-            entry.kind === "call" && entry.label === "budgeted-explorer",
+        fetch: Object.assign(
+          async (_url: string | URL | Request, init?: RequestInit) => {
+            sent = true;
+            const headers = new Headers(init?.headers);
+            expect(headers.get("authorization")).toBe(`Bearer ${key}`);
+            expect(headers.get("chatgpt-account-id")).toBe(
+              gateway ? null : "fixture-account",
+            );
+            return eventResponse({
+              type: "response.completed",
+              response: {
+                id: "xean-auth",
+                status: "completed",
+                output: [],
+              },
+            });
+          },
+          { preconnect: fetch.preconnect },
         ),
-      ).toMatchObject({
-        request: {
-          modelProfile: { contextWindow: 1_050_000 },
-          submissionGate: { contextBudgetTokens: 400_000 },
+      })
+      .result();
+    expect(result.stopReason).toBe("stop");
+    expect(sent).toBe(true);
+  }
+});
+
+function fixtureModels(
+  fetchResponse: (
+    init: RequestInit | undefined,
+  ) => Response | Promise<Response>,
+): Pick<Models, "streamSimple"> {
+  const stubFetch: typeof fetch = Object.assign(
+    async (_url: string | URL | Request, init?: RequestInit) =>
+      fetchResponse(init),
+    { preconnect: fetch.preconnect },
+  );
+  return {
+    streamSimple(requestModel, requestContext, options) {
+      const configured = {
+        ...options,
+        apiKey,
+        maxRetries: 0,
+        transport: "sse" as const,
+        fetch: stubFetch,
+      };
+      const transcript = normalizeContext(requestContext);
+      return requestModel.api === "openai-responses"
+        ? responses(
+            requestModel as Model<"openai-responses">,
+            transcript,
+            configured,
+          )
+        : codex(
+            requestModel as Model<"openai-codex-responses">,
+            transcript,
+            configured,
+          );
+    },
+  };
+}
+
+test.each(["openai-responses", "openai-codex-responses"] as const)(
+  "%s retains terminal failure usage with a custom endpoint",
+  async (api) => {
+    const state = recording();
+    const models = fixtureModels(() => {
+      return eventResponse({
+        type: "response.failed",
+        response: {
+          id: "xean-failure",
+          status: "failed",
+          output: [],
+          error: { code: "invalid_request_error", message: "fixture failure" },
+          usage: {
+            input_tokens: 100,
+            output_tokens: 5,
+            total_tokens: 105,
+            input_tokens_details: { cached_tokens: 40 },
+            output_tokens_details: { reasoning_tokens: 3 },
+          },
         },
       });
-    } finally {
-      c.close();
-    }
-  },
-);
-
-test("a submission budget above model capacity still respects the model window", async () => {
-  const c = campaign();
-  let requests = 0;
-  const reply = gateReply(1, 4_000, false);
-  try {
-    const result = await runPi(c, {
-      models: models([reply], () => {
-        reply.timestamp = Date.now();
-        requests += 1;
-      }),
-      model,
-      label: "small-model-budget",
-      prompt: "Work.",
-      tools: [gatedTool],
-      submissionGate: { ...submissionGate, contextBudgetTokens: 400_000 },
     });
-    expect(result.state).toBe("succeeded");
-    expect(requests).toBe(1);
-  } finally {
-    c.close();
-  }
-});
-
-test.each(["toolUse", "stop"] as const)(
-  "a claimed solution terminates on native %s without another request",
-  async (stopReason) => {
-    const reply = gateReply(1, 1000, true);
-    reply.stopReason = stopReason;
-    const { result, requests, records } = await gatedRun([reply]);
-    expect(result.state).toBe("succeeded");
-    expect(requests).toHaveLength(1);
-    expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(
-      1,
-    );
-  },
-);
-
-test.each(["valid", "invalid", "unknown"])(
-  "a gated batch with a %s second call executes no submissions",
-  async (secondKind) => {
-    const first = gateReply(1, 1000, true);
-    first.content.push({
-      type: "toolCall",
-      id: "second",
-      name: secondKind === "unknown" ? "missing_tool" : gatedTool.name,
-      arguments:
-        secondKind === "invalid" ? {} : { solution: true, text: "second" },
+    const result = await auditedStream(models, state.recorder)(
+      { ...model, api },
+      context,
+    ).result();
+    expect(result.stopReason).toBe("error");
+    expect(result.usageReported).toBe(true);
+    expect(result.usage).toMatchObject({
+      input: 60,
+      cacheRead: 40,
+      output: 5,
+      reasoning: 3,
+      totalTokens: 105,
     });
-    const { result, requests, records } = await gatedRun([first]);
-    expect(result.state).toBe("failed");
-    expect(requests).toHaveLength(1);
-    expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(
-      0,
-    );
+    expect(state.calls[0]?.usage).toEqual(result.usage);
   },
 );
 
-test("Pi continues a length-truncated tool batch without executing its submissions", async () => {
-  const first = gateReply(1, 1000, false);
-  first.stopReason = "length";
-  first.content.push(gateReply(2, 1000, true).content[1]!);
-  const { result, requests, records } = await gatedRun([
-    first,
-    gateReply(3, 2000, true),
-  ]);
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(2);
-  expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(1);
-});
-
-test("a gated schema rejection stays in context for correction before committing", async () => {
-  const refined = {
-    ...gatedTool,
-    input: z
-      .strictObject({ solution: z.boolean(), text: z.string() })
-      .refine((value) => value.text !== "Result 1", {
-        message: "submission fails the application schema",
-      }),
-  };
-  const { result, requests, records } = await gatedRun(
-    [gateReply(1, 1000, true), gateReply(2, 2000, true)],
-    true,
-    2,
-    refined,
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(2);
-  expect(JSON.stringify(requests[1]!.context.messages)).toContain(
-    "submission fails the application schema",
-  );
-  expect(records.filter((entry) => entry.kind === "tool-call")).toMatchObject([
-    { input: { solution: true, text: "Result 2" } },
-  ]);
-});
-
-test("a recorded gated tool execution error ends the call without another submission attempt", async () => {
-  const failing = {
-    ...gatedTool,
-    async run() {
-      throw new Error("submission failed");
-    },
-  };
-  const { result, requests, records } = await gatedRun(
-    [gateReply(1, 1000, true), gateReply(2, 2000, true)],
-    true,
-    2,
-    failing,
-  );
-  expect(result.state).toBe("failed");
-  expect(requests).toHaveLength(1);
-  expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(1);
-  expect(records.filter((entry) => entry.kind === "tool-result")).toMatchObject(
-    [{ state: "threw" }],
-  );
-});
-
-test("without the gate, ordinary early partial submission still finishes immediately", async () => {
-  const { result, requests } = await gatedRun(
-    [gateReply(1, 1000, false)],
-    false,
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(1);
-  expect(requests[0]!.maxTokens).toBeUndefined();
-});
-
-test.each([
-  [1000, true],
-  [4000, false],
-] as const)(
-  "plain text at %i tokens continues with the correct finalization rule",
-  async (tokens, solution) => {
-    const { result, requests } = await gatedRun([
-      gateReply(1, tokens, false, "stop"),
-      gateReply(2, tokens + 1000, solution),
-    ]);
-    expect(result.state).toBe("succeeded");
-    expect(requests).toHaveLength(2);
-    expect(requests[1]!.context.messages).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: "Intermediate reasoning 1" }],
-      }),
-    );
-    expect(requests[1]!.context.messages.at(-1)).toMatchObject({
-      role: "user",
-    });
-    if (!solution)
-      expect(JSON.stringify(requests[1]!.context.messages.at(-1))).toContain(
-        "otherwise false",
-      );
-  },
-);
-
-test("gated exploration can exceed the ordinary 32 inner turns", async () => {
-  const replies = Array.from({ length: 34 }, (_, index) =>
-    gateReply(index, (index + 1) * 100, index === 33),
-  );
-  const { result, requests, records } = await gatedRun(replies);
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(34);
-  expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(
-    34,
-  );
-});
-
-test("gated length continuation uses context instead of the ordinary eight-continuation cap", async () => {
-  const replies = [
-    ...Array.from({ length: 9 }, (_, index) =>
-      gateReply(index, (index + 1) * 300, false, "length"),
-    ),
-    gateReply(10, 3000, true),
+test("Responses distinguishes explicit zero usage from absent or invalid counts", async () => {
+  const cases = [
+    { usage: undefined, reported: false },
+    { usage: {}, reported: false },
+    { usage: { input_tokens: "5" }, reported: false },
+    { usage: { input_tokens: 0 }, reported: true },
   ];
-  const { result, requests } = await gatedRun(replies);
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(10);
-  expect(
-    requests
-      .at(-1)!
-      .context.messages.filter((message) => message.role === "assistant"),
-  ).toHaveLength(9);
-});
-
-test("exhausted headroom without a submission fails rather than handing off plain text", async () => {
-  const { result, requests, records } = await gatedRun([
-    gateReply(1, 5904, false, "stop"),
-  ]);
-  expect(result).toMatchObject({
-    state: "failed",
-    error: "Pi ended without a terminal submission",
-  });
-  expect(requests).toHaveLength(1);
-  expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(0);
-});
-
-test.each(["stop", "length"] as const)(
-  "cancelled %s completion does not schedule another request",
-  async (reason) => {
-    const { result, requests } = await gatedRun(
-      [gateReply(1, 1000, false, reason), assistant([], "aborted")],
-      true,
-      2,
-      gatedTool,
-      new AbortController(),
-    );
-    expect(result.state).toBe("cancelled");
-    expect(requests).toHaveLength(1);
-  },
-);
-
-test("successful partial submissions reset the consecutive provider-error budget", async () => {
-  const failure = {
-    ...assistant([], "error"),
-    errorMessage: "upstream_error: Codex upstream request failed",
-  };
-  const { result, requests } = await gatedRun(
-    [
-      failure,
-      gateReply(1, 1000, false),
-      { ...failure },
-      gateReply(2, 2000, true),
-    ],
-    true,
-    1,
-  );
-  expect(result.state).toBe("succeeded");
-  expect(requests).toHaveLength(4);
-});
-
-test("a length-truncated response does not reset the consecutive error budget", async () => {
-  const failure = {
-    ...assistant([], "error"),
-    errorMessage: "upstream_error: Codex upstream request failed",
-  };
-  const { result, requests } = await gatedRun(
-    [
-      failure,
-      gateReply(1, 1000, false, "length"),
-      { ...failure },
-      gateReply(2, 2000, true),
-    ],
-    true,
-    1,
-  );
-  expect(result.state).toBe("failed");
-  expect(requests).toHaveLength(3);
-});
-
-test("the submission gate preserves the consecutive transient-error recovery budget", async () => {
-  const replies = Array.from({ length: 3 }, () => ({
-    ...assistant([], "error"),
-    rawStopReason: "incomplete.max_messages",
-    errorMessage: "retryable provider failure",
-  }));
-  const prompt = "Keep trying, you can do it.";
-  const { result, requests, records } = await gatedRun(
-    replies,
-    true,
-    2,
-    gatedTool,
-    undefined,
-    { ...submissionGate, continuationPrompt: prompt },
-  );
-  expect(result.state).toBe("failed");
-  expect(requests).toHaveLength(3);
-  for (const request of requests.slice(1))
-    expect(request.context.messages.at(-1)).toMatchObject({
-      role: "user",
-      content: prompt,
-    });
-  expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(0);
-});
-
-test("a submission gate requires one tool before creating a call", async () => {
-  const c = campaign();
-  try {
-    for (const options of [
-      {},
-      { tools: [] },
-      { tools: [gatedTool, submitVerdict] },
-      {
-        tools: [gatedTool],
-        submissionGate: { ...submissionGate, completeArgument: " \n" },
+  for (const { usage, reported } of cases) {
+    const event = {
+      type: "response.completed",
+      response: {
+        id: "xean-zero",
+        status: "completed",
+        output: [],
+        usage,
       },
-    ]) {
-      await expect(
-        runPi(c, {
-          models: models([]),
-          model,
-          label: "bad-gate",
-          prompt: "test",
-          submissionGate,
-          ...options,
-        }),
-      ).rejects.toThrow();
-    }
-    await expect(
-      runPi(c, {
-        models: models([]),
-        model,
-        label: "bad-budget",
-        prompt: "test",
-        tools: [gatedTool],
-        submissionGate: {
-          ...submissionGate,
-          contextBudgetTokens: model.maxTokens,
-        },
-      }),
-    ).rejects.toThrow("leave no usable context");
-    expect(c.records()).toHaveLength(1);
-  } finally {
-    c.close();
+    };
+    const models = fixtureModels(() => eventResponse(event));
+    const result = await models
+      .streamSimple({ ...model, api: "openai-responses" }, context)
+      .result();
+    expect(result.stopReason).toBe("stop");
+    expect(result.usageReported === true).toBe(reported);
+    expect(reportedPiUsage(result)).toEqual(reported ? result.usage : null);
   }
 });
 
-test("a required terminal tool retains observations and validates the eventual submission", async () => {
-  const c = campaign();
-  const read = defineTool({
-    name: "read_note",
-    description: "Read a note",
-    input: z.strictObject({}),
-    async run() {
-      return { text: "The frozen note" };
+test("Anthropic distinguishes zero from unknown usage and preserves it across empty updates", async () => {
+  const cases = [
+    { usage: undefined, reported: false },
+    { usage: {}, reported: false },
+    { usage: { input_tokens: "5" }, reported: false },
+    { usage: { input_tokens: 0 }, delta: {}, reported: true },
+  ];
+  for (const { usage, delta, reported } of cases) {
+    const state = recording();
+    const events = [
+      ...(usage !== undefined
+        ? [
+            {
+              type: "message_start",
+              message: {
+                id: "xean-zero",
+                model: model.id,
+                usage,
+              },
+            },
+          ]
+        : []),
+      ...(delta !== undefined
+        ? [
+            {
+              type: "message_delta",
+              delta: {},
+              usage: delta,
+            },
+          ]
+        : []),
+      {
+        type: "error",
+        error: { type: "api_error", message: "fixture interruption" },
+      },
+    ];
+    const stubFetch: typeof fetch = Object.assign(
+      async () =>
+        new Response(
+          events
+            .map(
+              (event) =>
+                `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+            )
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { preconnect: fetch.preconnect },
+    );
+    const stream = auditedStream(
+      {
+        streamSimple(requestModel, requestContext, options) {
+          return anthropic(
+            requestModel as Model<"anthropic-messages">,
+            normalizeContext(requestContext),
+            {
+              ...options,
+              apiKey,
+              maxRetries: 0,
+              fetch: stubFetch,
+            },
+          );
+        },
+      },
+      state.recorder,
+    );
+    const result = await stream(
+      { ...model, api: "anthropic-messages" },
+      context,
+    ).result();
+    expect(result.stopReason).toBe("error");
+    expect(result.usageReported === true).toBe(reported);
+    expect(state.calls[0]?.usage).toEqual(reported ? result.usage : null);
+  }
+});
+
+function recording() {
+  const calls: {
+    model: CallIdentity;
+    payload?: JsonValue;
+    message?: AssistantMessage;
+    usage?: Usage | null;
+  }[] = [];
+  const recorder: CallRecorder = {
+    begin(identity) {
+      const call: (typeof calls)[number] = { model: identity };
+      calls.push(call);
+      return {
+        recordRequest(payload) {
+          call.payload = payload;
+        },
+        settle(message, usage) {
+          call.message = message as AssistantMessage;
+          call.usage = usage as Usage | null;
+        },
+      };
     },
-  });
-  const contexts: Context[] = [];
-  try {
-    const outcome = await runPi(c, {
-      models: models(
-        [
-          assistant(
-            [{ type: "toolCall", id: "read", name: read.name, arguments: {} }],
-            "toolUse",
-          ),
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "invalid",
-                name: submitVerdict.name,
-                arguments: { verdict: "INVALID", evidence: null },
-              },
-            ],
-            "toolUse",
-          ),
-          assistant([{ type: "text", text: "The verdict is PASS." }], "stop"),
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "valid",
-                name: submitVerdict.name,
-                arguments: { verdict: "PASS", evidence: null },
-              },
-            ],
-            "toolUse",
-          ),
-        ],
-        (context) => contexts.push(structuredClone(context)),
-      ),
-      model,
-      label: "required-submission",
-      prompt: "Read and submit",
-      tools: [read, submitVerdict],
-      terminalTool: submitVerdict.name,
+  };
+  return { calls, recorder };
+}
+
+test("roles recover missing submissions once without accepting prose or bypassing response limits", async () => {
+  const prose = fauxAssistantMessage('{"answer":7}');
+  const valid = fauxAssistantMessage([
+    fauxToolCall("submit_result", { answer: 7 }),
+  ]);
+  const invalid = fauxAssistantMessage([
+    fauxToolCall("submit_result", { answer: "not a number" }),
+  ]);
+  for (const { replies, calls, maxResponses, error } of [
+    { replies: [prose, invalid, valid], calls: 3 },
+    {
+      replies: [prose, invalid, prose, valid],
+      calls: 3,
+      error: "after one reminder",
+    },
+    { replies: [prose, valid], calls: 1, maxResponses: 1, error: "exhausted" },
+  ]) {
+    const state = recording();
+    const sessions: (string | undefined)[] = [];
+    const runtime = fixtureRuntime((input, options) => {
+      const turn = sessions.push(options?.sessionId) - 1;
+      if (turn === 1) {
+        expect(input.messages.slice(-2)).toMatchObject([
+          { role: "assistant", content: prose.content },
+          { role: "user" },
+        ]);
+        expect(input.messages.at(-1)!.content).toContain("submit_result");
+      }
+      if (turn === 2)
+        expect(input.messages.at(-1)).toMatchObject({
+          role: "toolResult",
+          isError: true,
+        });
+      const reply = replies[turn];
+      if (!reply) throw new Error("Unexpected provider request");
+      return structuredClone(reply);
     });
-    expect(outcome.state).toBe("succeeded");
-    expect(contexts).toHaveLength(4);
-    expect(contexts[2]!.messages.at(-1)).toMatchObject({
+    const result = ask(
+      runtime,
+      "coordinator",
+      "Return an answer",
+      {},
+      Type.Object({ answer: Type.Number() }),
+      { attemptId: "submission-recovery", recorder: state.recorder },
+      BACKGROUND_CONTEXT,
+      { maxResponses },
+    );
+    if (error) await expect(result).rejects.toThrow(error);
+    else expect(await result).toEqual({ answer: 7 });
+    expect(state.calls).toHaveLength(calls);
+    expect(sessions).toHaveLength(calls);
+    expect(sessions[0]).toBeTruthy();
+    expect(new Set(sessions).size).toBe(1);
+  }
+});
+
+test("roles hand off valid private submissions and never continue a rejected one", async () => {
+  const state = recording();
+  const replies = [
+    fauxAssistantMessage([fauxToolCall("submit_result", { answer: 1 })]),
+    fauxAssistantMessage([fauxToolCall("submit_result", { answer: 7 })]),
+    fauxAssistantMessage("No further progress."),
+  ];
+  let turn = 0;
+  const runtime = fixtureRuntime((input) => {
+    const [previous, last] = input.messages.slice(-2);
+    // Rejected submissions consume a response without the continuation prompt.
+    if (turn === 1) {
+      expect(previous).toMatchObject({ role: "toolResult", isError: true });
+      expect(last).toMatchObject({
+        role: "user",
+        content: "3 of 4 responses remain.",
+      });
+    }
+    if (turn === 2)
+      expect(last).toMatchObject({
+        content: "Continue\n\n2 of 4 responses remain.",
+      });
+    return structuredClone(replies[turn++]!);
+  });
+  const result = await ask(
+    runtime,
+    "explorer",
+    "Return an answer",
+    {},
+    Type.Object({ answer: Type.Number() }),
+    { attemptId: "submission-handoff", recorder: state.recorder },
+    BACKGROUND_CONTEXT,
+    {
+      maxResponses: 4,
+      continuation: "Continue",
+      submit(value) {
+        if (value.answer !== 7) throw new Error("Rejected answer");
+        return { done: false, receipt: { recorded: true } };
+      },
+    },
+  );
+  expect(result).toEqual({ answer: 7 });
+  expect(state.calls).toHaveLength(3);
+  expect(state.calls[0]?.payload).toMatchObject({ parallel_tool_calls: false });
+});
+
+test("cache routing follows identical prefixes while sessions and caller choices remain independent", async () => {
+  const payloads: { prompt_cache_key?: string }[] = [];
+  const sessions: (string | undefined)[] = [];
+  const tool = {
+    type: "function_call",
+    id: "fc_cache",
+    call_id: "cache",
+    name: "submit_result",
+    arguments: '{"answer":1}',
+    status: "completed",
+  };
+  const transport = fixtureModels(async (init) => {
+    payloads.push(await requestBody(init));
+    return eventResponse(
+      { type: "response.output_item.added", output_index: 0, item: tool },
+      { type: "response.output_item.done", output_index: 0, item: tool },
+      {
+        type: "response.completed",
+        response: { id: "resp_cache", status: "completed", output: [tool] },
+      },
+    );
+  });
+  const runtime = fixtureRuntime(() => fauxAssistantMessage(""));
+  runtime.models.streamSimple = (model, input, options) => {
+    sessions.push(options?.sessionId);
+    return transport.streamSimple(model, input, options);
+  };
+  for (const mode of [
+    "same",
+    "same",
+    "system",
+    "custom",
+    "disabled",
+    "schema",
+    "model",
+  ]) {
+    runtime.profiles.explorer.options =
+      mode === "custom"
+        ? {
+            onPayload: (payload) => ({
+              ...(payload as object),
+              prompt_cache_key: "caller-choice",
+            }),
+          }
+        : mode === "disabled"
+          ? { cacheRetention: "none" }
+          : {};
+    if (mode === "model")
+      runtime.profiles.explorer.model = { ...model, id: "another-model" };
+    await ask(
+      runtime,
+      "explorer",
+      mode === "system" ? "Changed system" : "Same system",
+      {},
+      Type.Object({
+        answer: mode === "schema" ? Type.Integer() : Type.Number(),
+      }),
+      { attemptId: "cache-routing", recorder: recording().recorder },
+      BACKGROUND_CONTEXT,
+    );
+  }
+  const keys = payloads.map((payload) => payload.prompt_cache_key);
+  expect(keys[0]).toMatch(/^[a-f0-9]{64}$/);
+  expect(keys[1]).toBe(keys[0]);
+  for (const index of [2, 5, 6]) expect(keys[index]).not.toBe(keys[0]);
+  expect(keys[3]).toBe("caller-choice");
+  expect(keys[4]).toBeUndefined();
+  expect(new Set(sessions).size).toBe(7);
+});
+
+test("interrupted turns retain completed reasoning and prior submissions without executing failed tools", async () => {
+  const state = recording();
+  const replies = [1, 99, 2, 3].map((answer) =>
+    fauxAssistantMessage([fauxToolCall("submit_result", { answer })], {
+      stopReason: "toolUse",
+    }),
+  );
+  Object.assign(replies[1]!, {
+    stopReason: "error",
+    errorMessage:
+      "Upstream websocket closed before response.completed (close_code=1012)",
+  });
+  replies[1]!.usage.output = 7;
+  const thought = (id: string) => ({
+    type: "thinking" as const,
+    thinking: `Summary ${id}`,
+    thinkingSignature: JSON.stringify({
+      type: "reasoning",
+      id,
+      status: "completed",
+      summary: [],
+      encrypted_content: `opaque-${id}`,
+    }),
+  });
+  replies[0]!.content.unshift(thought("previous"));
+  const recovered = thought("recovered");
+  replies[1]!.content.unshift(
+    thought("previous"),
+    recovered,
+    recovered,
+    { ...recovered, thinkingSignature: "invalid JSON" },
+    {
+      ...recovered,
+      thinkingSignature: JSON.stringify({
+        type: "reasoning",
+        id: "unfinished",
+        status: "in_progress",
+        summary: [],
+        encrypted_content: "opaque",
+      }),
+    },
+    { type: "text", text: "Failed text" },
+  );
+  const sessions: (string | undefined)[] = [];
+  const inputs: Parameters<Models["streamSimple"]>[1][] = [];
+  const runtime = fixtureRuntime((input, options, selected) => {
+    const turn = sessions.push(options?.sessionId) - 1;
+    inputs.push(structuredClone(input));
+    if (turn === 2) {
+      expect(input.messages.slice(0, -1)).toEqual(inputs[1]!.messages);
+      expect(input.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [recovered],
+        stopReason: "stop",
+      });
+      expect(state.calls[1]?.usage?.output).toBe(7);
+    }
+    if (turn === 3) {
+      expect(
+        input.messages.filter((message) => message.role === "assistant"),
+      ).toHaveLength(2);
+      expect(
+        input.messages.filter((message) => message.role === "assistant").at(-1)
+          ?.content,
+      ).toContainEqual(recovered);
+      expect(JSON.stringify(input)).not.toContain("Failed text");
+    }
+    if (!replies[turn]) throw new Error("Unexpected recovery request");
+    return {
+      ...structuredClone(replies[turn]!),
+      api: selected.api,
+      provider: selected.provider,
+      model: selected.id,
+    };
+  });
+  const submitted: number[] = [];
+  const answer = await ask(
+    runtime,
+    "explorer",
+    "Return an answer",
+    {},
+    Type.Object({ answer: Type.Number() }),
+    { attemptId: "stream-recovery", recorder: state.recorder },
+    BACKGROUND_CONTEXT,
+    {
+      maxResponses: 3,
+      continuation: "Continue",
+      submit(value) {
+        submitted.push(value.answer);
+        return { done: value.answer === 3, receipt: { recorded: true } };
+      },
+    },
+  );
+  expect(answer).toEqual({ answer: 3 });
+  expect(submitted).toEqual([1, 2, 3]);
+  expect(new Set(sessions).size).toBe(1);
+  expect(state.calls[1]?.message?.content).toContainEqual({
+    type: "text",
+    text: "Failed text",
+  });
+  expect(state.calls[2]?.message?.content).not.toContainEqual(recovered);
+  expect(state.calls.map((call) => call.message?.stopReason)).toEqual([
+    "toolUse",
+    "error",
+    "toolUse",
+    "toolUse",
+  ]);
+});
+
+test("roles bound context, preserve frozen note reads, and verify imported dependencies", async () => {
+  const state = recording();
+  const execution = { attemptId: "role-context", recorder: state.recorder };
+  // This schema fits once; counting Pi's tool declaration twice exceeds capacity.
+  const schema = Type.Object(
+    { answer: Type.Number() },
+    { description: "x".repeat(40_000) },
+  );
+  const reply = (
+    name: string,
+    args: Parameters<typeof fauxToolCall>[1],
+    stopReason: "toolUse" | "length" = "toolUse",
+  ) => fauxAssistantMessage([fauxToolCall(name, args)], { stopReason });
+  let respond: (
+    input: Parameters<Models["streamSimple"]>[1],
+  ) => AssistantMessage = () => {
+    throw new Error("Oversized input must not reach the provider");
+  };
+  const runtime = fixtureRuntime((input) => respond(input));
+  const explore = (input: unknown, options: Parameters<typeof ask>[7] = {}) =>
+    ask(
+      runtime,
+      "explorer",
+      "Return notes",
+      input,
+      schema,
+      execution,
+      BACKGROUND_CONTEXT,
+      options,
+    );
+  await expect(explore("x".repeat(100_000))).rejects.toThrow("context");
+  expect(state.calls).toHaveLength(0);
+  let submissions = 0;
+  respond = () => {
+    const message = reply("submit_result", { answer: 1 });
+    message.usage = { ...message.usage, totalTokens: model.contextWindow };
+    return message;
+  };
+  expect(
+    await explore(
+      {},
+      {
+        submit() {
+          submissions++;
+          return { done: false, receipt: { recorded: true } };
+        },
+        continuation: "Continue",
+      },
+    ),
+  ).toEqual({ answer: 1 });
+  expect(state.calls).toHaveLength(1);
+  expect(submissions).toBe(1);
+  respond = () => reply("submit_result", { answer: 2 }, "length");
+  await expect(
+    explore(
+      {},
+      {
+        submit() {
+          submissions++;
+          return { done: true, receipt: null };
+        },
+      },
+    ),
+  ).rejects.toThrow("truncated");
+  expect(submissions).toBe(1);
+  expect(state.calls).toHaveLength(2);
+  expect(state.calls[1]!.message?.stopReason).toBe("length");
+
+  const note: Note = {
+    id: "n1",
+    text: "FROZEN-PROOF",
+    summary: "A result",
+    revision: 0,
+    imported: false,
+    support: [],
+    checks: [],
+    dead: false,
+    verified: false,
+    accepted: false,
+    candidate: false,
+  };
+  const rejected: Note = {
+    ...note,
+    id: "rejected",
+    text: "REJECTED-PROOF",
+    support: [],
+    dead: true,
+  };
+  const imported: Note = {
+    ...note,
+    id: "input/import/n1",
+    imported: true,
+    support: [note.id],
+  };
+  expect(() =>
+    validateNotes([{ ...note, support: [rejected.id] }], [rejected]),
+  ).toThrow("Unknown, dead, or forward support");
+  const plan: Plan = {
+    work: [
+      {
+        kind: "explorer",
+        guidance: "Try a new approach",
+        support: [rejected.id],
+      },
+      { kind: "verifier", notes: [imported.id], through: "source" },
+    ],
+  };
+  let turn = 0;
+  respond = (input) => {
+    if (turn >= 5) throw new Error(JSON.stringify(input.messages.at(-1)));
+    if (turn++ === 0) {
+      const prompt = JSON.parse(
+        String(input.messages.find((m) => m.role === "user")!.content),
+      );
+      expect(prompt.capabilities).toEqual({
+        literature: false,
+        sourceRetrieval: false,
+      });
+      expect(
+        prompt.notes.find((note: Note) => note.id === imported.id),
+      ).toMatchObject({
+        imported: true,
+        verified: false,
+        passed: ["correctness", "source"],
+      });
+      expect(JSON.stringify(input.messages)).not.toContain("FROZEN-PROOF");
+      note.text = "CHANGED-AFTER-START";
+      note.support.push("CHANGED-AFTER-START");
+      note.dead = true;
+      return reply("read_notes", { ids: ["missing"] });
+    }
+    if (turn === 2) {
+      expect(input.messages.at(-1)).toMatchObject({
+        role: "toolResult",
+        isError: true,
+      });
+      return reply("read_notes", { ids: ["n1", rejected.id] });
+    }
+    expect(JSON.stringify(input.messages)).toContain("FROZEN-PROOF");
+    expect(JSON.stringify(input.messages)).toContain("REJECTED-PROOF");
+    expect(JSON.stringify(input.messages)).not.toContain("CHANGED-AFTER-START");
+    if (turn === 3)
+      return reply("submit_result", { work: [plan.work[0]!, plan.work[0]!] });
+    expect(input.messages.at(-1)).toMatchObject({
       role: "toolResult",
       isError: true,
     });
-    expect(contexts[3]!.messages.at(-1)).toMatchObject({
-      role: "user",
-      content: expect.stringContaining(submitVerdict.name),
-    });
-    expect(JSON.stringify(contexts[3])).toContain("The frozen note");
-    expect(
-      c
-        .records({ kinds: ["tool-call"] })
-        .map((entry) => (entry.kind === "tool-call" ? entry.tool : undefined)),
-    ).toEqual([read.name, submitVerdict.name]);
-    expect(c.record(outcome.call)).toMatchObject({
-      request: { terminalTool: submitVerdict.name },
-    });
-  } finally {
-    c.close();
-  }
-});
-
-test.each([false, true])(
-  "a required submission ends a mixed observation batch (submission first: %s)",
-  async (submissionFirst) => {
-    const c = campaign();
-    const calls = [
-      {
-        type: "toolCall" as const,
-        id: "observation",
-        name: gatedTool.name,
-        arguments: { solution: false, text: "observation" },
-      },
-      {
-        type: "toolCall" as const,
-        id: "submission",
-        name: submitVerdict.name,
-        arguments: { verdict: "PASS", evidence: null },
-      },
-    ];
-    let requests = 0;
-    try {
-      const outcome = await runPi(c, {
-        models: models(
-          [assistant(submissionFirst ? calls.toReversed() : calls, "toolUse")],
-          () => {
-            requests += 1;
-          },
-        ),
-        model,
-        label: "mixed-required-submission",
-        prompt: "Observe and submit",
-        tools: [gatedTool, submitVerdict],
-        terminalTool: submitVerdict.name,
-      });
-      expect(outcome.state).toBe("succeeded");
-      expect(requests).toBe(1);
-      expect(c.records({ kinds: ["tool-call"] })).toHaveLength(2);
-    } finally {
-      c.close();
-    }
-  },
-);
-
-test("observations alone cannot satisfy a required submission at the response limit", async () => {
-  const c = campaign();
-  let requests = 0;
-  try {
-    const outcome = await runPi(c, {
-      models: models(
-        Array.from({ length: 32 }, (_, i) =>
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: String(i),
-                name: gatedTool.name,
-                arguments: { solution: false, text: "observation" },
-              },
-            ],
-            "toolUse",
-          ),
-        ),
-        () => {
-          requests += 1;
-        },
-      ),
-      model,
-      label: "no-terminal-submission",
-      prompt: "Read and submit",
-      tools: [gatedTool, submitVerdict],
-      terminalTool: submitVerdict.name,
-    });
-    expect(outcome.state).toBe("failed");
-    expect(requests).toBe(32);
-  } finally {
-    c.close();
-  }
-});
-
-test("invalid required submission configuration creates no call", async () => {
-  const c = campaign();
-  try {
-    for (const options of [
-      { terminalTool: "missing" },
-      { terminalTool: " " },
-      { terminalTool: submitVerdict.name, submissionGate },
-    ]) {
-      await expect(
-        runPi(c, {
-          models: models([]),
-          model,
-          label: "bad-terminal",
-          prompt: "Test",
-          tools: [submitVerdict],
-          ...options,
-        }),
-      ).rejects.toThrow();
-    }
-    expect(c.records()).toHaveLength(1);
-  } finally {
-    c.close();
-  }
-});
-
-function payloadModels(
-  replies: readonly AssistantMessage[],
-  payloads: readonly unknown[],
-  sent: unknown[],
-): PiModels {
-  let index = 0;
-  return {
-    streamSimple(requestModel, _context, options) {
-      const turn = index++;
-      const reply = replies[turn];
-      if (reply === undefined) throw new Error("no scripted Pi reply");
-      const stream = createAssistantMessageEventStream();
-      void (async () => {
-        const payload = payloads[turn];
-        const replacement = await options?.onPayload?.(payload, requestModel);
-        sent.push(replacement === undefined ? payload : replacement);
-        stream.push({
-          type: "done",
-          reason: reply.stopReason as "stop" | "toolUse",
-          message: reply,
-        });
-      })();
-      return stream;
-    },
-  } as PiModels;
-}
-
-function invalidPayloadModels(calls: number): PiModels {
-  return {
-    streamSimple(requestModel, _context, options) {
-      const stream = createAssistantMessageEventStream();
-      void (async () => {
-        try {
-          for (let index = 0; index < calls; index++) {
-            await options?.onPayload?.({ index }, requestModel);
-          }
-          const reply = assistant([{ type: "text", text: "done" }], "stop");
-          stream.push({ type: "done", reason: "stop", message: reply });
-        } catch (error) {
-          const reply = {
-            ...assistant([], "error", undefined, false),
-            errorMessage:
-              error instanceof Error ? error.message : String(error),
-          };
-          stream.push({ type: "error", reason: "error", error: reply });
-        }
-      })();
-      return stream;
-    },
-  } as PiModels;
-}
-
-describe("thin Pi runner", () => {
-  test("treats complete zero usage as measured and rejects partial usage", () => {
-    const zero = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      estimatedCostUsd: 0,
-    };
-    expect(derivePiSpend(spendEntries(zero, true)).summary).toEqual({
-      logicalProviderRequests: 1,
-      requestErrors: 1,
-      unmeasuredRequests: 0,
-      measuredUsage: zero,
-    });
-    const { estimatedCostUsd: _cost, ...partial } = zero;
-    expect(() => derivePiSpend(spendEntries(partial))).toThrow(
-      /estimatedCostUsd/,
-    );
-    expect(() => derivePiSpend(spendEntries({ reasoning: 1 }))).toThrow(
-      /"input"/,
-    );
-  });
-
-  test("rejects a request completion that disagrees with its checkpoint", () => {
-    const entries = spendEntries(null).map((entry) =>
-      entry.kind === "call-result" &&
-      entry.state === "returned" &&
-      entry.parent === 3
-        ? {
-            ...entry,
-            output: { ...(entry.output as { parent: number }), parent: 99 },
-          }
-        : entry,
-    );
-    expect(() => derivePiSpend(entries)).toThrow(
-      "invalid Pi request completion 3",
-    );
-  });
-
-  test("does not mistake an ordinary model-shaped request for a Pi call", () => {
-    const entries = spendEntries(null)
-      .filter((entry) => entry.seq !== 3 && entry.seq !== 4)
-      .map((entry) =>
-        entry.kind === "call"
-          ? {
-              ...entry,
-              request: {
-                model: {
-                  provider: "fake",
-                  id: "test-v1",
-                  api: "openai-responses",
-                },
-                prompt: "ordinary application request",
-              },
-            }
-          : entry,
+    if (turn === 4) {
+      expect(JSON.stringify(input.messages.at(-1))).toContain(
+        "Dispatch at most one Explorer",
       );
-
-    expect(derivePiSpend(entries)).toEqual({
-      calls: [],
-      unaccountedCalls: [],
-      potentialRequests: [],
-      summary: {
-        logicalProviderRequests: 0,
-        requestErrors: 0,
-        unmeasuredRequests: 0,
-      },
-    });
-  });
-
-  test("runs a fresh Pi loop and stores its native transcript", async () => {
-    const store = campaign();
-    const requests: (SimpleStreamOptions | undefined)[] = [];
-    const candidate = store.submitCandidate(
-      new TextEncoder().encode("answer"),
-      ["answer/v1"],
-    );
-    const result = await runPi(store, {
-      models: models(
-        [assistant([{ type: "text", text: "answer" }], "stop", 3)],
-        (_context, options) => requests.push(options),
-      ),
-      model,
-      label: "answer/v1",
-      candidate,
-      system: "Answer exactly.",
-      prompt: "Question",
-      reasoning: "max",
-    });
-
-    expect(result).toMatchObject({ state: "succeeded", text: "answer" });
-    expect(requests.map((options) => options?.reasoning)).toEqual(["max"]);
-    const records = store.records();
-    expect(records.map((entry) => entry.kind)).toEqual([
-      "campaign",
-      "candidate",
-      "call",
-      "call",
-      "call-result",
-      "call-result",
-    ]);
-    const call = records.find((entry) => entry.kind === "call");
-    expect(call).toMatchObject({
-      seq: result.call,
-      candidate,
-      request: { reasoning: "max" },
-    });
-    if (call?.kind !== "call") throw new Error("missing Pi call");
-    expect(piRequest.parse(call.request)).toMatchObject({ reasoning: "max" });
-    const terminal = records.at(-1);
-    expect(terminal?.kind).toBe("call-result");
-    if (terminal?.kind !== "call-result" || terminal.state !== "returned") {
-      throw new Error("missing Pi result");
-    }
-    expect(terminal.output).toMatchObject({
-      state: "succeeded",
-      call: result.call,
-    });
-    expect(readPiResult(terminal.output, store)).toEqual(result);
-    expect(piResultRecord.parse(terminal.output)).not.toHaveProperty(
-      "transcript",
-    );
-    expect(piResultRecord.parse(terminal.output)).not.toHaveProperty("text");
-    expect(readPiResult(terminal.output, store)).toMatchObject({
-      state: "succeeded",
-      text: "answer",
-      transcript: [{ role: "system" }, { role: "user" }, { role: "assistant" }],
-    });
-    expect(
-      piStoredResult.safeParse({
-        state: "succeeded",
-        text: "answer",
-        transcript: [],
-        unknown: true,
-      }).success,
-    ).toBe(false);
-    const spend = derivePiSpend(records);
-    expect(spend).toMatchObject({
-      calls: [
-        {
-          call: result.call,
-          logicalProviderRequests: 1,
-          requestErrors: 0,
-          unmeasuredRequests: 0,
-          operations: [
-            {
-              provider: "fake",
-              requestedModel: "test-v1",
-              servedModel: "served-test-v1",
-              api: "openai-responses",
-              stopReason: "stop",
-              error: false,
-              usage: {
-                input: 11,
-                output: 7,
-                cacheRead: 5,
-                cacheWrite: 0,
-                reasoning: 3,
-                totalTokens: 23,
-                estimatedCostUsd: 0.026,
-              },
-            },
-          ],
-        },
-      ],
-      unaccountedCalls: [],
-      potentialRequests: [],
-      summary: {
-        logicalProviderRequests: 1,
-        requestErrors: 0,
-        unmeasuredRequests: 0,
-        measuredUsage: { totalTokens: 23, reasoning: 3 },
-      },
-    });
-  });
-
-  test("gives Pi only the selected audited Zod tools", async () => {
-    const store = campaign();
-    const contexts: Context[] = [];
-    const reasoning: (SimpleStreamOptions["reasoning"] | undefined)[] = [];
-    const add = defineTool({
-      name: "add",
-      description: "Add integers",
-      input: z.strictObject({
-        left: z.number().int(),
-        right: z.number().int(),
-      }),
-      async run({ left, right }) {
-        return { sum: left + right };
-      },
-    });
-    const result = await runPi(store, {
-      models: models(
-        [
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "add-1",
-                name: "add",
-                arguments: { left: 2, right: 5 },
-              },
-            ],
-            "toolUse",
-          ),
+      return reply("submit_result", {
+        work: [
+          { kind: "verifier", notes: [rejected.id], through: "correctness" },
         ],
-        (context, options) => {
-          contexts.push(context);
-          reasoning.push(options?.reasoning);
-        },
-      ),
-      model,
-      label: "math/v1",
-      prompt: "Add 2 and 5",
-      reasoning: "max",
-      tools: [add],
-    });
-
-    expect(result).toMatchObject({ state: "succeeded", text: "" });
-    expect(reasoning).toEqual(["max"]);
-    expect(getCurrentTools(contexts[0]!.messages)).toMatchObject([
-      {
-        name: "add",
-        constrainedSampling: { type: "json_schema", strict: "prefer" },
-      },
-    ]);
-    expect(store.records().map((entry) => entry.kind)).toEqual([
-      "campaign",
-      "call",
-      "call",
-      "call-result",
-      "tool-call",
-      "tool-result",
-      "call-result",
-    ]);
-    expect(
-      store.records().find((entry) => entry.kind === "tool-call"),
-    ).toMatchObject({ source: "add-1", input: { left: 2, right: 5 } });
-    expect(derivePiSpend(store.records()).summary).toEqual({
-      logicalProviderRequests: 1,
-      requestErrors: 0,
-      unmeasuredRequests: 0,
-      measuredUsage: {
-        input: 11,
-        output: 7,
-        cacheRead: 5,
-        cacheWrite: 0,
-        totalTokens: 23,
-        estimatedCostUsd: 0.026,
-      },
-    });
-  });
-
-  test("reconstructs every adapter-expanded request from durable checkpoints", async () => {
-    const store = campaign();
-    const payloads = [
-      {
-        instructions: "Use the adder.",
-        input: [
-          JSON.parse(
-            '{"__proto__":{"safe":true},"role":"user","content":"Add 2 and 5"}',
-          ),
-        ],
-        tools: [{ name: "add", strict: true }],
-        reasoning: { effort: "high" },
-        prompt_cache_key: undefined,
-      },
-      {
-        instructions: "Use the adder.",
-        input: [
-          { role: "user", content: "Add 2 and 5" },
-          { type: "function_call", call_id: "add-1" },
-          { type: "function_call_output", output: "adder offline" },
-        ],
-        tools: [{ name: "add", strict: true }],
-        reasoning: { effort: "high" },
-      },
-    ];
-    const sent: unknown[] = [];
-    const add = defineTool({
-      name: "add",
-      description: "Add integers",
-      input: z.strictObject({
-        left: z.number().int(),
-        right: z.number().int(),
-      }),
-      async run() {
-        throw new Error("adder offline");
-      },
-    });
-
-    const result = await runPi(store, {
-      models: payloadModels(
-        [
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "add-1",
-                name: "add",
-                arguments: { left: 2, right: 5 },
-              },
-            ],
-            "toolUse",
-          ),
-          assistant([{ type: "text", text: "7" }], "stop"),
-        ],
-        payloads,
-        sent,
-      ),
-      model,
-      label: "checkpoint/v1",
-      system: "Use the adder.",
-      prompt: "Add 2 and 5",
-      reasoning: "max",
-      tools: [add],
-    });
-
-    expect(sent).toEqual(payloads);
-    expect(
-      piRequestAttempts(store.records(), result.call).every(
-        (attempt) =>
-          attempt.protocol === "xean/pi-request/v1" &&
-          attempt.payload === undefined,
-      ),
-    ).toBe(true);
-    const attempts = piRequestAttempts(store.records(), result.call, store);
-    expect(attempts.map(({ payload }) => JSON.stringify(payload))).toEqual(
-      payloads.map((payload) => JSON.stringify(payload)),
-    );
-    expect(attempts.map(({ call }) => call)).toEqual([3, 7]);
-    expect(attempts.map(({ model }) => model.baseUrl)).toEqual([
-      "https://invalid.test",
-      "https://invalid.test",
-    ]);
-    expect(attempts.map(({ state }) => state)).toEqual([
-      "completed",
-      "completed",
-    ]);
-    expect(store.records().map(({ kind }) => kind)).toEqual([
-      "campaign",
-      "call",
-      "call",
-      "call-result",
-      "tool-call",
-      "tool-result",
-      "call",
-      "call-result",
-      "call-result",
-    ]);
-  });
-
-  test("keeps a pre-dispatch payload after a hard provider crash", () => {
-    const directory = mkdtempSync(join(tmpdir(), "xean-pi-crash-"));
-    directories.push(directory);
-    const path = join(directory, "campaign.db");
-    const fixture = resolve("tests/fixtures/crash-pi-request.ts");
-    const child = Bun.spawnSync([process.execPath, fixture, path], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(child.exitCode).toBe(0);
-    const reader = openReader(path);
-    const records = reader.records();
-    expect(records.map(({ kind }) => kind)).toEqual([
-      "campaign",
-      "call",
-      "call",
-    ]);
-    expect(piRequestAttempts(records, undefined, reader)).toMatchObject([
-      {
-        parent: 2,
-        call: 3,
-        payload: { input: "durable request" },
-        state: "unsettled",
-      },
-    ]);
-    expect(derivePiSpend(records)).toMatchObject({
-      calls: [],
-      unaccountedCalls: [2],
-      potentialRequests: [
-        {
-          call: 2,
-          checkpoint: 3,
-          model: {
-            provider: "fake",
-            id: "crash-test",
-            api: "openai-responses",
-          },
-        },
-      ],
-      summary: {
-        logicalProviderRequests: 0,
-        requestErrors: 0,
-        unmeasuredRequests: 0,
-      },
-    });
-    reader.close();
-  });
-
-  test("rejects adapters that omit or repeat the pre-send hook", async () => {
-    for (const calls of [0, 2]) {
-      const store = campaign();
-      await expect(
-        runPi(store, {
-          models: invalidPayloadModels(calls),
-          model,
-          label: `invalid-hook/${calls}`,
-          prompt: "Test adapter contract",
-        }),
-      ).rejects.toThrow("exactly once");
-      expect(piRequestAttempts(store.records())).toHaveLength(
-        calls === 0 ? 0 : 1,
-      );
-    }
-  });
-
-  test("keeps completed request usage after a later continuation crashes", () => {
-    const directory = mkdtempSync(join(tmpdir(), "xean-pi-usage-crash-"));
-    directories.push(directory);
-    const path = join(directory, "campaign.db");
-    const child = Bun.spawnSync(
-      [
-        process.execPath,
-        resolve("tests/fixtures/crash-pi-request.ts"),
-        path,
-        "after-first",
-      ],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    expect(child.exitCode).toBe(0);
-    const reader = openReader(path);
-    try {
-      const spend = derivePiSpend(reader.records());
-      expect(spend.summary).toMatchObject({
-        logicalProviderRequests: 1,
-        unmeasuredRequests: 0,
-        measuredUsage: { input: 10, output: 5, totalTokens: 15 },
       });
-      expect(spend.unaccountedCalls).toHaveLength(1);
-      expect(spend.potentialRequests).toHaveLength(1);
-      expect(
-        piRequestAttempts(reader.records()).map(({ state }) => state),
-      ).toEqual(["completed", "unsettled"]);
-      expect(inspectCoreCampaignSummary(path).spend).toMatchObject({
-        logicalProviderRequests: 1,
-        unaccountedCalls: 1,
-      });
-      expect(inspectCoreCampaign(path).calls[0]?.pi?.accounting).toMatchObject({
-        state: "available",
-        complete: false,
-      });
-    } finally {
-      reader.close();
     }
-  });
-
-  test("allows an adapter to fail before it constructs a payload", async () => {
-    const store = campaign();
-    const preflightFailure: PiModels = {
-      streamSimple() {
-        const stream = createAssistantMessageEventStream();
-        const failure = {
-          ...assistant([], "error", undefined, false),
-          errorMessage: "missing credentials",
-        };
-        stream.push({ type: "error", reason: "error", error: failure });
-        return stream;
-      },
-    };
-    const result = await runPi(store, {
-      models: preflightFailure,
-      model,
-      label: "preflight-failure/v1",
-      prompt: "Test adapter preflight",
-    });
-
-    expect(result).toMatchObject({
-      state: "failed",
-      error: "missing credentials",
-    });
-    expect(piRequestAttempts(store.records())).toEqual([]);
-  });
-
-  test("projects completed and unsettled request attempts", async () => {
-    const store = campaign();
-    await store.call(
-      { label: "xean/pi-request", request: null },
-      async () => null,
+    expect(JSON.stringify(input.messages.at(-1))).toContain(
+      "Unknown or dead note",
     );
-    let release!: () => void;
-    let observed: ReturnType<typeof piRequestAttempts> = [];
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await store.call(
+    return reply("submit_result", plan);
+  };
+  const roles = createRoles(runtime, offlineResearch, {
+    maxExplorerResponses: 4,
+    literature: true,
+  });
+  expect(
+    await roles.coordinator(
       {
-        label: "owner",
-        request: {
-          protocol: "xean/pi-run/v6",
-          model: { provider: model.provider, id: model.id, api: model.api },
-          modelProfile: null,
-          prompt: "test",
-        },
+        task: { problem: "P", completionCriteria: "Prove P" },
+        notes: [note, imported, rejected],
+        guidance: [],
+        failures: [],
+        literatureUsed: false,
       },
-      async ({ call }) => {
-        const request = {
-          protocol: "xean/pi-request/v1" as const,
-          parent: call,
-          model: { provider: model.provider, id: model.id, api: model.api },
-          payloadRef: store.storePayload({ input: "test" }),
-        };
-        const internalRequest = {
-          label: "xean/pi-request",
-          request,
-        };
-        const completion = {
-          protocol: "xean/pi-request-completion/v2",
-          parent: call,
-          operation: {
-            provider: model.provider,
-            requestedModel: model.id,
-            api: model.api,
-            error: false,
-            usage: null,
-          },
-        };
-        await store.call(internalRequest, async () => completion);
-        const pending = store.call(internalRequest, async () => {
-          await blocked;
-          return completion;
-        });
-        await Promise.resolve();
-        observed = piRequestAttempts(store.records(), call);
-        release();
-        await pending;
-        return null;
-      },
-    );
+      execution,
+      BACKGROUND_CONTEXT,
+    ),
+  ).toEqual(plan);
+  expect(state.calls).toHaveLength(7);
+  await expect(
+    roles.literature(null!, execution, BACKGROUND_CONTEXT),
+  ).rejects.toThrow("disabled");
+});
 
-    expect(observed.map(({ state }) => state)).toEqual([
-      "completed",
-      "unsettled",
-    ]);
-  });
-
-  test("checkpoints the real Pi OpenAI adapter before a stub transport", async () => {
-    const store = campaign();
-    let fetches = 0;
-    const stubFetch: typeof fetch = Object.assign(
-      async (..._args: Parameters<typeof fetch>): Promise<Response> => {
-        fetches += 1;
-        throw new Error("stub transport stopped here");
-      },
-      { preconnect: fetch.preconnect },
-    );
-    const adapter: PiModels = {
-      streamSimple(_requestModel, context, options) {
-        return streamSimpleOpenAIResponses(model, normalizeContext(context), {
-          ...options,
-          apiKey: "stub-key",
-          maxRetries: 0,
-          fetch: stubFetch,
-        });
-      },
-    };
-    const result = await runPi(store, {
-      models: adapter,
-      model,
-      label: "real-adapter/v1",
-      system: "Answer briefly.",
-      prompt: "Test",
-      reasoning: "max",
-      cacheKey: "stable-test-cache",
-    });
-
-    expect(result.state).toBe("failed");
-    expect(fetches).toBe(1);
-    expect(
-      piRequestAttempts(store.records(), result.call, store),
-    ).toMatchObject([
-      {
-        parent: result.call,
-        model: {
-          provider: model.provider,
-          id: model.id,
-          api: model.api,
-        },
-        payload: {
-          model: model.id,
-          stream: true,
-          input: [
-            { role: "developer", content: "Answer briefly." },
-            {
-              role: "user",
-              content: [{ type: "input_text", text: "Test" }],
-            },
-          ],
-          reasoning: { effort: "max" },
-          prompt_cache_key: "stable-test-cache",
-        },
-        state: "completed",
-      },
-    ]);
-  });
-
-  test("keeps concurrent Pi request checkpoints under their own calls", async () => {
-    const store = campaign();
-    const results = await Promise.all(
-      ["first", "second"].map((name) =>
-        runPi(store, {
-          models: models([assistant([{ type: "text", text: name }], "stop")]),
-          model,
-          label: `concurrent/${name}`,
-          prompt: name,
-        }),
-      ),
-    );
-    const first = results[0]!;
-    const second = results[1]!;
-
-    expect(first.text).toBe("first");
-    expect(second.text).toBe("second");
-    expect(piRequestAttempts(store.records(), first.call)).toHaveLength(1);
-    expect(piRequestAttempts(store.records(), second.call)).toHaveLength(1);
-  });
-
-  test("can stop after a successful structured tool result", async () => {
-    const store = campaign();
-    const submit = defineTool({
-      name: "submit",
-      description: "Submit one answer",
-      input: z.strictObject({ answer: z.number().int() }),
-      async run(input) {
-        return input;
-      },
-    });
-    let requests = 0;
-    const result = await runPi(store, {
-      models: models(
-        [
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "submit-1",
-                name: "submit",
-                arguments: { answer: 7 },
-              },
-            ],
-            "toolUse",
-          ),
-        ],
-        () => {
-          requests += 1;
-        },
-      ),
-      model,
-      label: "structured/v1",
-      prompt: "Submit 7",
-      tools: [submit],
-    });
-
-    expect(result).toMatchObject({ state: "succeeded", text: "" });
-    expect(requests).toBe(1);
-    expect(result.transcript).toMatchObject([
-      { role: "system" },
-      { role: "user" },
-      { role: "assistant" },
-      { role: "toolResult" },
-    ]);
-    expect(
-      store.records().find((entry) => entry.kind === "call"),
-    ).toMatchObject({ request: { protocol: "xean/pi-run/v6" } });
-  });
-
-  test("does not accept a terminal tool result after cancellation", async () => {
+test("turn recovery stops at its allowance, refused admission, cancellation, and invalid requests", async () => {
+  for (const stop of [
+    "exhausted",
+    "admission",
+    "cancelled",
+    "invalid",
+  ] as const) {
+    const state = recording();
     const controller = new AbortController();
-    const submit = defineTool({
-      name: "submit",
-      description: "Submit one answer",
-      input: z.strictObject({ answer: z.number().int() }),
-      async run(input) {
-        controller.abort();
-        return input;
-      },
-    });
-    const result = await runPi(campaign(), {
-      models: models([
-        assistant(
-          [
-            {
-              type: "toolCall",
-              id: "submit-1",
-              name: "submit",
-              arguments: { answer: 7 },
-            },
-          ],
-          "toolUse",
-        ),
-      ]),
-      model,
-      label: "structured/v1",
-      prompt: "Submit 7",
-      tools: [submit],
-      signal: controller.signal,
-    });
-
-    expect(result).toMatchObject({ state: "cancelled" });
-  });
-
-  test("does not accept incomplete Pi completions as successful", async () => {
-    for (const stopReason of ["length", "deferred", "toolUse"] as const) {
-      const store = campaign();
-      const result = await runPi(store, {
-        models: models([
-          assistant([{ type: "text", text: "PASS" }], stopReason),
-        ]),
-        model,
-        label: "audit/v1",
-        prompt: "Audit",
-      });
-      expect(result).toMatchObject({
-        state: "failed",
-        error: `Pi stopped with ${stopReason}`,
-      });
-    }
-  });
-
-  test("continues a length-stopped response within one logical call", async () => {
-    const store = campaign();
-    const observed: Context[] = [];
-    const result = await runPi(store, {
-      models: models(
-        [
-          assistant([{ type: "text", text: "The proof begins" }], "length"),
-          assistant([{ type: "text", text: " and concludes." }], "stop"),
-        ],
-        (context) => observed.push(context),
-      ),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxLengthContinuations: 2,
-    });
-    expect(result).toMatchObject({
-      state: "succeeded",
-      text: "The proof begins and concludes.",
-    });
-    const roles = (
-      result.transcript as readonly { role?: string; content?: unknown }[]
-    ).map(({ role }) => role);
-    expect(roles).toEqual(["user", "assistant", "user", "assistant"]);
-    const continuation = (
-      result.transcript as readonly { role?: string; content?: unknown }[]
-    )[2];
-    expect(String(continuation?.content)).toContain("interrupted");
-    expect(observed[1]?.messages.map(({ role }) => role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-    ]);
-  });
-
-  test("separates length continuations from provider error recoveries", async () => {
-    const store = campaign();
-    const result = await runPi(store, {
-      models: models([
-        assistant([{ type: "text", text: "part one" }], "length"),
-        {
-          ...assistant([], "error", undefined, false),
-          errorMessage: "WebSocket closed 1006 Connection ended",
-        },
-        assistant([{ type: "text", text: " and part two" }], "stop"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-      maxLengthContinuations: 8,
-    });
-    expect(result).toMatchObject({
-      state: "succeeded",
-      text: "part one and part two",
-    });
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      3,
-    );
-  });
-
-  test("a provider recovery allowance does not enable length continuations", async () => {
-    let requests = 0;
-    const result = await runPi(campaign(), {
-      models: models(
-        [
-          assistant([{ type: "text", text: "partial" }], "length"),
-          assistant([{ type: "text", text: "must not run" }], "stop"),
-        ],
-        () => {
-          requests += 1;
-        },
-      ),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 2,
-    });
-    expect(requests).toBe(1);
-    expect(result).toMatchObject({
-      state: "failed",
-      error: "Pi stopped with length",
-    });
-  });
-
-  test("permits several length continuations under their own budget", async () => {
-    const store = campaign();
-    const result = await runPi(store, {
-      models: models([
-        assistant([{ type: "text", text: "one" }], "length"),
-        assistant([{ type: "text", text: " two" }], "length"),
-        assistant([{ type: "text", text: " three" }], "stop"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-      maxLengthContinuations: 8,
-    });
-    expect(result).toMatchObject({
-      state: "succeeded",
-      text: "one two three",
-    });
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      3,
-    );
-  });
-
-  test("does not continue an overflow-shaped length stop", async () => {
-    const store = campaign();
-    const overflowed = assistant([], "length");
-    overflowed.usage = {
-      ...overflowed.usage,
-      input: 9_950,
-      output: 0,
-      cacheRead: 0,
-    };
-    const result = await runPi(store, {
-      models: models([overflowed]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 3,
-    });
-    expect(result).toMatchObject({
-      state: "failed",
-      providerRetryable: false,
-      error: "Pi exceeded its context window",
-    });
-  });
-
-  test("retries a provider error without preserving unseen partial text", async () => {
-    const store = campaign();
-    const observed: Context[] = [];
-    const interrupted = assistant(
-      [{ type: "text", text: "half the proof" }],
-      "error",
-    );
-    interrupted.errorMessage = "Codex error: 502 upstream server error";
-    const result = await runPi(store, {
-      models: models(
-        [
-          interrupted,
-          assistant([{ type: "text", text: "complete retry" }], "stop"),
-        ],
-        (context) => observed.push(context),
-      ),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 2,
-    });
-    expect(result).toMatchObject({
-      state: "succeeded",
-      text: "complete retry",
-    });
-    expect(observed[1]?.messages.map(({ role }) => role)).toEqual(["user"]);
-  });
-
-  test("retries codex-lb transient gateway errors", async () => {
-    const store = campaign();
-    const dropped = assistant([], "error");
-    dropped.errorMessage =
-      "upstream_unavailable: Codex upstream stream failed (ClientPayloadError: Response payload is not completed)";
-    const result = await runPi(store, {
-      models: models([
-        dropped,
-        assistant([{ type: "text", text: "recovered" }], "stop"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-    });
-    expect(result).toMatchObject({ state: "succeeded", text: "recovered" });
-  });
-
-  test("keeps one transport session across recovery attempts and separates calls", async () => {
-    const store = campaign();
-    const sessions: (string | undefined)[] = [];
-    const transports: (string | undefined)[] = [];
-    const observe = (
-      _context: Context,
-      options: SimpleStreamOptions | undefined,
-    ) => {
-      sessions.push(options?.sessionId);
-      transports.push(options?.transport);
-    };
-    const interrupted = assistant([], "error");
-    interrupted.errorMessage = "WebSocket closed 1006 Connection ended";
-    await runPi(store, {
-      models: models(
-        [interrupted, assistant([{ type: "text", text: "done" }], "stop")],
-        observe,
-      ),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-      transport: "sse",
-    });
-    await runPi(store, {
-      models: models(
-        [assistant([{ type: "text", text: "fresh" }], "stop")],
-        observe,
-      ),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-    });
-    expect(sessions).toHaveLength(3);
-    expect(sessions[0]).toBeString();
-    expect(transports).toEqual(["sse", "sse", undefined]);
-    // The failed attempt and its recovery share one session so adapters can
-    // key caching and transport-fallback state; a new call starts fresh.
-    expect(sessions[1]).toBe(sessions[0]!);
-    expect(sessions[2]).toBeString();
-    expect(sessions[2]).not.toBe(sessions[0]!);
-  });
-
-  test("classifies an unrecovered codex-lb gateway error as retryable", async () => {
-    const store = campaign();
-    const dropped = assistant([], "error");
-    dropped.errorMessage = "upstream_error: Codex upstream request failed";
-    const result = await runPi(store, {
-      models: models([dropped]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-    });
-    expect(result).toMatchObject({
-      state: "failed",
-      providerRetryable: true,
-    });
-  });
-
-  test("recovers the recorded incomplete upstream stream internally", async () => {
-    const store = campaign();
-    const dropped = assistant([], "error");
-    dropped.errorMessage =
-      "stream_incomplete: Upstream closed stream without completion";
-    const result = await runPi(store, {
-      models: models([
-        dropped,
-        assistant([{ type: "text", text: "recovered" }], "stop"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-    });
-    expect(result).toMatchObject({ state: "succeeded", text: "recovered" });
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      2,
-    );
-  });
-
-  test.each([
-    undefined,
-    "incomplete.max_messages_extra",
-    "incomplete.content_filter",
-  ])(
-    "does not infer message-limit recovery from error text with raw reason %s",
-    async (rawStopReason) => {
-      const failed = assistant([], "error");
-      failed.errorMessage = "Response incomplete: max_messages";
-      if (rawStopReason !== undefined) failed.rawStopReason = rawStopReason;
-      const result = await runPi(campaign(), {
-        models: models([failed]),
-        model,
-        label: "recovery/exact-reason",
-        prompt: "Reason",
-        maxRecoveries: 1,
-      });
-      expect(result).toMatchObject({
-        state: "failed",
-        providerRetryable: false,
-      });
-    },
-  );
-
-  test("keeps an exhausted incomplete upstream stream retryable", async () => {
-    const store = campaign();
-    const dropped = () => {
-      const message = assistant([], "error");
-      message.errorMessage =
-        "stream_incomplete: Upstream closed stream without completion";
-      return message;
-    };
-    const result = await runPi(store, {
-      models: models([dropped(), dropped()]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-    });
-    expect(result).toMatchObject({
-      state: "failed",
-      error: "stream_incomplete: Upstream closed stream without completion",
-      providerRetryable: true,
-    });
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      2,
-    );
-  });
-
-  test("classifies a codex transport-failure diagnostic as retryable unless the error text is deterministic", async () => {
-    const failed = assistant([], "error");
-    failed.errorMessage = "opaque provider failure";
-    failed.diagnostics = [{ type: "provider_transport_failure", timestamp: 1 }];
-    const result = await runPi(campaign(), {
-      models: models([failed]),
-      model,
-      label: "transport-diagnostic/v1",
-      prompt: "Classify",
-    });
-    expect(result).toMatchObject({ state: "failed", providerRetryable: true });
-    const rejected = assistant([], "error");
-    rejected.errorMessage = "403 permission denied";
-    rejected.diagnostics = failed.diagnostics;
-    const denied = await runPi(campaign(), {
-      models: models([rejected]),
-      model,
-      label: "transport-diagnostic/v1",
-      prompt: "Classify",
-    });
-    expect(denied).toMatchObject({ state: "failed", providerRetryable: false });
-  });
-
-  test.each([
-    "401 invalid_api_key: authentication failed",
-    "403 permission denied",
-    "429 insufficient_quota: billing hard limit reached",
-    "400 invalid_request_error",
-    "401 invalid_api_key: stream_incomplete: Upstream closed stream without completion",
-    "429 insufficient_quota: stream_incomplete: Upstream closed stream without completion",
-    "400 invalid_request_error: upstream_eof_before_terminal_event",
-  ])(
-    "keeps deterministic provider failure non-retryable: %s",
-    async (error) => {
-      const failed = assistant([], "error");
-      failed.errorMessage = error;
-      const result = await runPi(campaign(), {
-        models: models([failed]),
-        model,
-        label: "deterministic/v1",
-        prompt: "Deterministic",
-      });
-      expect(result).toMatchObject({
-        state: "failed",
-        providerRetryable: false,
-      });
-    },
-  );
-
-  test("does not continue a non-retryable error stop", async () => {
-    const store = campaign();
-    const exhausted = assistant([], "error");
-    exhausted.errorMessage = "insufficient_quota: billing hard limit reached";
-    const result = await runPi(store, {
-      models: models([exhausted]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 3,
-    });
-    expect(result).toMatchObject({ state: "failed" });
-    expect(result.state === "failed" && result.providerRetryable).toBe(false);
-  });
-
-  test("caps one request loop at thirty-two turns", async () => {
-    const store = campaign();
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
-    const replies = Array.from({ length: 40 }, (_, index) =>
-      assistant(
-        [
-          {
-            type: "toolCall",
-            id: `echo-${index}`,
-            name: "echo",
-            arguments: { value: "again" },
-          },
-        ],
-        "toolUse",
-      ),
-    );
-    const result = await runPi(store, {
-      models: models(replies),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      tools: [echo],
-    });
-    expect(result.state).toBe("failed");
-    const assistants = (
-      result.transcript as readonly { role?: string }[]
-    ).filter(({ role }) => role === "assistant");
-    expect(assistants).toHaveLength(32);
-  });
-
-  test("shares the thirty-two-turn cap across length continuations", async () => {
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
-    const replies = [
-      assistant([{ type: "text", text: "partial" }], "length"),
-      ...Array.from({ length: 40 }, (_, index) =>
-        assistant(
-          [
-            {
-              type: "toolCall" as const,
-              id: `recovered-echo-${index}`,
-              name: "echo",
-              arguments: { value: "again" },
-            },
-          ],
-          "toolUse",
-        ),
-      ),
-    ];
-    const result = await runPi(campaign(), {
-      models: models(replies),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      tools: [echo],
-      maxLengthContinuations: 1,
-    });
-
-    expect(result.state).toBe("failed");
-    expect(
-      (result.transcript as readonly { role?: string }[]).filter(
-        ({ role }) => role === "assistant",
-      ),
-    ).toHaveLength(32);
-  });
-
-  test("does not continue after the thirty-second turn ends at length", async () => {
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
-    const replies = [
-      ...Array.from({ length: 31 }, (_, index) =>
-        assistant(
-          [
-            {
-              type: "toolCall" as const,
-              id: `pre-limit-echo-${index}`,
-              name: "echo",
-              arguments: { value: "again" },
-            },
-          ],
-          "toolUse",
-        ),
-      ),
-      assistant([{ type: "text", text: "limit" }], "length"),
-      assistant([{ type: "text", text: "turn 33" }], "stop"),
-    ];
-    let providerCalls = 0;
-    const result = await runPi(campaign(), {
-      models: models(replies, () => {
-        providerCalls += 1;
+    let admissions = 0;
+    const runtime = fixtureRuntime(() =>
+      fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage:
+          stop === "invalid"
+            ? "invalid_request_error: invalid timeout (503 seconds)"
+            : "Upstream websocket closed before response.completed",
       }),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      tools: [echo],
-      maxLengthContinuations: 1,
-    });
-
-    expect(result).toMatchObject({
-      state: "failed",
-      error: "Pi stopped with length",
-    });
-    expect(providerCalls).toBe(32);
-    expect(
-      (result.transcript as readonly { role?: string }[]).filter(
-        ({ role }) => role === "assistant",
-      ),
-    ).toHaveLength(32);
-  });
-
-  test.each([undefined, submitVerdict.name])(
-    "does not accept tool errors at the turn cap (required submission: %s)",
-    async (terminalTool) => {
-      const store = campaign();
-      const candidate = store.submitCandidate(
-        new TextEncoder().encode("claim"),
-        ["audit/v1"],
-      );
-      const invalid = (id: string) => ({
-        type: "toolCall" as const,
-        id,
-        name: submitVerdict.name,
-        arguments: { verdict: "INVALID", evidence: null },
-      });
-      const replies = Array.from({ length: 31 }, (_, index) =>
-        assistant([invalid(`invalid-${index}`)], "toolUse"),
-      );
-      replies.push(
-        assistant(
-          [
-            invalid("invalid-final"),
-            {
-              type: "toolCall",
-              id: "valid-final",
-              name: submitVerdict.name,
-              arguments: { verdict: "PASS", evidence: null },
+    );
+    const result = await auditedStream(
+      runtime.models,
+      {
+        async begin(identity) {
+          if (++admissions === 2 && stop === "admission")
+            throw new Error("connection error during call admission");
+          const call = await state.recorder.begin(identity);
+          return {
+            recordRequest: call.recordRequest,
+            async settle(message, usage) {
+              await call.settle(message, usage);
+              if (stop === "cancelled") controller.abort();
             },
-          ],
-          "toolUse",
-        ),
-      );
-      const result = await runPi(store, {
-        models: models(replies),
-        model,
-        label: "audit/v1",
-        candidate,
-        prompt: "Audit",
-        tools: [submitVerdict],
-        ...(terminalTool === undefined ? {} : { terminalTool }),
-      });
-      expect(result.state).toBe("failed");
-      expect(() => store.recordVerdict(result.call, "PASS", null)).toThrow(
-        "fresh successful verifier call",
-      );
-      expect(deriveCandidateStatus(store.records(), candidate).verified).toBe(
-        false,
-      );
-    },
-  );
-
-  test("keeps interrupted text when a continuation uses tools", async () => {
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
-    const result = await runPi(campaign(), {
-      models: models([
-        assistant([{ type: "text", text: "partial " }], "length"),
-        assistant(
-          [
-            {
-              type: "toolCall",
-              id: "echo",
-              name: "echo",
-              arguments: { value: "continue" },
-            },
-          ],
-          "toolUse",
-        ),
-        assistant([{ type: "text", text: "done" }], "stop"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      tools: [echo],
-      maxLengthContinuations: 1,
-    });
-    expect(result).toMatchObject({ state: "succeeded", text: "partial done" });
-  });
-
-  test("fails after exhausting length continuations", async () => {
-    const store = campaign();
-    const result = await runPi(store, {
-      models: models([
-        assistant([{ type: "text", text: "partial" }], "length"),
-        assistant([{ type: "text", text: "more partial" }], "length"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxLengthContinuations: 1,
-    });
-    expect(result).toMatchObject({
-      state: "failed",
-      error: "Pi stopped with length",
-    });
-  });
-
-  test("preserves Pi failure and cancellation states", async () => {
-    const failedCampaign = campaign();
-    const failed = await runPi(failedCampaign, {
-      models: models([
-        {
-          ...assistant([], "error", undefined, false),
-          errorMessage: "WebSocket closed 1006 Connection ended",
+          };
         },
-      ]),
-      model,
-      label: "failure/v1",
-      prompt: "Fail",
-    });
-    expect(failed).toMatchObject({
-      state: "failed",
-      error: "WebSocket closed 1006 Connection ended",
-      providerRetryable: true,
-    });
-    if (failed.state !== "failed") throw new Error("expected Pi failure");
-    expect(failed.providerRetryable).toBe(true);
-    const storedFailure = failedCampaign
-      .records()
-      .find(
-        (entry) => entry.kind === "call-result" && entry.parent === failed.call,
-      );
-    if (
-      storedFailure?.kind !== "call-result" ||
-      storedFailure.state !== "returned"
-    ) {
-      throw new Error("missing stored Pi failure");
-    }
-    expect(readPiResult(storedFailure.output, failedCampaign)).toMatchObject({
-      state: "failed",
-      providerRetryable: true,
-    });
-    expect(derivePiSpend(failedCampaign.records()).summary).toEqual({
-      logicalProviderRequests: 1,
-      requestErrors: 1,
-      unmeasuredRequests: 1,
-    });
-
-    const cancelledCampaign = campaign();
-    const cancelled = await runPi(cancelledCampaign, {
-      models: models([assistant([], "aborted", undefined, false)]),
-      model,
-      label: "cancel/v1",
-      prompt: "Cancel",
-    });
-    expect(cancelled.state).toBe("cancelled");
-    expect(cancelled).not.toHaveProperty("providerRetryable");
-    expect(derivePiSpend(cancelledCampaign.records()).summary).toEqual({
-      logicalProviderRequests: 1,
-      requestErrors: 1,
-      unmeasuredRequests: 1,
-    });
-  });
-
-  test("does not classify context overflow or malformed failure records as retryable", async () => {
-    let requests = 0;
-    const overflow = await runPi(campaign(), {
-      models: models(
-        [
-          {
-            ...assistant([], "error", undefined, false),
-            errorMessage: "500 internal error: context_length_exceeded",
-          },
-          assistant([{ type: "text", text: "must not run" }], "stop"),
-        ],
-        () => (requests += 1),
-      ),
-      model,
-      label: "overflow/v1",
-      prompt: "Overflow",
-      maxRecoveries: 1,
-    });
-    expect(overflow).toMatchObject({
-      state: "failed",
-      providerRetryable: false,
-    });
-    expect(requests).toBe(1);
-    const silentOverflow = await runPi(campaign(), {
-      models: models([assistant([{ type: "text", text: "answer" }], "stop")]),
-      model: { ...model, contextWindow: 10 },
-      label: "silent-overflow/v1",
-      prompt: "Overflow",
-    });
-    expect(silentOverflow).toMatchObject({
-      state: "failed",
-      providerRetryable: false,
-      error: "Pi exceeded its context window",
-    });
+      },
+      { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+    )(model, context, {
+      signal: controller.signal,
+    }).result();
+    expect(result.stopReason).toBe(stop === "cancelled" ? "aborted" : "error");
+    expect(admissions).toBe(stop === "invalid" || stop === "cancelled" ? 1 : 2);
+    expect(state.calls).toHaveLength(stop === "exhausted" ? 2 : 1);
     expect(
-      piStoredResult.safeParse({
-        state: "failed",
-        text: "",
-        error: "incomplete failure record",
-      }).success,
-    ).toBe(false);
-  });
+      state.calls.every((call) => call.message?.stopReason === "error"),
+    ).toBe(true);
+    if (stop === "admission")
+      expect(result.errorMessage).toContain("call admission");
+  }
 });
 
-test.each(["succeeded", "failed", "cancelled"] as const)(
-  "compact Pi storage round-trips %s without retaining content in the journal",
-  async (state) => {
-    const store = campaign();
-    const text = "large answer ".repeat(10_000);
-    const body = piStoredResult.parse({
-      state,
-      text,
-      transcript: [{ role: "assistant", content: text, usage: null }],
-      ...(state === "succeeded" ? {} : { error: "terminal error" }),
-      ...(state === "failed" ? { providerRetryable: false } : {}),
+test("native response recovery consumes new campaign admission before publication", async () => {
+  for (const providerCalls of [1, 2]) {
+    let sent = 0;
+    const item = {
+      type: "reasoning",
+      id: "rs_recovered",
+      status: "completed",
+      summary: [],
+      encrypted_content: "opaque-native-signature",
+    };
+    const models = fixtureModels(async (init) => {
+      if (++sent > 1) {
+        expect(
+          (await requestBody(init)).input.filter(
+            (part: { type: string }) => part.type === "reasoning",
+          ),
+        ).toEqual([item]);
+        return completedResponse();
+      }
+      return eventResponse(
+        { type: "response.output_item.added", output_index: 0, item },
+        { type: "response.output_item.done", output_index: 0, item },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: { ...item, id: "rs_unfinished" },
+        },
+        {
+          type: "response.failed",
+          response: {
+            id: "interrupted",
+            status: "failed",
+            output: [],
+            error: {
+              code: "stream_incomplete",
+              message:
+                "Upstream websocket closed before response.completed (close_code=1012)",
+            },
+            usage: { input_tokens: 3, output_tokens: 7, total_tokens: 10 },
+          },
+        },
+      );
+    });
+    const engine = await Xean.open(new MemoryStorage(), {
+      task: "recover a native provider response",
+      limits: { providerCalls },
+      roles: [
+        {
+          name: "worker",
+          async run(_input, execution, scope) {
+            const message = await auditedStream(models, execution.recorder, {
+              enabled: true,
+              maxRetries: 1,
+              baseDelayMs: 0,
+            })(model, context, { signal: scope.abortSignal }).result();
+            if (message.stopReason !== "stop")
+              throw new Error(message.errorMessage);
+            return "recovered";
+          },
+        },
+      ],
+      coordinator: {
+        name: "coordinate",
+        async run(signal, view) {
+          if (signal.kind === "start")
+            return {
+              state: null,
+              dispatch: [{ id: "work", role: "worker", input: null }],
+            };
+          return {
+            state: null,
+            ...(signal.kind === "completed"
+              ? { completion: view.work[0]!.result }
+              : {}),
+          };
+        },
+      },
+      accept: (result) => result === "recovered",
     });
     try {
-      const receipt = await store.call(
-        { label: "storage", request: null },
-        async ({ call }) => storePiResult(store, { call, ...body }),
+      const result = await engine.run();
+      expect(result.status).toBe(providerCalls === 1 ? "limited" : "completed");
+      expect(result.work[0]!.result).toBe(
+        providerCalls === 1 ? null : "recovered",
       );
-      expect(JSON.stringify(receipt.output).length).toBeLessThan(1000);
-      expect(piResultRecord.parse(receipt.output).assistantUsage).toEqual([
-        null,
-      ]);
-      expect(readPiResult(receipt.output, store)).toEqual({
-        call: receipt.call,
-        ...body,
+      expect(result.providerCalls).toBe(providerCalls);
+      expect(sent).toBe(providerCalls);
+      const settled = (await engine.records()).filter(
+        (entry) => entry.kind === "xean.call.settled",
+      );
+      expect(settled).toHaveLength(providerCalls);
+      expect(settled[0]!.data).toMatchObject({
+        message: { stopReason: "error" },
+        usage: { output: 7 },
       });
     } finally {
-      store.close();
+      await engine.close();
     }
-  },
-);
-
-test("collects final text in order across a long interrupted response chain", async () => {
-  const store = campaign();
-  try {
-    const fragments = Array.from({ length: 21 }, (_, index) => `[${index}]`);
-    const output = await runPi(store, {
-      models: models(
-        fragments.map((text, index) =>
-          assistant(
-            [
-              { type: "thinking", thinking: "private reasoning" },
-              { type: "text", text },
-            ],
-            index === fragments.length - 1 ? "stop" : "length",
-          ),
-        ),
-      ),
-      model,
-      label: "linear-text",
-      prompt: "Continue",
-      maxLengthContinuations: 20,
-    });
-    expect(output.state).toBe("succeeded");
-    expect(output.text).toBe(fragments.join(""));
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      21,
-    );
-  } finally {
-    store.close();
   }
+});
+
+test("records the effective body before sending and awaits accounting before terminal success", async () => {
+  const requestRecorded = Promise.withResolvers<void>();
+  const settlement = Promise.withResolvers<void>();
+  const recordingReached = Promise.withResolvers<void>();
+  const settlementReached = Promise.withResolvers<void>();
+  const state = recording();
+  let sent = false;
+  let completed = false;
+  const models = fixtureModels((init) => {
+    sent = true;
+    expect(JSON.parse(String(init?.body))).toEqual(state.calls[0]?.payload);
+    return completedResponse();
+  });
+  const stream = auditedStream(models, {
+    async begin(identity) {
+      const call = await state.recorder.begin(identity);
+      return {
+        async recordRequest(payload) {
+          await call.recordRequest(payload);
+          recordingReached.resolve();
+          await requestRecorded.promise;
+        },
+        async settle(message, usage) {
+          await call.settle(message, usage);
+          settlementReached.resolve();
+          await settlement.promise;
+        },
+      };
+    },
+  });
+  const result = stream(
+    {
+      ...model,
+      api: "openai-responses",
+      baseUrl:
+        "https://user:private-url-value@xean.invalid/v1?key=private-query-value",
+      headers: { "x-fixture-auth": "private-header-value" },
+    },
+    context,
+    {
+      onPayload: (payload) => ({
+        ...(payload as object),
+        metadata: { changed: true },
+      }),
+    },
+  )
+    .result()
+    .then((value) => {
+      completed = true;
+      return value;
+    });
+  await recordingReached.promise;
+  expect(sent).toBe(false);
+  expect(state.calls[0]?.payload).toMatchObject({
+    metadata: { changed: true },
+  });
+  expect(JSON.stringify(state.calls)).not.toContain("private-");
+  requestRecorded.resolve();
+  await settlementReached.promise;
+  expect(sent).toBe(true);
+  expect(completed).toBe(false);
+  settlement.resolve();
+  expect((await result).stopReason).toBe("stop");
+  expect(state.calls[0]?.usage?.totalTokens).toBe(5);
+});
+
+test("failed request recording prevents dispatch and preserves unknown usage", async () => {
+  let sent = false;
+  const state = recording();
+  const stream = auditedStream(
+    fixtureModels(() => {
+      sent = true;
+      throw new Error("must not send");
+    }),
+    {
+      async begin(identity) {
+        const call = await state.recorder.begin(identity);
+        return {
+          recordRequest() {
+            throw new Error("connection error recording request");
+          },
+          settle: call.settle,
+        };
+      },
+    },
+    { enabled: true, maxRetries: 2, baseDelayMs: 0 },
+  );
+  const result = await stream(model, context).result();
+  expect(sent).toBe(false);
+  expect(result.stopReason).toBe("error");
+  expect(result.errorMessage).toContain("connection error recording request");
+  expect(state.calls).toHaveLength(1);
+  expect(state.calls[0]?.usage).toBeNull();
+});
+
+test("changing a payload while request recording is pending prevents dispatch", async () => {
+  const requestRecorded = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const payload = { input: "original", optional: undefined };
+  const state = recording();
+  let sent = false;
+  const stream = auditedStream(
+    fixtureModels(() => {
+      sent = true;
+      throw new Error("must not send");
+    }),
+    {
+      async begin(identity) {
+        const call = await state.recorder.begin(identity);
+        return {
+          async recordRequest(value) {
+            await call.recordRequest(value);
+            entered.resolve();
+            await requestRecorded.promise;
+          },
+          settle: call.settle,
+        };
+      },
+    },
+  );
+  const result = stream(model, context, { onPayload: () => payload }).result();
+  await entered.promise;
+  payload.input = "changed";
+  requestRecorded.resolve();
+  expect((await result).stopReason).toBe("error");
+  expect(sent).toBe(false);
+  expect(state.calls[0]?.payload).toEqual({ input: "original" });
+  expect(state.calls[0]?.usage).toBeNull();
+});
+
+test("cancellation preserves received usage and leaves unread usage unknown", async () => {
+  for (const afterUsage of [false, true]) {
+    const state = recording();
+    const controller = new AbortController();
+    const stream = auditedStream(
+      fixtureModels(completedResponse),
+      state.recorder,
+    );
+    const message = await stream(
+      { ...model, api: "openai-responses" },
+      context,
+      {
+        signal: controller.signal,
+        onResponse: () => {
+          if (!afterUsage) controller.abort();
+        },
+        onProviderStreamEvent: (event) => {
+          if (
+            afterUsage &&
+            (event as { type: string }).type === "response.completed"
+          )
+            controller.abort();
+        },
+      },
+    ).result();
+    expect(message.stopReason).toBe("aborted");
+    if (afterUsage) expect(state.calls[0]?.usage?.totalTokens).toBe(5);
+    else expect(state.calls[0]?.usage).toBeNull();
+  }
+});
+
+test("settlement failure cannot escape as success or erase measured usage", async () => {
+  let calls = 0;
+  const stream = auditedStream(
+    fixtureModels(completedResponse),
+    {
+      begin() {
+        calls++;
+        return {
+          recordRequest() {},
+          settle() {
+            throw new Error("connection error settling request");
+          },
+        };
+      },
+    },
+    { enabled: true, maxRetries: 2, baseDelayMs: 0 },
+  );
+  const result = await stream(model, context).result();
+  expect(result.stopReason).toBe("error");
+  expect(result.errorMessage).toBe("connection error settling request");
+  expect(calls).toBe(1);
+  expect(reportedPiUsage(result)?.totalTokens).toBe(5);
 });
