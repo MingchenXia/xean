@@ -127,7 +127,11 @@ export type Note = Static<typeof noteDraftSchema> & {
 export const explorePlan = object({
   kind: Type.Literal("explorer"),
   guidance: text,
-  support: Type.Array(text, { uniqueItems: true }),
+  support: Type.Array(text, {
+    uniqueItems: true,
+    description:
+      "Existing note IDs selected as Explorer context. Use [] when no notes are needed, including initial exploration. The task is supplied separately.",
+  }),
 });
 export const verificationStages = [
   "correctness",

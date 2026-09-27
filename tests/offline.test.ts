@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { offlineResearch } from "../scripts/bounded-solve.ts";
 import {
   declarationVersion,
@@ -43,4 +46,51 @@ test("closed-book research cannot retrieve or clear unresolved premises", async 
   expect(() =>
     readDeclaration({ ...declaration, kind: "xean.solve.offline" }),
   ).toThrow();
+});
+
+test("closed-book runner honors omitted literature defaults and reopens without calls", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-offline-"));
+  try {
+    await writeFile(
+      join(directory, "task.json"),
+      JSON.stringify({
+        problem: "Fixture",
+        completionCriteria: "Exact result",
+      }),
+    );
+    await writeFile(
+      join(directory, "settings.json"),
+      JSON.stringify({
+        profiles: { default: { provider: "openai", model: "unavailable" } },
+      }),
+    );
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        "--no-install",
+        "--no-env-file",
+        resolve(import.meta.dir, "../scripts/bounded-solve.ts"),
+        directory,
+        "--offline",
+        "--round-limit",
+        "0",
+      ],
+      { timeout: 5000 },
+    );
+    expect(result.stderr.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(
+      await Bun.file(join(directory, "verified.json")).json(),
+    ).toMatchObject({
+      calls: 0,
+      rounds: 0,
+      unchangedOnReopen: true,
+      offline: true,
+    });
+    expect(
+      (await Bun.file(join(directory, "result.json")).json()).outcome,
+    ).toBe("round_limit");
+  } finally {
+    await rm(directory, { recursive: true });
+  }
 });

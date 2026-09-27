@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
@@ -94,6 +94,31 @@ test("the external observer reads coherent live snapshots without changing a loc
     });
     expect(JSON.stringify(after)).not.toContain("request body");
     expect(JSON.stringify(after)).not.toContain("response body");
+    await mkdir(join(directory, "bin"));
+    await writeFile(
+      join(directory, "bin/fleet-nomad"),
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === "job") console.log(JSON.stringify([{ ID: "allocation", CreateIndex: 1, ClientStatus: "failed" }]));
+else if (args.includes("-stderr")) console.log("worker stopped");
+else console.log(JSON.stringify({ calls: 3, rounds: 2, active: [] }));
+`,
+      { mode: 0o700 },
+    );
+    const supervised = await readRun(
+      { id: "fixture", directory, job: "fixture-job" },
+      directory,
+    );
+    expect(supervised.error).toBeUndefined();
+    expect(supervised.kind).toBe("database");
+    expect(supervised.snapshot?.notes).toEqual(after.snapshot?.notes);
+    expect(supervised.process).toMatchObject({
+      status: "failed",
+      calls: 3,
+      rounds: 2,
+      active: [],
+      errorLog: "worker stopped\n",
+    });
     const handle = api(
       [
         { id: "fixture", directory },

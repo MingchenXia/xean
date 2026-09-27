@@ -173,8 +173,8 @@ function detailView(run: Run) {
         : html`<section>
             <h2>Live activity</h2>
             <p>
-              Detailed notes are unavailable until this runner exports them. The
-              campaign is continuing with its original runner.
+              Detailed notes are unavailable in this observation. Process
+              status, when available, is shown below.
             </p>
             ${run.process?.active?.map((work) => html`<p><code>${work.id}</code> ${work.role}</p>`)}
           </section>`

@@ -1,13 +1,13 @@
 # Pi artifacts
 
-Yean consumes the five packages listed in [provenance.json](provenance.json)
+Xean consumes the five packages listed in [provenance.json](provenance.json)
 from Pi commit `2b0a123de98318c2ff8069661721ce0c3794c34e`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
 Pi's internal dependencies. Their upstream package version remains `0.87.1`.
 The commit and artifact hashes identify this build.
 
-Normal installation uses Yean's existing locked Bun command, documented in the
+Normal installation uses Xean's existing locked Bun command, documented in the
 [root README](../../README.md). Bun installs the artifacts selected by the
 lockfile and applies the retained Pi AI patch and the Pi durable read-only patch.
 The install receipt also fingerprints
@@ -18,7 +18,7 @@ the local tarball bytes, workspace manifests, lockfile, and patch bytes.
 Check out the exact upstream commit and use its `package-lock.json` with
 `npm ci --ignore-scripts --no-audit --no-fund`. The upstream Node/npm build is
 an explicit external-package exception to the Fleet Bun policy: Pi's official
-workspace scripts, compiler, and npm lock define this build contract. Yean's
+workspace scripts, compiler, and npm lock define this build contract. Xean's
 installation, orchestration, and tests continue to use Fleet's locked Bun.
 The Node/npm versions used for these artifacts are recorded in the provenance.
 
@@ -51,7 +51,7 @@ the committed artifact set.
 
 ## Patch maintenance
 
-The tarballs contain unpatched upstream output. Yean's patches live
+The tarballs contain unpatched upstream output. Xean's patches live
 in `patches/` and are applied during Bun installation. Each key in
 `patchedDependencies` uses the exact tarball resolution, without the `file:`
 prefix. A `name@0.87.1` key does not match these local artifacts.
@@ -78,5 +78,5 @@ A patch accepted by Bun alone does not verify correct placement.
 The Pi durable patch adds `SqliteStorage.open(db, {readOnly: true})`. It checks
 the existing schema instead of running migrations, and rejects `commit` and
 `mintId`. All record decoding, document reconstruction, and scans remain native.
-Yean supplies the read-only SQLite connection and its snapshot transaction.
+Xean supplies the read-only SQLite connection and its snapshot transaction.
 Remove this patch when upstream supplies an equivalent read-only opener.

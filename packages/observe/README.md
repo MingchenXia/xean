@@ -15,7 +15,8 @@ The file is a disposable view of the campaign, not its authoritative record.
 
 Create a config file containing the runs to display. Local paths resolve relative
 to the config file. Remote paths are absolute and name a provisioned Bun runtime.
-An optional `job` obtains process status and recent logs through Fleet's Nomad CLI.
+For either source, an optional `job` obtains process status and recent logs through
+Fleet's Nomad CLI.
 
 ```json
 [

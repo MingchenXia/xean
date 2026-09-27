@@ -113,7 +113,9 @@ into one Pi tool call. It retains response metadata on failure and marks browser
 usage unmeasured. Pi's setup-error helper has no partial-response or cancellation
 metadata, so response validation and cancellation still need the adapter's
 terminal event. The custom API identity excludes it from OpenAI reasoning
-replay. The underlying transport does not automatically replay browser requests.
+replay. Both the underlying transport and the solver disable automatic request
+retries for this provider. Pi's retry policy is provider-agnostic and has no
+provider replay-safety flag, so the solver selects this exception explicitly.
 
 Claude subscription transport uses `pi-claude-code-provider` pinned to `0.5.0`
 ([source](https://github.com/chem/pi-claude-code-provider/tree/a87b98539f57945b8a6df8c26db4cdcf3ed38a7a)).

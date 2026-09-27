@@ -2,8 +2,7 @@
 
 Xean helps strong models solve difficult mathematical problems. Explorer develops
 mathematics, verifiers assess its claims, and durable notes preserve the results
-and obstacles for later work. Xean carries forward Xean's research philosophy
-while delegating standard execution and storage behavior to Pi.
+and obstacles for later work. Pi supplies standard execution and storage behavior.
 
 1. **Let Explorer choose the mathematics.** Explorer chooses subproblems,
    proposes lemmas, searches for counterexamples, and changes methods.

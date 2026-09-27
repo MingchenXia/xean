@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { version } from "../package.json";
+import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 
 test("CLI metadata stays model-free, shares flags, and releases ownership after failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-"));
@@ -18,6 +20,23 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
     };
   };
   try {
+    // Package scripts must keep the invoking Bun even when PATH finds an older one.
+    await writeFile(join(directory, "bun"), "#!/bin/sh\nexit 99\n", {
+      mode: 0o755,
+    });
+    const packageRun = Bun.spawnSync(
+      [process.execPath, "run", "xean", "--version"],
+      {
+        cwd: resolve(import.meta.dir, ".."),
+        env: { ...process.env, PATH: `${directory}:${process.env.PATH}` },
+        timeout: 5000,
+      },
+    );
+    expect(packageRun.exitCode).toBe(0);
+    expect(packageRun.stdout.toString().trim()).toBe(version);
+    const versionResult = run("--version");
+    expect(versionResult.code).toBe(0);
+    expect(versionResult.stdout.trim()).toBe(version);
     const task = { problem: "P", completionCriteria: "Prove P" };
     await writeFile(join(directory, "task.json"), JSON.stringify(task));
     await writeFile(
@@ -78,6 +97,57 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
     expect(help.code).toBe(0);
     expect(help.stdout).toContain("--records");
     expect(help.stdout).toContain("--key-stdin");
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("CLI drains large inspection and argument output through a slow pipe", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-cli-output-"));
+  const database = join(directory, "campaign.sqlite");
+  const argument = "For every integer n, 2n is even.\n".repeat(65_536);
+  try {
+    const engine = await Xean.open(await openXeanStorage(database), {
+      task: { kind: "xean.solve" },
+      roles: [],
+      coordinator: {
+        name: "output-fixture",
+        run: () => ({ state: null, completion: { argument } }),
+      },
+      accept: () => true,
+    });
+    try {
+      await engine.run();
+    } finally {
+      await engine.close();
+    }
+    for (const command of ["inspect", "export"]) {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "--no-install",
+          "--no-env-file",
+          resolve(import.meta.dir, "../packages/cli/src/index.ts"),
+          command,
+          database,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      // Let the producer fill its pipe before the consumer starts reading.
+      await Bun.sleep(100);
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      expect(
+        command === "inspect"
+          ? JSON.parse(stdout).campaign.result.argument
+          : stdout,
+      ).toBe(command === "inspect" ? argument : argument + "\n");
+    }
   } finally {
     await rm(directory, { recursive: true });
   }

@@ -1,6 +1,7 @@
 import { resolve, dirname, basename } from "node:path";
 import { parseArgs } from "node:util";
 import { readRun, type Source, type Run } from "./read.ts";
+import { verifyInstall } from "../../../scripts/dependencies.ts";
 
 export function readSources(value: unknown, directory: string): Source[] {
   if (!Array.isArray(value) || value.length === 0)
@@ -79,6 +80,7 @@ export function api(sources: Source[], fleet: string) {
 }
 
 if (import.meta.main) {
+  await verifyInstall(resolve(import.meta.dir, "../../.."));
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     allowPositionals: true,

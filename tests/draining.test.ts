@@ -19,6 +19,108 @@ const model = {
   api: "openai-responses" as const,
 };
 
+test("a call grant preserves a blocked failure and permits explicit recovery after reopen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-blocked-cap-"));
+  const path = join(directory, "campaign.sqlite");
+  const active = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let fail = true;
+  const options: XeanOptions = {
+    task: "recover blocking followed by call exhaustion",
+    limits: { attempts: 1, providerCalls: 0 },
+    roles: [
+      {
+        name: "worker",
+        async run(_, execution) {
+          active.resolve();
+          await release.promise;
+          const call = await execution.recorder.begin(model);
+          await call.recordRequest({ retry: true });
+          await call.settle("recovered", null);
+          return "recovered";
+        },
+      },
+    ],
+    coordinator: {
+      name: "coordinator",
+      run(signal, view) {
+        if (signal.kind === "start")
+          return {
+            state: null,
+            dispatch: [{ id: "original", role: "worker", input: null }],
+          };
+        if (signal.kind === "input") {
+          if (fail) throw new Error("Coordinator failure");
+          return {
+            state: null,
+            dispatch: [{ id: "retry", role: "worker", input: null }],
+          };
+        }
+        return {
+          state: null,
+          ...(view.work.some(
+            (w) => w.id === "retry" && w.status === "completed",
+          )
+            ? { completion: "recovered" }
+            : {}),
+        };
+      },
+    },
+    accept: (candidate) => candidate === "recovered",
+  };
+  let engine = await Xean.open(await openXeanStorage(path), options);
+  try {
+    const running = engine.run();
+    await active.promise;
+    await engine.input("block now", "block");
+    for (let turn = 0; turn < 100; turn++) {
+      if ((await engine.inspect()).status === "blocked") break;
+      await yieldToEvents();
+    }
+    expect((await engine.inspect()).status).toBe("blocked");
+    release.resolve();
+    const blocked = await running;
+    expect(blocked).toMatchObject({
+      status: "blocked",
+      callLimitReached: true,
+      error: "Coordinator failure",
+    });
+    await engine.close();
+    engine = await Xean.open(await openXeanStorage(path), options);
+    const before = await engine.records();
+    const grant = await engine.extendCalls(1, "recover");
+    expect(await engine.extendCalls(1, "recover")).toEqual(grant);
+    const granted = await engine.run();
+    expect(granted).toMatchObject({
+      status: "blocked",
+      error: blocked.error,
+      callLimitReached: false,
+      callAllowance: 1,
+      pendingSignals: blocked.pendingSignals + 1,
+    });
+    expect(granted.work).toEqual(blocked.work);
+    expect(await engine.records()).toEqual(before);
+    fail = false;
+    const recovered = await engine.resume();
+    expect(recovered).toMatchObject({
+      status: "completed",
+      result: "recovered",
+      providerCalls: 1,
+      error: null,
+    });
+    expect(recovered.work[0]).toEqual(blocked.work[0]);
+    expect(
+      (await engine.records()).filter(
+        (r) => r.kind === "xean.coordinator.resumed",
+      ),
+    ).toHaveLength(1);
+  } finally {
+    release.resolve();
+    await engine.close();
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("Coordinator call-cap failure lets an admitted worker publish and signal", async () => {
   const admitted = Promise.withResolvers<void>();
   const denied = Promise.withResolvers<void>();

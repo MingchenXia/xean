@@ -12,9 +12,18 @@ export {
   validateCommand,
   type SolverCommand,
 } from "./commands.ts";
-export { codexResearch, type Research } from "./research.ts";
+export {
+  codexResearch,
+  type Research,
+  type LiteratureInput,
+} from "./research.ts";
 export { askCodex, type CodexOptions } from "./codex.ts";
-export type { PiRuntime, Profile, ProfileName } from "./pi.ts";
+export {
+  profileNames,
+  type PiRuntime,
+  type Profile,
+  type ProfileName,
+} from "./pi.ts";
 export type {
   Task,
   Note,
@@ -29,6 +38,9 @@ export type {
   Source,
   ResearchReport,
   SourceEvidence,
+  Check,
+  Exploration,
+  Plan,
 } from "./contracts.ts";
 export { decode, taskSchema, verificationStages } from "./contracts.ts";
 export {

@@ -555,10 +555,7 @@ export class Xean {
                 status: "completed",
                 result,
               });
-            } else if (
-              !(await this.commitDecision(tx, current, result as Decision))
-            )
-              return;
+            } else await this.commitDecision(tx, current, result as Decision);
             await tx.entry(
               "xean.attempt.completed",
               { attemptId: item.attemptId },
@@ -642,7 +639,7 @@ export class Xean {
     tx: Transaction,
     task: PiTask,
     decision: Decision,
-  ): Promise<boolean> {
+  ): Promise<void> {
     if (
       !decision ||
       typeof decision !== "object" ||
@@ -702,7 +699,6 @@ export class Xean {
     tx.state.state = decision.state;
     for (const request of admitted) await tx.newTask(WORKER, request);
     tx.writeTask(terminal(task, { status: "completed", result: decision }));
-    return true;
   }
 
   private recorder(
@@ -934,7 +930,6 @@ export class Xean {
       if (
         tx.state.status === "completed" ||
         tx.state.status === "cancelled" ||
-        tx.state.status === "blocked" ||
         this.closing
       )
         throw new Error("Campaign does not accept call allowance");
@@ -944,20 +939,23 @@ export class Xean {
       if (!Check(positiveIntegerSchema, allowance))
         throw new Error("Call allowance exceeds the safe integer range");
       if (tx.state.callLimitReached) {
-        // A grant cannot reclassify an already-exhausted draining signal as blocking.
-        for (const task of tx.tasks)
-          if (
-            task.kind === COORDINATOR &&
-            task.state.status === "pending" &&
-            task.state.checkpoint.attempts >= tx.state.limits.attempts
-          )
-            await this.failTask(
-              tx,
-              task,
-              `Attempt limit reached for task ${task.id}`,
-            );
+        // A blocked signal and its error survive until explicit resume.
+        if (tx.state.status !== "blocked") {
+          // A grant cannot reclassify an exhausted draining signal as blocking.
+          for (const task of tx.tasks)
+            if (
+              task.kind === COORDINATOR &&
+              task.state.status === "pending" &&
+              task.state.checkpoint.attempts >= tx.state.limits.attempts
+            )
+              await this.failTask(
+                tx,
+                task,
+                `Attempt limit reached for task ${task.id}`,
+              );
+          tx.state.error = null;
+        }
         tx.state.callLimitReached = false;
-        tx.state.error = null;
       }
       tx.state.callAllowance = allowance;
       if (tx.state.status === "limited") tx.state.status = "running";

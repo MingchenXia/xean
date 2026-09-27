@@ -21,6 +21,7 @@ import { getTelemetryContext } from "@earendil-works/pi-agent-core/harness/conte
 import type { Context } from "@earendil-works/chord";
 import type { Execution } from "../types.ts";
 import { auditedStream } from "../pi.ts";
+import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
 import { defaultReasoning } from "./contracts.ts";
 
 export type Profile = { model: Model<Api>; options?: SimpleStreamOptions };
@@ -246,7 +247,12 @@ export async function ask<S extends TSchema>(
       },
       () => {},
       context.abortSignal,
-      auditedStream(runtime.models, execution.recorder, recovery),
+      auditedStream(
+        runtime.models,
+        execution.recorder,
+        // A disconnected browser request may still be running remotely.
+        profile.model.provider === chatGptWebProviderId ? undefined : recovery,
+      ),
     );
     if (value === undefined) throw new Error(`${name} did not finish`);
     return value;

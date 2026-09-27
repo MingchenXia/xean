@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { MemoryStorage } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, Type } from "@earendil-works/pi-ai";
 import { Xean } from "../packages/core/src/index.ts";
 import {
@@ -12,6 +13,7 @@ import {
   declarationVersion,
 } from "../packages/core/src/solve/campaign.ts";
 import { project } from "../packages/core/src/solve/notes.ts";
+import { ask } from "../packages/core/src/solve/pi.ts";
 
 function response(text: string) {
   const item = (phase: string, text: string) => ({
@@ -283,4 +285,53 @@ test("browser provider rejects unsupported calls and settles cancellation withou
     (await models.completeSimple(model, input, options)).stopReason,
   );
   expect(calls).toBe(1);
+});
+
+test("solver recovery never resubmits a disconnected browser request", async () => {
+  const runtime = piRuntime(
+    readSettings({
+      profiles: {
+        default: {
+          provider: "codex-chatgpt-web",
+          model: "chatgpt-web/gpt-6-pro",
+        },
+      },
+    }),
+  );
+  let calls = 0;
+  let settled = 0;
+  runtime.profiles.explorer.options!.fetch = Object.assign(
+    async () => {
+      calls++;
+      // A second request would hide the disconnect behind a successful result.
+      return calls === 1
+        ? new Response("upstream connection lost", { status: 502 })
+        : response('{"answer":true}');
+    },
+    { preconnect: fetch.preconnect },
+  );
+  await expect(
+    ask(
+      runtime,
+      "explorer",
+      "Return the answer",
+      {},
+      Type.Object({ answer: Type.Boolean() }),
+      {
+        attemptId: "browser-disconnect",
+        recorder: {
+          begin: () => ({
+            recordRequest() {},
+            settle(_message, usage) {
+              expect(usage).toBeNull();
+              settled++;
+            },
+          }),
+        },
+      },
+      BACKGROUND_CONTEXT,
+    ),
+  ).rejects.toThrow();
+  expect(calls).toBe(1);
+  expect(settled).toBe(1);
 });

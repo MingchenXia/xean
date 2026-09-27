@@ -1,7 +1,7 @@
 # Why the elevator algorithm takes linear time
 
 For $n$ requests supplied in floor order, the
-[continuation algorithm](../runs/elevator-presorted-2026-09-23-r02/argument.md)
+[continuation algorithm](elevator-note.md)
 takes $O(n)$ time in the unit-cost exact-arithmetic model. Release-time order is
 unused.
 

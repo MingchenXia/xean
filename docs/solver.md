@@ -172,7 +172,7 @@ OpenAI's default prompt cache key is stable for the same model, system, and
 tools while transport sessions remain separate. Caller-supplied keys and
 disabled caching are preserved. Blind proof inputs remain statement-only.
 
-Pi roles recover transient response failures through Pi's `retryAssistantCall`,
+Pi roles other than ChatGPT Web recover transient response failures through Pi's `retryAssistantCall`,
 with at most eight retries per response and exponential backoff starting at one
 second, capped by Pi at one minute. Recovery retains the same session, successful
 messages, tool results, and private submissions. Each retry consumes another
@@ -280,13 +280,13 @@ receipt stores `exitCode`, `failed`, and `isCanceled` alongside stdout/stderr.
 Native token fields
 remain distinct from Pi's usage structure, and no price is invented.
 
-The recorded benchmarks below establish execution and accounting behavior.
-They do not establish reliability on difficult mathematical judgments.
+The [verification procedure](kernel-smoke.md) separates execution and accounting
+checks from evidence about difficult mathematical judgments.
 
 ### Closed-book experiments
 
 The [bounded runner](../scripts/bounded-solve.ts) accepts
-`RUN_DIRECTORY --offline` with `literature: false` in its settings. This
+`RUN_DIRECTORY --offline` with literature disabled (the default). This
 disables literature, online review, and source retrieval. Correctness checks may
 establish standard background permitted by the task after assessing its exact
 statement, hypotheses, and application. Forbidden black boxes remain defects.
@@ -498,8 +498,9 @@ campaign needs no grant.
 stay frozen. A call-limited campaign returns to `running` with its queued work
 preserved. The grant gives Coordinator a fresh signal but does not itself call
 `run()`. Offline campaigns continue with `run CAMPAIGN`.
-Paused campaigns stay paused. Cancellation, completion, and blocking
-remain binding.
+Paused campaigns stay paused. Blocked campaigns retain their Coordinator failure
+and require explicit `resume CAMPAIGN` after the grant. Cancelled and completed
+campaigns reject new grants.
 
 ## Configuration and functions
 
@@ -637,14 +638,37 @@ retains the complete process output.
 `() => PiRuntime`. A supplied factory runs once, on the first role invocation.
 Opening, inspecting, validating commands, and exporting committed work do not
 invoke it.
-To replace the planning strategy, assign `solver.functions.coordinator` on the
-object returned by `createSolver` before opening the kernel. It receives
-`CoordinationInput` and returns `{work: [...]}`. The solver retains its group
-scheduling, note projection, dispatch, and acceptance. The built-in planning
-function's single-Explorer restriction does not constrain a replacement.
-To replace signal handling or scheduling too, supply another `coordinator`
-callback in `XeanOptions`. Its name is part of the stored campaign identity.
-The CLI currently exposes neither implementation selection nor live swapping.
+
+### Replacing implementations
+
+Library callers can replace implementations before opening a campaign:
+
+| Replace                                                 | Public entry point                                                                        | What remains built in                                                                  |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Explorer, Verifier, literature                          | Assign `solver.functions.explorer`, `.verifier`, or `.literature` after `createSolver`    | Group scheduling, publication, note projection, and acceptance                         |
+| Planning                                                | Assign `solver.functions.coordinator`, accepting `CoordinationInput` and returning `Plan` | Signal handling and group scheduling                                                   |
+| Signal handling and scheduling                          | Supply `XeanOptions.coordinator`                                                          | Kernel admission, durable publication, lifecycle, and the selected acceptance callback |
+| Literature, source checking, independent review backend | Supply a `Research` object or factory to `createSolver`                                   | Built-in role procedures                                                               |
+| Models and providers                                    | Supply `PiRuntime` profiles and native Pi providers                                       | Built-in role procedures                                                               |
+| Standalone reconstruction or review                     | Call or replace `.reconstruct` or `.review` on the returned function set                  | Kernel publication when wrapped as a role                                              |
+
+Replacing a planning function also replaces its validation policy, including the
+single-Explorer restriction. Replacement functions are trusted code and must
+honor their exported input/output types and mathematical contracts. A custom
+Verifier supplies the evidence consumed by the solver's acceptance guard.
+
+Individual correctness, requirements, extraction, proof, and comparison
+procedures inside the built-in Verifier are fixed. Their model profiles are
+replaceable. To change those procedures, supply a complete Verifier. Replacing
+the standalone `.reconstruct` function does not change the reconstruction called
+inside the built-in Verifier.
+
+Choose replacements before `Xean.open` and keep them fixed for the campaign.
+The Coordinator's name is part of the stored identity, but arbitrary replacement
+function bodies are not serialized or fingerprinted. Retain the implementation
+source with the campaign. The CLI selects the built-in implementation and has no
+plugin loader or live implementation swapping.
+
 Standalone execution invokes those same functions:
 
 ```sh
@@ -693,52 +717,13 @@ its unpublished calls. Completed worker results and checks survive restart.
 
 ## Current verification
 
-The [rational-curves dependency reconstruction](../runs/rational-curves-reconstruction-2026-09-25/report.md)
-returned PASS for both supporting lemmas and the final claim with Astra at max
-reasoning. Statement extraction, one blind proof batch, and comparison used
-three calls in 23 minutes, recording $2.476380. The exact closed-book task and
-dependency links matched the earlier result. The prover received statements
-without original proofs or prior verdicts, and all three generated claims
-received new reconstruction checks. A separate deployed smoke exercised trusted
-imported support. Both new campaigns reopened without calls, and the historical
-solver campaign remained unchanged.
+Use the [development check](../README.md#development-on-fleet) and
+[provider smoke procedure](kernel-smoke.md#live-provider-checks) for the current
+candidate. The suite exercises source-verdict finality, conditional dependency
+checks, imported support, correction races, batch identity, and reconstruction
+throughout the generated dependency chain.
 
-The [closed-book policy smoke](../runs/solver-policy-2026-09-24T16-35-00-796Z/verified.json)
-used Astra at max reasoning through codex-lb on saturn. Coordinator selected a
-reused unchecked claim despite a prior source-subprocess failure. One correctness
-batch accepted task-permitted Riemann–Roch background and rejected invoking the
-target theorem as a forbidden black box. No retrieval ran. The three calls
-recorded $0.117416 in API-equivalent usage, and reopening preserved the campaign
-and journal. This checks role behavior on a fixture, not the rational-curves theorem.
-
-The artifacts below record the revisions and settings tested. Historical
-campaigns retain their original formats and require their original tooling.
-
-- [Verifier batch](../runs/verifier-smoke-2026-09-23/verified.json): four notes
-  checked on jupiter with Astra at high reasoning. A supporting lemma and valid
-  candidate passed, a false note and dependent failed, and reconstruction stayed
-  blinded. [Source batch](../runs/source-smoke-batch-2026-09-23/verified.json):
-  two DLMF identities shared one Codex invocation. Supplied correctness PASS
-  isolated source execution, and a premise-free note passed without retrieval.
-- [Source reuse](../runs/ssot-2026-09-23T19-04-34-842Z/verified.json):
-  Coordinator read exact notes, and Codex reassessed a previously retrieved
-  quotation without another web action. Reopening preserved results and records.
-- [Lifecycle races](../runs/lifecycle-2026-09-23T19-32-47-840Z/verified.json),
-  [shutdown](../runs/fixes-cli-2026-09-23T19-32-47-839Z/verified.json),
-  [live inputs and crash recovery](../runs/control-2026-09-23T19-32-47-838Z/verified.json),
-  [call grants](../runs/grants-2026-09-23T19-32-47-838Z/verified.json), and
-  [socket failures](../runs/socket-owner-2026-09-23T19-51-45-674Z/verified.json)
-  passed without model calls.
-- The declaration-4 [tree benchmark](../runs/self-contained-mixed-2026-09-23T17-50-20-847Z/solver-verified.json)
-  accepted a self-contained proof using Luna and Astra through one provider.
-  A separate [Codex review](../runs/independent-current-2026-09-23T17-59-07-411Z/verified.json)
-  passed. This establishes different-model execution, not cross-provider validation.
-- The declaration-4 [gamma-shift benchmark](../runs/source-staged-2026-09-23T18-02-36-416Z/solver-verified.json)
-  accepted an imported proof over two supporting notes, exercising lifecycle
-  operations and all verification stages. Its passages retain model-reported
-  provenance. A [longer attempt](../runs/source-staged-2026-09-23T17-59-07-526Z/live.json)
-  hit its deadline during reconstruction and remained unaccepted.
-
-Use the [development check](../README.md#development) to verify the current
-checkout. Earlier checkpoint narratives and source-size snapshots remain in Git
-(`git show 66ba069:docs/solver.md`), with original run artifacts under `runs/`.
+Historical mathematical benchmarks and provider smokes retain their original
+source, settings, and artifacts under local `runs/` directories. Earlier versions
+of this guide record those observations in Git. They are not bundled with a
+release and do not establish verification of a later source revision.

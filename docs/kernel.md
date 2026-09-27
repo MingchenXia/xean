@@ -145,7 +145,9 @@ An ordinary Coordinator exception or exhausted Coordinator allowance records
 `blocked` rejects new input. Explicit `resume()` renews the failed Coordinator
 signal's attempt allowance and records its previous checkpoint, preserving the
 signal ID, accepted input receipts, completed work, and immutable attempt history.
-Call caps remain in force. During provider-call draining,
+Call caps remain in force. If a concurrent worker reaches the call cap while
+the campaign is blocked, add calls with `extendCalls()` before `resume()`.
+During provider-call draining,
 automatic retries stop. A worker failure becomes terminal, and a
 Coordinator failure or exhausted allowance ends that signal so remaining work
 and signals can drain.
@@ -251,8 +253,10 @@ remain valid on reopen.
 
 A grant can return a campaign stopped by its call cap to `running`, clear the
 admission block, and make preserved work runnable. It does not invoke `run()`.
-A paused campaign stays paused. Grants cannot override cancellation,
-completion, or a blocked Coordinator. The CLI's `extend` command
+A paused campaign stays paused. A blocked campaign can receive a grant while
+preserving its Coordinator failure and pending signal. Explicit `resume()` is
+still required. Cancelled and completed campaigns reject new grants.
+The CLI's `extend` command
 uses the active owner's control socket or acquires storage offline.
 
 `auditedStream` from `xean/pi` wraps Pi's native `streamSimple` function. At Pi's

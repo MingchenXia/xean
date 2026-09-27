@@ -9,6 +9,7 @@ import { ROOT_CONVERSATION_ID, type Cursor } from "@earendil-works/pi-durable";
 import { Xean, openXeanStorage, type XeanOptions } from "xean";
 import { observe } from "xean-observe";
 import { serveControl } from "xean-cli/control";
+import { verifyInstall } from "./dependencies.ts";
 import {
   createSolver,
   codexResearch,
@@ -96,6 +97,7 @@ export async function resumeExperiment(engine: Xean, allowance: number) {
 }
 
 if (import.meta.main) {
+  await verifyInstall(resolve(import.meta.dir, ".."));
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     allowPositionals: true,
@@ -119,7 +121,7 @@ if (import.meta.main) {
   const settings = readSettings(
     await Bun.file(resolve(directory, "settings.json")).json(),
   );
-  if (offline) assert.equal(settings.literature, false);
+  if (offline) assert.notEqual(settings.literature, true);
   const solver = createSolver(
     task,
     () => piRuntime(settings),

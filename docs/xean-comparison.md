@@ -4,7 +4,7 @@ This review predates the replacement. Yean below denotes the implementation now
 published as Xean. Historical names, commits, and measurements are preserved.
 
 The September 26, 2026 review compares Xean `8a846d3` with Yean's tested snapshot
-`20deb329` and local working tree. Current Yean behavior belongs in the [kernel](kernel.md)
+`20deb329` and local working tree. Current Xean behavior belongs in the [kernel](kernel.md)
 and [solver](solver.md) guides. Frozen campaigns retain their launch code.
 
 ## Interrupted responses

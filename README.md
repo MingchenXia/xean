@@ -16,17 +16,25 @@ campaigns through the read-only API and displays exported remote snapshots.
 - [Solver guide](docs/solver.md): roles, verification, CLI commands, and configuration.
 - [Glossary](docs/glossary.md): canonical terminology.
 - [Pi alignment](docs/pi-alignment.md): native APIs and deferred adoption.
-- [Xean comparison](docs/xean-comparison.md): reference snapshot and remaining ideas.
+- [Verification](docs/kernel-smoke.md): checks and provider smoke procedures.
+- [Changelog](CHANGELOG.md): release changes and compatibility.
 - [Contributor rules](AGENTS.md): design priorities and repository boundaries.
 
 Matching Pi packages are pinned to one tested main commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
-build, frozen model data, and hashes. The `main` branch at https://github.com/chaoxu/xean is the current distribution. Existing numbered releases remain historical archives.
+build, frozen model data, and hashes. Numbered releases are the stable
+distribution. The `main` branch is development. Version 2.0.0 replaces the
+earlier implementation and requires new campaigns.
 
 ## Install and run
 
-Use a source checkout on Linux or macOS with Bun 1.4.2 or newer. Bun 1.4.2 is
-the tested runtime. The checkout includes the pinned Pi packages and patches.
+Use Bun 1.4.2 on Linux or macOS. Stable users should download and unpack a
+source archive from [Releases](https://github.com/chaoxu/xean/releases), then run
+`bun run setup` in that directory. The archive includes the library, CLI,
+observer, pinned Pi packages, and patches. Individual workspace packages are
+private and are not installed from npm.
+
+For a development checkout:
 
 ```sh
 git clone https://github.com/chaoxu/xean.git
@@ -36,9 +44,20 @@ bun run xean --help
 ```
 
 `setup` installs the frozen dependency lockfile without lifecycle scripts and
-records the exact installation. Run it again after updating the checkout.
-Keep the source commit, lockfile, and runtime version with each campaign. Older
-campaigns must use their original checkout because persisted formats can change.
+records the exact installation. Run it again after changing the checkout or Bun
+runtime. `bun run xean --version` reports the distribution version.
+Keep the release or source commit, lockfile, and runtime version with each
+campaign. Campaigns from before 2.0.0 require their original runtime.
+
+Check the installation without credentials or model calls:
+
+```sh
+bun run check
+bun examples/deterministic.ts
+```
+
+The deterministic example returns `{"status":"completed","result":25}`.
+Repeating it reopens the same committed result.
 
 The [example settings](examples/solver-settings.json) use the public OpenAI API
 with `gpt-6-astra` at max reasoning. Supply `OPENAI_API_KEY` through your shell
@@ -65,9 +84,34 @@ committed work for recovery. The command prints the campaign state when it
 finishes, including paused, blocked, or waiting states. Inspect that state before
 deciding whether a supervisor should restart it.
 
-The library, CLI, and observer are distributed together as a source checkout.
-Individual workspace packages are private. The [MIT license](LICENSE) covers
-Xean, and bundled dependencies retain their own licenses.
+The [MIT license](LICENSE) covers Xean. Bundled dependencies retain their own
+licenses.
+
+## Releases
+
+Stable releases use semantic versions and immutable `vMAJOR.MINOR.PATCH` tags.
+Patch releases fix defects. Minor releases add compatible behavior. Breaking
+public APIs, CLI contracts, or persisted campaign formats require a major release.
+Run ongoing campaigns with their original release and frozen settings.
+
+To prepare a release:
+
+1. Set the root and workspace package versions, update `bun.lock` with a clean
+   install, and describe changes and compatibility in [CHANGELOG.md](CHANGELOG.md).
+2. Run the development check below. It checks types, formatting, tests, matching
+   versions, bundled dependency hashes, and local documentation links.
+3. Verify a clean source archive on Linux and macOS: run setup, check, CLI help
+   and version, the deterministic example twice, and the README's initialization
+   and status commands. Check the observer in a browser. Exercise affected model
+   providers using the [smoke procedure](docs/kernel-smoke.md#live-provider-checks).
+4. Commit the verified source, create the version tag, and publish its source
+   archive, SHA-256 checksum, and release notes on GitHub. Record the tested Bun
+   version, platforms, smoke results, and any provider limitations. Tagging and
+   publication are separate from preparing the candidate.
+
+The [historical comparison](docs/xean-comparison.md) describes the implementation
+replaced by 2.0.0. Earlier tags and campaign artifacts retain their original names
+and formats.
 
 ## Development on Fleet
 
@@ -83,7 +127,7 @@ bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts check
 `install` requires the existing lockfile, performs a clean frozen installation,
 and skips lifecycle scripts. After an intentional dependency edit, use
 `install --update-lockfile`. An installation receipt rejects changed dependency
-inputs until a clean reinstall. `check` runs typechecking, formatting, and tests
+inputs until a clean reinstall. `check` runs typechecking, formatting, distribution checks, and tests
 inside a socket-free Nix build. `format` formats project sources and documentation.
 
 Use the same locked runtime for local CLI work:

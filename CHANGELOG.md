@@ -1,0 +1,41 @@
+# Changelog
+
+## 2.0.0 — 2026-09-27
+
+Xean now uses Pi's durable storage and agent loop, with a smaller campaign kernel,
+a separate CLI, and a read-only observer. The public APIs, CLI, and persisted
+campaign formats replace the 1.x implementation. Keep earlier campaigns on their
+original release. No migration is provided.
+
+- Workers publish their complete result and Coordinator signal atomically.
+  Independent readers can inspect a running campaign without taking ownership.
+  Pause, cancellation, whole-worker recovery, and keyed call grants retain
+  committed work.
+- The solver checks declared dependencies, exact completion criteria, and blind
+  reconstruction of generated supporting claims. Source verdicts are final for
+  each note ID. Trusted imports, guidance, and harmless corrections have durable
+  command receipts.
+- Distribution uses a complete source checkout with pinned Pi artifacts and
+  patches. `xean --version` identifies the release. Checks cover version
+  consistency, dependency provenance, documentation links, and offline behavior.
+- Package scripts retain the invoking Bun runtime even when `PATH` contains an
+  older installation.
+- ChatGPT Web requests are excluded from automatic solver retries after a
+  disconnect. A request already running in the browser must not be duplicated.
+- The closed-book runner accepts the default disabled literature setting.
+  The observer and bounded runner verify the dependency installation before use.
+- Call grants preserve blocked Coordinator failures for explicit recovery when
+  a concurrent worker exhausts the call allowance.
+- Local observer reads include configured process status and logs. Missing
+  observations no longer imply that a campaign is still running.
+- The CLI waits for large inspection reports and exported arguments to finish
+  writing through pipes before exiting.
+- Coordinator instructions clarify that exploration can start with no existing
+  notes and distinguish context notes from mathematical dependencies.
+
+Model judgments remain fallible. Solver acceptance, independent mathematical
+review, and catalog closure remain separate. Provider availability and native
+CLI authentication must be verified in the executing environment.
+
+Earlier releases remain available in the
+[release archive](https://github.com/chaoxu/xean/releases).

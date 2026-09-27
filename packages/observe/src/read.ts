@@ -43,59 +43,58 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
     observedAt: new Date().toISOString(),
   };
   try {
-    if (!source.host) {
-      const db = await realpath(
-        resolve(source.directory, "campaign.sqlite"),
-      ).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw error;
-        return undefined;
-      });
-      if (db)
-        return {
-          ...run,
-          kind: "database",
-          snapshot: snapshot(await inspectCampaign(db, usageRecord)),
-        };
+    const db = source.host
+      ? undefined
+      : await realpath(resolve(source.directory, "campaign.sqlite")).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT") throw error;
+            return undefined;
+          },
+        );
+    if (db) {
+      run.kind = "database";
+      run.snapshot = snapshot(await inspectCampaign(db, usageRecord));
+    } else {
+      const artifacts = source.host
+        ? (JSON.parse(
+            (
+              await execa(
+                "ssh",
+                [
+                  "-oBatchMode=yes",
+                  "-oConnectTimeout=10",
+                  source.host,
+                  source.runtime!,
+                  "--no-install",
+                  "--no-env-file",
+                  "run",
+                  "-",
+                ],
+                {
+                  input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nconsole.log(JSON.stringify(await readArtifacts(${JSON.stringify(source.directory)})));`,
+                },
+              )
+            ).stdout,
+          ) as Awaited<ReturnType<typeof readArtifacts>>)
+        : await readArtifacts(source.directory);
+      run.kind = artifacts.kind;
+      if (artifacts.kind === "snapshot") {
+        if (
+          artifacts.value?.schema !== "xean-observe/v1" ||
+          typeof artifacts.value.observedAt !== "string" ||
+          !artifacts.value.status?.calls ||
+          !Array.isArray(artifacts.value.notes) ||
+          !Array.isArray(artifacts.value.work)
+        )
+          throw new Error("Unsupported observation schema");
+        run.snapshot = artifacts.value;
+      } else if (artifacts.kind === "export") {
+        if (artifacts.value.campaign?.version !== campaignVersion)
+          throw new Error("Unsupported campaign export");
+        run.snapshot = snapshot(artifacts.value, artifacts.at);
+      } else run.heartbeat = artifacts.value;
+      run.observedAt = artifacts.at;
     }
-    const artifacts = source.host
-      ? (JSON.parse(
-          (
-            await execa(
-              "ssh",
-              [
-                "-oBatchMode=yes",
-                "-oConnectTimeout=10",
-                source.host,
-                source.runtime!,
-                "--no-install",
-                "--no-env-file",
-                "run",
-                "-",
-              ],
-              {
-                input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nconsole.log(JSON.stringify(await readArtifacts(${JSON.stringify(source.directory)})));`,
-              },
-            )
-          ).stdout,
-        ) as Awaited<ReturnType<typeof readArtifacts>>)
-      : await readArtifacts(source.directory);
-    run.kind = artifacts.kind;
-    if (artifacts.kind === "snapshot") {
-      if (
-        artifacts.value?.schema !== "xean-observe/v1" ||
-        typeof artifacts.value.observedAt !== "string" ||
-        !artifacts.value.status?.calls ||
-        !Array.isArray(artifacts.value.notes) ||
-        !Array.isArray(artifacts.value.work)
-      )
-        throw new Error("Unsupported observation schema");
-      run.snapshot = artifacts.value;
-    } else if (artifacts.kind === "export") {
-      if (artifacts.value.campaign?.version !== campaignVersion)
-        throw new Error("Unsupported campaign export");
-      run.snapshot = snapshot(artifacts.value, artifacts.at);
-    } else run.heartbeat = artifacts.value;
-    run.observedAt = artifacts.at;
     if (source.job) {
       const nomad = (args: string[]) =>
         execa(resolve(fleet, "bin/fleet-nomad"), args, {

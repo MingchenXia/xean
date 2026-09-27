@@ -11,6 +11,7 @@ const formatPaths = [
   "packages",
   "vendor",
   "README.md",
+  "CHANGELOG.md",
   "AGENTS.md",
   "docs",
   "package.json",
@@ -27,6 +28,7 @@ const commands = process.argv.includes("--write")
   : [
       ["node_modules/typescript/bin/tsc", "--noEmit"],
       format,
+      ["scripts/check-distribution.ts"],
       ["test", "tests"],
     ];
 

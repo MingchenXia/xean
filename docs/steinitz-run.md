@@ -50,7 +50,7 @@ Its local evidence is `runs/cap-probe-verified.json`.
 The allocation `fe3fdcef-84df-51c7-f10c-705650342dec` started on jupiter
 at 2026-09-23 20:23:48 UTC from source commit
 `e71ec7dfd6fa1193be3e6da4a61278732dd909a6`. It drained and paused after
-20 rounds without an accepted solution. The [run audit](../runs/run-review-2026-09-24/report.md)
+20 rounds without an accepted solution. The local run audit, `runs/run-review-2026-09-24/report.md`,
 records its mathematical findings, costs, and operational concerns. Its durable
 artifacts are under `jupiter:/srv/xean-lab/runs/_yean/steinitz-2026-09-23/`.
 Local task, settings, source hashes, submission receipts, and the

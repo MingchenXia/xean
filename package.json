@@ -1,6 +1,6 @@
 {
   "name": "xean-workspace",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -8,9 +8,9 @@
     "bun": ">=1.4.2"
   },
   "scripts": {
-    "setup": "bun scripts/dev.ts install",
-    "xean": "bun packages/cli/src/index.ts",
-    "check": "bun scripts/check.ts"
+    "setup": "\"$npm_execpath\" scripts/dev.ts install",
+    "xean": "\"$npm_execpath\" packages/cli/src/index.ts",
+    "check": "\"$npm_execpath\" scripts/check.ts"
   },
   "workspaces": [
     "packages/*"

@@ -13,6 +13,7 @@ import {
   type Declaration,
 } from "xean/solve";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
+import { version } from "../../../package.json";
 import {
   campaignReport,
   ownerReport,
@@ -23,12 +24,13 @@ import {
 } from "./control.ts";
 import { statusReport, usageRecord } from "./report.ts";
 
-function print(value: unknown) {
-  console.log(JSON.stringify(value, null, 2));
+async function print(value: unknown): Promise<void> {
+  await Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
 }
 
 const program = new Command("xean")
   .description("Run and inspect durable mathematical work")
+  .version(version)
   .option("--campaign-dir <dir>", "Directory for named campaigns", ".xean")
   .option("--records", "Include durable call and attempt records")
   .option(
@@ -87,7 +89,7 @@ async function runCampaign(
       records: records(),
     });
     if (receipt !== undefined) {
-      print(receipt);
+      await print(receipt);
       return;
     }
   }
@@ -111,17 +113,17 @@ async function runCampaign(
       process.off("SIGTERM", interrupt);
       await shutdown;
     }
-    if (!shutdown) print(await ownerReport(engine, records()));
+    if (!shutdown) await print(await ownerReport(engine, records()));
   });
 }
 
 async function sendCommand(target: string, command: OwnerCommand) {
   const path = await realpath(campaignPath(target));
   const receipt = await requestOwner(path, command);
-  if (receipt !== undefined) print(receipt);
+  if (receipt !== undefined) await print(receipt);
   else
     await withCampaign(path, {}, async (engine) => {
-      print(await controlCommand(engine, command));
+      await print(await controlCommand(engine, command));
     });
 }
 
@@ -135,7 +137,7 @@ program
       settings: await read(settings),
     });
     await withCampaign(campaign, { declaration }, async (engine) => {
-      print(await ownerReport(engine, records()));
+      await print(await ownerReport(engine, records()));
     });
   });
 for (const method of ["run", "resume"] as const)
@@ -150,7 +152,9 @@ for (const kind of ["pause", "cancel"] as const)
     );
 program.command("inspect <campaign>").action(async (campaign: string) => {
   const snapshot = await inspectCampaign(campaignPath(campaign), records());
-  print(campaignReport(records() ? snapshot : { campaign: snapshot.campaign }));
+  await print(
+    campaignReport(records() ? snapshot : { campaign: snapshot.campaign }),
+  );
 });
 program
   .command("status <campaign>")
@@ -203,7 +207,7 @@ program.command("export <campaign>").action(async (target: string) => {
     !result?.argument
   )
     throw new Error("No accepted argument");
-  console.log(result.argument);
+  await Bun.write(Bun.stdout, result.argument + "\n");
 });
 for (const kind of ["submit", "guide", "correct"] as const) {
   program
