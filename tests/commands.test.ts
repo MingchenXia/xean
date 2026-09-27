@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { Xean } from "../packages/core/src/index.ts";
+import { declarationVersion } from "../packages/core/src/solve/contracts.ts";
 import {
   guidance,
   submitCommand,
@@ -42,7 +43,7 @@ test("solver imports are trusted over verified support, preserve corrections, an
     },
   };
   const engine = await Xean.open(new MemoryStorage(), {
-    task: "external mathematical input",
+    task: { kind: "xean.solve", version: declarationVersion },
     roles: [
       {
         name: "fixture",
@@ -266,7 +267,7 @@ test("automatic corrections follow commit order and stale proposals retain check
   const published = Promise.withResolvers<void>();
   const pass = { verdict: "PASS", report: "Checked." };
   const engine = await Xean.open(storage, {
-    task: "correction ordering",
+    task: { kind: "xean.solve", version: declarationVersion },
     validateInput: validateCommand,
     roles: [
       {

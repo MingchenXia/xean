@@ -1,6 +1,60 @@
 import { expect, test } from "bun:test";
-import { Xean, openXeanStorage } from "xean";
-import { createSolver, type Plan, type Task } from "xean/solve";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Xean, inspectCampaign, openXeanStorage } from "xean";
+import { createSolver, project, type Plan, type Task } from "xean/solve";
+
+test("direct library campaigns reject historical bare tasks without changing their records", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-library-format-"));
+  const path = join(directory, "campaign.sqlite");
+  const task = { problem: "Prove P", completionCriteria: "Complete proof" };
+  try {
+    const historical = await Xean.open(await openXeanStorage(path), {
+      task,
+      roles: [],
+      coordinator: {
+        name: "xean.coordinator",
+        run: () => ({ state: null }),
+      },
+    });
+    try {
+      await historical.input({
+        kind: "submit",
+        id: "legacy",
+        candidate: false,
+        notes: [{ id: "n1", summary: "P", text: "Proof of P", support: [] }],
+      });
+    } finally {
+      await historical.close();
+    }
+    const before = await inspectCampaign(path);
+    let runtimeLoads = 0;
+    const solver = createSolver(task, () => {
+      runtimeLoads++;
+      throw new Error("Historical campaign must not initialize models");
+    });
+    const storage = await openXeanStorage(path);
+    const checks = await Promise.allSettled([
+      Promise.resolve().then(() => project(before.campaign)),
+      Xean.open(storage, solver).then((engine) => engine.close()),
+    ]);
+    expect(await inspectCampaign(path)).toEqual(before);
+    expect(runtimeLoads).toBe(0);
+    expect(checks).toMatchObject([
+      {
+        status: "rejected",
+        reason: { message: expect.stringContaining("Unsupported solver") },
+      },
+      {
+        status: "rejected",
+        reason: { message: expect.stringContaining("Task differs") },
+      },
+    ]);
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
 
 test("public solver functions replace planning, Explorer, and Verifier without constructing Pi", async () => {
   const task: Task = {

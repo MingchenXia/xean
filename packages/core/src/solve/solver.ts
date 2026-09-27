@@ -11,6 +11,7 @@ import {
 } from "./notes.ts";
 import {
   decode,
+  declarationVersion,
   taskSchema,
   verificationTargets,
   type ExplorerInput,
@@ -142,7 +143,7 @@ export function createSolver(
     return expected !== undefined && isDeepStrictEqual(candidate, expected);
   };
   return {
-    task,
+    task: { kind: "xean.solve.library", version: declarationVersion, task },
     roles,
     coordinator,
     accept,

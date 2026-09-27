@@ -681,6 +681,10 @@ retains the complete process output.
 `() => PiRuntime`. A supplied factory runs once, on the first role invocation.
 Opening, inspecting, validating commands, and exporting committed work do not
 invoke it.
+`createSolver` returns kernel options whose `task` is a versioned solver
+declaration. Its `task.task` holds the mathematical task. Direct library campaigns
+therefore enforce the same format boundary as CLI campaigns when reopened or
+projected. Keep older campaigns on their original runtime.
 
 ### Replacing implementations
 

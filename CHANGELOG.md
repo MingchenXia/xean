@@ -16,6 +16,9 @@ campaigns and exports on their matching runtime. No migration is provided.
   Correctness checks the implication, source checks its external results, and
   requirements decides whether it solves the original task.
 - The observer shows detailed summaries before the full-note disclosure.
+- Direct `createSolver` campaigns record the solver format version and reject
+  reopening historical unversioned campaigns. Note projection requires a current
+  solver declaration.
 - Completed private-work recovery was investigated against Pi and the predecessor.
   Whole-worker recovery remains in place. The missing durable integration is
   documented in Pi alignment.

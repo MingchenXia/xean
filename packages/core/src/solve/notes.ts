@@ -182,11 +182,8 @@ export function refresh(notes: Note[]): Note[] {
 
 /** Project immutable worker results and accepted inputs without modifying either. */
 export function project(view: CampaignView): Note[] {
-  const declaration = view.task as { kind?: string; version?: number } | null;
-  if (
-    declaration?.kind?.startsWith("xean.solve") &&
-    declaration.version !== declarationVersion
-  )
+  const declaration = view.task as { version?: number } | null;
+  if (declaration?.version !== declarationVersion)
     throw new Error("Unsupported solver declaration; use its matching runtime");
   const notes: Note[] = [];
   const append = (

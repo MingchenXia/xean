@@ -344,7 +344,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     };
     const reused = await solver.functions.verifier(
       {
-        task: solver.task,
+        task: solver.task.task,
         notes,
         targets: [{ id: notes[1]!.id, through: "reconstruction" }],
       },
@@ -363,7 +363,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
       report: "Missing evidence",
     };
     expect(solver.accept(result.result, invalid)).toBe(false);
-    const offline = createSolver(solver.task, () => {
+    const offline = createSolver(solver.task.task, () => {
       throw new Error("Committed evidence needs no models");
     });
     const decision = await offline.coordinator.run(
