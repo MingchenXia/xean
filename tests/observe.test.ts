@@ -7,6 +7,21 @@ import { observe } from "../packages/observe/src/snapshot.ts";
 import { readRun, type Run } from "../packages/observe/src/read.ts";
 import { api, readSources } from "../packages/observe/src/server.ts";
 
+async function fakeNomad(directory: string, failLogs?: "stdout" | "stderr") {
+  await mkdir(join(directory, "bin"), { recursive: true });
+  await writeFile(
+    join(directory, "bin/fleet-nomad"),
+    `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === "job") console.log(JSON.stringify([{ ID: "allocation", CreateIndex: 1, ClientStatus: "failed" }]));
+else if ((args.includes("-stderr") ? "stderr" : "stdout") === ${JSON.stringify(failLogs)}) throw new Error("logs unavailable");
+else if (args.includes("-stderr")) console.log("worker stopped");
+else console.log(JSON.stringify({ calls: 3, rounds: 2, active: [] }) + "\\nnull");
+`,
+    { mode: 0o700 },
+  );
+}
+
 test("the external observer reads coherent live snapshots without changing a locked campaign", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-observe-"));
   const database = join(directory, "campaign.sqlite");
@@ -94,17 +109,7 @@ test("the external observer reads coherent live snapshots without changing a loc
     });
     expect(JSON.stringify(after)).not.toContain("request body");
     expect(JSON.stringify(after)).not.toContain("response body");
-    await mkdir(join(directory, "bin"));
-    await writeFile(
-      join(directory, "bin/fleet-nomad"),
-      `#!${process.execPath}
-const args = process.argv.slice(2);
-if (args[0] === "job") console.log(JSON.stringify([{ ID: "allocation", CreateIndex: 1, ClientStatus: "failed" }]));
-else if (args.includes("-stderr")) console.log("worker stopped");
-else console.log(JSON.stringify({ calls: 3, rounds: 2, active: [] }));
-`,
-      { mode: 0o700 },
-    );
+    await fakeNomad(directory);
     const supervised = await readRun(
       { id: "fixture", directory, job: "fixture-job" },
       directory,
@@ -180,9 +185,26 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
       join(directory, "observation.json"),
       JSON.stringify({ schema: "unsupported" }),
     );
-    expect(
-      (await readRun({ id: "old", directory }, directory)).error,
-    ).toContain("Unsupported observation");
+    for (const failed of ["stdout", "stderr"] as const) {
+      await fakeNomad(directory, failed);
+      const unavailable = await readRun(
+        { id: "old", directory, job: "fixture-job" },
+        directory,
+      );
+      expect(unavailable.error).toContain("Unsupported observation");
+      expect(unavailable.error).toContain("logs unavailable");
+      expect(unavailable.process).toMatchObject({
+        status: "failed",
+        ...(failed === "stdout"
+          ? { log: "", errorLog: "worker stopped\n" }
+          : {
+              calls: 3,
+              rounds: 2,
+              log: expect.stringContaining('"calls":3'),
+              errorLog: "",
+            }),
+      });
+    }
     expect(() =>
       readSources(
         [

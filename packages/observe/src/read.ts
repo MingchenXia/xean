@@ -42,6 +42,9 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
     source: `${source.host ? `${source.host}:` : ""}${source.directory}`,
     observedAt: new Date().toISOString(),
   };
+  const reportError = (error: unknown) => {
+    run.error = [run.error, String(error)].filter(Boolean).join("\n");
+  };
   try {
     const db = source.host
       ? undefined
@@ -71,7 +74,7 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
                   "-",
                 ],
                 {
-                  input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nconsole.log(JSON.stringify(await readArtifacts(${JSON.stringify(source.directory)})));`,
+                  input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nawait Bun.write(Bun.stdout, JSON.stringify(await readArtifacts(${JSON.stringify(source.directory)})));`,
                 },
               )
             ).stdout,
@@ -95,6 +98,10 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
       } else run.heartbeat = artifacts.value;
       run.observedAt = artifacts.at;
     }
+  } catch (error) {
+    reportError(error);
+  }
+  try {
     if (source.job) {
       const nomad = (args: string[]) =>
         execa(resolve(fleet, "bin/fleet-nomad"), args, {
@@ -108,26 +115,32 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
         (a, b) => b.CreateIndex - a.CreateIndex,
       )[0];
       if (allocation) {
+        run.process = {
+          status: allocation.ClientStatus,
+          observedAt: new Date().toISOString(),
+          log: "",
+          errorLog: "",
+        };
+        const readLog = async (stderr: boolean) => {
+          try {
+            return await nomad([
+              "alloc",
+              "logs",
+              ...(stderr ? ["-stderr"] : []),
+              "-tail",
+              "-n",
+              stderr ? "10" : "20",
+              allocation.ID,
+              "solver",
+            ]);
+          } catch (error) {
+            reportError(error);
+            return "";
+          }
+        };
         const [log, errorLog] = await Promise.all([
-          nomad([
-            "alloc",
-            "logs",
-            "-tail",
-            "-n",
-            "20",
-            allocation.ID,
-            "solver",
-          ]),
-          nomad([
-            "alloc",
-            "logs",
-            "-stderr",
-            "-tail",
-            "-n",
-            "10",
-            allocation.ID,
-            "solver",
-          ]),
+          readLog(false),
+          readLog(true),
         ]);
         const heartbeats = log.split("\n").flatMap((line) => {
           try {
@@ -137,21 +150,19 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
           }
         });
         const latest = heartbeats.findLast(
-          (row) => typeof row.calls === "number",
+          (row) => typeof row?.calls === "number",
         );
-        run.process = {
-          status: allocation.ClientStatus,
-          observedAt: new Date().toISOString(),
+        Object.assign(run.process, {
           rounds: latest?.rounds,
           calls: latest?.calls,
           active: latest?.active,
           log,
           errorLog,
-        };
+        });
       }
     }
   } catch (error) {
-    run.error = String(error);
+    reportError(error);
   }
   return run;
 }

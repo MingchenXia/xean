@@ -27,7 +27,9 @@ original release. No migration is provided.
 - Call grants preserve blocked Coordinator failures for explicit recovery when
   a concurrent worker exhausts the call allowance.
 - Local observer reads include configured process status and logs. Missing
-  observations no longer imply that a campaign is still running.
+  observations no longer imply that a campaign is still running. Process status
+  remains visible when snapshots or logs cannot be read, and remote snapshots
+  finish writing before their helper exits.
 - The CLI waits for large inspection reports and exported arguments to finish
   writing through pipes before exiting.
 - Coordinator instructions clarify that exploration can start with no existing
@@ -37,5 +39,5 @@ Model judgments remain fallible. Solver acceptance, independent mathematical
 review, and catalog closure remain separate. Provider availability and native
 CLI authentication must be verified in the executing environment.
 
-Earlier releases remain available in the
-[release archive](https://github.com/chaoxu/xean/releases).
+Earlier source versions remain available under the
+[historical tags](https://github.com/chaoxu/xean/tags).

@@ -62,12 +62,9 @@ function stream(
     options.signal?.throwIfAborted();
     const imageStore = new SessionImageStore();
     imageStore.open();
-    let settle!: () => void;
-    const settled = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
+    const settled = Promise.withResolvers<void>();
     const source = createClaudeStream(installation, {
-      onSettled: settle,
+      onSettled: settled.resolve,
       resolveSession: () => ({
         cwd,
         imageStore,
@@ -85,7 +82,7 @@ function stream(
         }
       } finally {
         // Upstream may announce cancellation before its process tree has exited.
-        await settled;
+        await settled.promise;
         try {
           await imageStore.close();
         } catch (error) {

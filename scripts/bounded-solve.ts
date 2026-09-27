@@ -150,10 +150,8 @@ if (import.meta.main) {
   let engine = await Xean.open(storage, options);
   const stopObserving = observe(engine, directory);
   let control: Awaited<ReturnType<typeof serveControl>> | undefined;
-  let interrupted = false;
   let shutdown: Promise<unknown> | undefined;
   const interrupt = () => {
-    interrupted = true;
     shutdown ??= Promise.all([control?.close(true), engine.close()]);
     void shutdown.catch(() => {});
   };
@@ -224,7 +222,7 @@ if (import.meta.main) {
     if (values.resume) await resumeExperiment(engine, allowance);
     else await engine.run();
     await control.close();
-    if (interrupted) process.exitCode = 130;
+    if (shutdown) process.exitCode = 130;
     else {
       let campaign = await engine.inspect();
       const roundLimit =

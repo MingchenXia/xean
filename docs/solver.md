@@ -229,13 +229,16 @@ there is no useful new result. It records citations in ordinary note text withou
 a mandatory bibliographic schema or a Xean web-action cap. Citation typos alone do not fail
 otherwise checked mathematics.
 
-The Codex role calls `codex exec` through Execa with live web search, a read-only
+The Codex role calls `codex exec` through Execa with `web_search="live"`, a read-only
 sandbox, structured output, and a temporary working directory. Research disables
-the shell with the native `features.shell_tool = false` setting. Source retrieval
-uses Codex web tools, including PDF reading, without requiring nested Linux
-sandbox namespaces. See the [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
-Codex reads its
-own configuration and login. Xean does not parse configuration, copy credentials,
+the native shell with `features.shell_tool=false`. The selected Codex runtime,
+model, and provider must expose native web search. Qualify the exact command and
+profile with a source check that opens a primary source. Successful startup alone
+does not establish retrieval. See the [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+Custom providers that implement Codex's standalone search endpoint need
+`supports_standalone_web_search=true` in their native provider configuration
+for Responses Lite models.
+Codex reads its own configuration and login. Xean does not parse configuration, copy credentials,
 or manage Codex sessions. An optional `profile` selects a native Codex profile.
 The invoking environment and Codex configuration are trusted role inputs. Use a
 dedicated `CODEX_HOME` or profile when the role needs different tools or settings.
@@ -248,7 +251,8 @@ operation ID, report time, and exact `premises`, using the `ResearchReport` type
 Fresh passages retain their reported URLs and quotations, an ID derived from
 the original operation, and the original premise as `statement`. Codex's JSONL records web activity but
 does not reliably expose page contents or opened URLs. Fresh external passages
-require observed web activity. A task-granted premise instead uses
+require completed native `web_search` items in that invocation. Arbitrary tool
+calls do not establish web activity. A task-granted premise instead uses
 `url: "urn:xean:task"` with an exact quotation from the supplied problem or
 completion criteria, checked against the current task even when reused. Codex
 must distinguish granted assumptions from requested conclusions or assertions
