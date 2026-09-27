@@ -61,6 +61,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
         {
           id: "n1",
           summary: "First",
+          detailedSummary: "Preserve the mathematical notation.",
           text: "Preserve a_b and \\sum_i exactly.",
           support: [],
         },
@@ -72,6 +73,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
         {
           id: "n2",
           summary: "Invalid",
+          detailedSummary: "This claim has unknown support.",
           text: "Unknown support",
           support: ["missing"],
         },
@@ -83,6 +85,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
         {
           id: "n2",
           summary: "Final",
+          detailedSummary: "The final claim uses the first note.",
           text: "Use the first note.",
           support: ["n1"],
         },

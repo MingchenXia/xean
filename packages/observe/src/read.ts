@@ -83,7 +83,7 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
       run.kind = artifacts.kind;
       if (artifacts.kind === "snapshot") {
         if (
-          artifacts.value?.schema !== "xean-observe/v1" ||
+          artifacts.value?.schema !== "xean-observe/v2" ||
           typeof artifacts.value.observedAt !== "string" ||
           !artifacts.value.status?.calls ||
           !Array.isArray(artifacts.value.notes) ||

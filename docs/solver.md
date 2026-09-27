@@ -10,8 +10,9 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
 ## Roles and acceptance
 
 - Explorer receives note summaries, verification feedback, selected support
-  texts, and Coordinator guidance. It owns mathematical strategy and reasons
-  without retrieval tools. Its submissions stay private until the whole worker
+  texts, and Coordinator guidance by default. Setting `explorer: "retrieval"`
+  gives it internal note tools instead of upfront full texts. It owns mathematical
+  strategy. Both variants have no external search tools. Its submissions stay private until the whole worker
   returns. A `candidate` claim, an empty submission, prose after a valid
   submission, or `maxExplorerResponses` ends the worker. Every response counts
   toward that limit, and each follow-up states how many remain.
@@ -26,8 +27,8 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
   Explorer's proof steps or imposing a verification quota. Workers return results,
   not proposed work requests.
   Its first prompt contains summaries and feedback. Pi's `read_notes` tool
-  retrieves selected exact texts from the same frozen input, including dead
-  notes when diagnosing an approach. Reading does not authorize using a dead
+  retrieves detailed summaries or full texts from the same frozen input.
+  `find_notes` searches that snapshot. Both can read dead notes for diagnosis. Reading does not authorize using a dead
   note as support or change the verification requirements.
 - Verifier requests select a stopping stage: `correctness`, `source`,
   `requirements`, or `reconstruction`. Each stage checks multiple notes in one
@@ -80,6 +81,15 @@ notes without external premises pass that stage without a call. Requirements
 checks only verified notes. Missing, duplicate, or unexpected result IDs reject
 the entire submitted batch. Pi lets the model correct an invalid submission.
 
+For an explicit conditional claim `P implies Q`, correctness checks the derivation
+of Q assuming P. The antecedent stays in the claim and is omitted from external
+`premises`. Source checks external results used to prove the implication.
+An unstated assumption in an unconditional claim remains a defect. Requirements
+alone decides whether the conditional result meets the original completion
+criteria. Proving an implication does not establish its antecedent. Blind
+extraction preserves the antecedent in the statement, and reconstruction checks
+that the exact conditional claim was proved.
+
 A note ID receives at most one committed source verdict. This includes
 INCONCLUSIVE, which permanently leaves that note unresolved and blocks its
 dependents from verification and acceptance. Harmless corrections and new
@@ -98,7 +108,7 @@ external premises also remain assumptions. Imported notes explicitly selected
 as targets must themselves be reconstructed.
 
 The blind prover receives the task, extracted statements, permitted premises,
-and dependency links. Original proofs, summaries, and verifier reports are
+and dependency links. Original proofs, index and detailed summaries, and verifier reports are
 withheld. Each proof may use only its declared transitive support and permitted
 background. Shared dependencies appear once. Previously checked descendants
 are excluded when retrying an unresolved ancestor.
@@ -120,10 +130,36 @@ Completed checks and earlier stopping stages reduce calls; invalid model outputs
 can require additional requests. Each stage retains its configured model profile.
 
 Notes and their summaries are the shared mathematical memory and must suffice to
-continue the task. Summaries state the claim, decisive hypotheses, and limitations
-concisely, with proof details in the full text. Coordinator reads exact texts only
-when needed for its decision and batches independent note IDs in one tool call. Failed approaches belong in notes, and guidance supplies
-scheduling direction. Explorer may receive rejected notes as context for diagnosis.
+continue the task. Every ordinary note contains `summary` for the index,
+`detailedSummary` for its actual claims or findings, decisive conditions, bounds,
+and unresolved gaps, and authoritative full `text` with arguments and evidence.
+Both summaries preserve conditionality, negative conclusions, and limitations.
+Detailed summaries may explain proof methods. Roles produce all three in their
+normal submission, without a separate summarization call or fixed length ratio.
+Verification receives full notes and dependencies. Summary views change neither
+verification status nor dependency obligations.
+
+Coordinator and the retrieval Explorer begin with index summaries and feedback.
+`find_notes` performs case-insensitive literal substring search across IDs,
+summaries, and full text. It returns up to 50 index entries, with `nextOffset`
+for paging. An empty query lists notes. `read_notes` takes up to 20 unique `ids`
+and a `level` of `detailed` or `full`. Reads include verification state, support
+IDs, and failure feedback. Independent IDs should be batched. Full text is never
+truncated, and support IDs can be read in further calls. Read the full note when
+a summary omits material detail.
+
+Set `explorer` to `prefilled` (the default) or `retrieval` at campaign creation.
+Both use the same frozen `ExplorerInput`: the full committed `notes` snapshot,
+selected `support` IDs, task, and guidance. The prefilled variant receives the
+selected support closure as full texts. The retrieval variant receives those IDs
+and may query the snapshot. Notes committed after dispatch remain invisible,
+including on a worker retry. Internal retrieval works with literature and source
+retrieval disabled. Every retrieval response counts toward the unchanged default
+four-response allowance. The same single-Explorer scheduling and verification
+contracts apply to both variants.
+
+Failed approaches belong in notes, and guidance supplies scheduling direction.
+Dead notes remain readable for diagnosis but cannot be mathematical dependencies.
 Notes have stable IDs derived from their producing work or external command and
 local note ID.
 Support names actual mathematical dependencies. Missing, cyclic, forward, and
@@ -138,16 +174,16 @@ checks and verification status, increment the revision, and leave dependencies
 unchanged. A change to a claim, assumptions, argument, or dependencies requires
 a new note. Original worker results and command receipts remain immutable.
 
-A verdict may include `correctedText` containing the complete note text with
-harmless edits. Only the stage's final PASS applies it, including after any
+A verdict may include `correction: {summary, detailedSummary, text}` containing
+the complete note and consistent summaries with harmless edits. Only the stage's final PASS applies it, including after any
 source-evidence or reconstruction checks that can downgrade a verdict. Later
 stages use the corrected text privately. The complete verifier result publishes
-`Check.correction: {revision, text}` atomically with its checks. Projection merges
+`Check.correction: {revision, summary, detailedSummary, text}` atomically with its checks. Projection merges
 worker publications and input receipts in commit order using `Work.publicationId`
-and input IDs. A matching revision applies the text and increments the revision.
-A stale automatic proposal leaves newer text intact and retains the completed
+and input IDs. A matching revision applies all three views and increments the revision.
+A stale automatic proposal leaves newer content intact and retains the completed
 checks. This differs from a stale manual `correct` command, which is rejected.
-Projected note checks omit `Check.correction` and verdict `correctedText`
+Projected note checks omit `Check.correction` and verdict `correction`
 payloads, so later role inputs contain the current note text without old edit
 proposals. Immutable worker results and call records retain the original payloads.
 
@@ -185,7 +221,7 @@ invocation and publishes no partial mathematical result. This recovery is local
 to a live invocation. Reopening after process death still restarts the worker.
 
 Codex research uses developer instructions, JSON stdin, and an output schema.
-Its source/review schema requires `correctedText`, with `null` meaning no edit;
+Its source/review schema requires `correction`, with `null` meaning no edit;
 the adapter omits that null in local verdicts. This follows OpenAI's
 [strict structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs#all-fields-must-be-required).
 
@@ -417,6 +453,7 @@ still return their existing receipts. Only solver campaigns accept these command
     {
       "id": "n1",
       "summary": "Base case",
+      "detailedSummary": "A one-vertex tree has zero edges, establishing the base case.",
       "text": "A tree with one vertex has no edges.",
       "support": []
     }
@@ -454,12 +491,14 @@ workers already running.
 {
   "note": "input/supplied-lemma/n1",
   "revision": 0,
+  "summary": "Base case",
+  "detailedSummary": "A one-vertex tree has zero edges, establishing the base case.",
   "text": "A tree on one vertex has no edges."
 }
 ```
 
-An optional `summary` replaces the summary too. The accepted correction increments
-the revision and preserves all checks. A stale revision is rejected. This
+All three content fields are required so displayed summaries stay consistent with
+the full text. The accepted correction increments the revision and preserves all checks. A stale revision is rejected. This
 operation trusts the editor to make only typography, formatting, or unambiguous
 notation corrections that need no verifier. It cannot change `support`.
 Substantive mathematical edits must be submitted as new notes.
@@ -635,8 +674,8 @@ The `xean/solve` export provides `createSolver`, `createRoles`, the native Pi
 runtime configuration, and note projection. Roles remain ordinary functions.
 The selected `Research` implementation declares its `retrieval` capability.
 Coordinator sees whether source retrieval and literature are available. A
-disabled capability cannot be delegated to Explorer, which has no retrieval
-tools. Codex failures expose stderr as their diagnostic, while the journal
+disabled external capability cannot be delegated to Explorer. Its optional tools
+only read internal frozen notes. Codex failures expose stderr as their diagnostic, while the journal
 retains the complete process output.
 `createSolver` and `campaignOptions` accept either a `PiRuntime` or a factory
 `() => PiRuntime`. A supplied factory runs once, on the first role invocation.
@@ -710,7 +749,7 @@ The library is in `packages/core`, and `xean-cli` is in `packages/cli`. The CLI
 uses public declaration/loading and campaign APIs. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 7, with distinct solver, standalone-role, and review kinds. Only this
+version 8, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the

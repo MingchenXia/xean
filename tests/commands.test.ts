@@ -21,7 +21,13 @@ test("solver imports are trusted over verified support, preserve corrections, an
       kind: "notes",
       candidate: false,
       notes: [
-        { id: "n1", text: "Checked lemma.", summary: "Lemma", support: [] },
+        {
+          id: "n1",
+          text: "Checked lemma.",
+          summary: "Lemma",
+          detailedSummary: "Checked lemma.",
+          support: [],
+        },
       ],
     },
     checks: {
@@ -75,12 +81,14 @@ test("solver imports are trusted over verified support, preserve corrections, an
           id: "n1",
           text: "Imported lemma.",
           summary: "Import",
+          detailedSummary: "Imported lemma over established support.",
           support: [established.id],
         },
         {
           id: "n2",
           text: "Imported proof.",
           summary: "Proof",
+          detailedSummary: "Imported proof using the lemma.",
           support: ["n1"],
         },
       ],
@@ -136,6 +144,7 @@ test("solver imports are trusted over verified support, preserve corrections, an
       revision: 0,
       text: "Checked lemma, with corrected typography.",
       summary: "Corrected lemma",
+      detailedSummary: "Checked lemma with corrected typography.",
     };
     await expect(
       engine.input({ ...correction, revision: "0" }, correction.id),
@@ -154,12 +163,15 @@ test("solver imports are trusted over verified support, preserve corrections, an
       note: candidate.id,
       revision: 0,
       text: "Imported proof, with corrected formatting.",
+      summary: candidate.summary,
+      detailedSummary: candidate.detailedSummary,
     });
     const corrected = project(await engine.inspect());
     expect(corrected[0]).toEqual({
       ...established,
       text: correction.text,
       summary: correction.summary,
+      detailedSummary: correction.detailedSummary,
       revision: 1,
     });
     expect(corrected[2]).toEqual({
@@ -181,18 +193,39 @@ test("solver imports are trusted over verified support, preserve corrections, an
           kind: "submit",
           id: "bad-support",
           candidate: false,
-          notes: [{ id: "n1", text: "Claim", summary: "Claim", support }],
+          notes: [
+            {
+              id: "n1",
+              text: "Claim",
+              summary: "Claim",
+              detailedSummary: "Claim",
+              support,
+            },
+          ],
         }),
       ).rejects.toThrow();
     }
-    await expect(
-      submitCommand(engine, {
-        kind: "submit",
-        id: "blank",
-        candidate: false,
-        notes: [{ id: "n1", text: " ", summary: "Claim", support: [] }],
-      }),
-    ).rejects.toThrow("must not be blank");
+    for (const field of ["text", "summary", "detailedSummary"])
+      expect(() =>
+        submitCommand(engine, {
+          kind: "submit",
+          id: "blank",
+          candidate: false,
+          notes: [
+            {
+              id: "n1",
+              text: "Claim",
+              summary: "Claim",
+              detailedSummary: "Claim",
+              support: [],
+              [field]: " ",
+            },
+          ],
+        }),
+      ).toThrow();
+    expect(() =>
+      submitCommand(engine, { ...correction, detailedSummary: undefined }),
+    ).toThrow();
     expect(() =>
       submitCommand(engine, {
         kind: "submit",
@@ -250,6 +283,9 @@ test("automatic corrections follow commit order and stale proposals retain check
                   : { correctness: { ...pass, premises: [] } }),
                 correction: {
                   revision: 0,
+                  summary: input === "slow" ? "Stale lemma" : "Corrected lemma",
+                  detailedSummary:
+                    input === "slow" ? "Stale detail" : "Corrected detail",
                   text:
                     input === "slow"
                       ? "Stale typography."
@@ -293,6 +329,7 @@ test("automatic corrections follow commit order and stale proposals retain check
           id: "n1",
           text: "Original typography.",
           summary: "Lemma",
+          detailedSummary: "Original detailed lemma.",
           support: [],
         },
       ],
@@ -308,11 +345,21 @@ test("automatic corrections follow commit order and stale proposals retain check
       note: "input/import/n1",
       revision: 1,
       text: "Editor's typography.",
+      summary: "Editor's summary.",
+      detailedSummary: "Editor's detailed summary.",
     });
     release.resolve();
     const note = project(await running)[0]!;
-    expect([note.text, note.revision, note.verified]).toEqual([
+    expect([
+      note.text,
+      note.summary,
+      note.detailedSummary,
+      note.revision,
+      note.verified,
+    ]).toEqual([
       "Editor's typography.",
+      "Editor's summary.",
+      "Editor's detailed summary.",
       2,
       true,
     ]);
@@ -320,7 +367,11 @@ test("automatic corrections follow commit order and stale proposals retain check
     expect(note.checks.every((check) => check.correction === undefined)).toBe(
       true,
     );
-    expect(project(frozen)[0]!.text).toBe("Corrected typography.");
+    expect(project(frozen)[0]).toMatchObject({
+      text: "Corrected typography.",
+      summary: "Corrected lemma",
+      detailedSummary: "Corrected detail",
+    });
     expect(JSON.stringify(frozen)).toBe(frozenBytes);
     expect(frozenBytes).toContain('"correction"');
   } finally {

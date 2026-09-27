@@ -728,6 +728,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     id: "n1",
     text: "FROZEN-PROOF",
     summary: "A result",
+    detailedSummary: "A result with a frozen proof.",
     revision: 0,
     imported: false,
     support: [],
@@ -773,6 +774,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
       expect(prompt.capabilities).toEqual({
         literature: false,
         sourceRetrieval: false,
+        explorerRetrieval: false,
       });
       expect(
         prompt.notes.find((note: Note) => note.id === imported.id),
@@ -785,14 +787,14 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
       note.text = "CHANGED-AFTER-START";
       note.support.push("CHANGED-AFTER-START");
       note.dead = true;
-      return reply("read_notes", { ids: ["missing"] });
+      return reply("read_notes", { ids: ["missing"], level: "full" });
     }
     if (turn === 2) {
       expect(input.messages.at(-1)).toMatchObject({
         role: "toolResult",
         isError: true,
       });
-      return reply("read_notes", { ids: ["n1", rejected.id] });
+      return reply("read_notes", { ids: ["n1", rejected.id], level: "full" });
     }
     expect(JSON.stringify(input.messages)).toContain("FROZEN-PROOF");
     expect(JSON.stringify(input.messages)).toContain("REJECTED-PROOF");
@@ -819,6 +821,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     return reply("submit_result", plan);
   };
   const roles = createRoles(runtime, offlineResearch, {
+    explorer: "prefilled",
     maxExplorerResponses: 4,
     literature: true,
   });

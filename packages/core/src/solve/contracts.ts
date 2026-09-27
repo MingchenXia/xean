@@ -7,6 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
+export const declarationVersion = 8;
 const text = Type.String({ minLength: 1 });
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -35,14 +36,30 @@ export function batchResults<T>(
 
 export const taskSchema = object({ problem: text, completionCriteria: text });
 export type Task = Static<typeof taskSchema>;
-export const noteDraftSchema = object({
-  id: Type.String({ pattern: "^n[1-9][0-9]*$" }),
+export const noteContentSchema = object({
   summary: Type.String({
     minLength: 1,
+    pattern: "\\S",
     description:
-      "Concise mathematical claim with decisive hypotheses and limitations. Put proof details in text. This summary is repeated in later role inputs.",
+      "Short index description with decisive hypotheses and limitations. This summary is repeated in later role inputs.",
   }),
-  text,
+  detailedSummary: Type.String({
+    minLength: 1,
+    pattern: "\\S",
+    description:
+      "Detailed summary of the actual claims or findings, decisive conditions, bounds, and unresolved gaps. Preserve conditionality and negative conclusions. It may explain methods but does not replace the full note.",
+  }),
+  text: Type.String({
+    minLength: 1,
+    pattern: "\\S",
+    description:
+      "Authoritative full note with complete arguments and evidence.",
+  }),
+});
+export type NoteContent = Static<typeof noteContentSchema>;
+export const noteDraftSchema = object({
+  id: Type.String({ pattern: "^n[1-9][0-9]*$" }),
+  ...noteContentSchema.properties,
   support: Type.Array(text),
 });
 export const explorationSchema = object({
@@ -53,17 +70,23 @@ export type Exploration = Static<typeof explorationSchema>;
 export const verdictSchema = object({
   verdict: StringEnum(["PASS", "FAIL", "INCONCLUSIVE"] as const),
   report: text,
-  correctedText: Type.Optional(Type.String({ minLength: 1, pattern: "\\S" })),
+  correction: Type.Optional(noteContentSchema),
 });
 export type Verdict = Static<typeof verdictSchema>;
 export const correctnessSchema = object({
   ...verdictSchema.properties,
-  premises: Type.Array(text),
+  premises: Type.Array(text, {
+    description:
+      "Unresolved external results used in the argument. Exclude explicit hypothetical antecedents, task-granted assumptions, and declared supporting notes.",
+  }),
 });
 export type Correctness = Static<typeof correctnessSchema>;
 export const statementSchema = object({
   statement: text,
-  premises: Type.Array(text),
+  premises: Type.Array(text, {
+    description:
+      "Source-checked external results only. Explicit hypothetical antecedents belong in the statement; task-granted assumptions and declared support are not external premises.",
+  }),
 });
 export const proofSchema = object({ proof: text, complete: Type.Boolean() });
 const passageSchema = object({
@@ -74,10 +97,7 @@ const passageSchema = object({
 const sourceProperties = {
   ...verdictSchema.properties,
   // Codex structured output requires every field; null means no correction.
-  correctedText: Type.Union([
-    verdictSchema.properties.correctedText,
-    Type.Null(),
-  ]),
+  correction: Type.Union([noteContentSchema, Type.Null()]),
 };
 export const sourceSchema = object({
   ...sourceProperties,
@@ -109,7 +129,7 @@ export type Source = Verdict | ResearchReport;
 export type ReviewInput = { task: Task; argument: string };
 export type Check = {
   noteId: string;
-  correction?: { revision: number; text: string };
+  correction?: NoteContent & { revision: number };
   correctness?: Correctness;
   source?: Source;
   requirements?: Verdict;
@@ -172,11 +192,9 @@ export type NoteInfo = Pick<
   Note,
   "id" | "summary" | "support" | "imported" | "verified" | "dead" | "candidate"
 > & { passed: VerificationStage[]; feedback: string[] };
-export type ExplorerInput = {
-  task: Task;
-  notes: NoteInfo[];
+export type ExplorerInput = SolverInput & {
   guidance: string;
-  support: Note[];
+  support: string[];
 };
 export type VerifierInput = SolverInput & {
   targets: { id: string; through: VerificationStage }[];

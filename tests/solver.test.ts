@@ -25,6 +25,12 @@ import {
 } from "../packages/core/src/solve/research.ts";
 import { fixtureRuntime } from "./fixtures/pi.ts";
 
+const content = (text: string) => ({
+  summary: `Index: ${text}`,
+  detailedSummary: `Detail: ${text}`,
+  text,
+});
+
 test("solver stops at requested stages, applies only PASS corrections, reuses checks, and reopens without calls", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-solver-"));
   const path = join(directory, "campaign.sqlite");
@@ -102,6 +108,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
                   {
                     id: "n1",
                     summary: "support",
+                    detailedSummary: "ESTABLISHED-SUPPORT mechanism",
                     text: "ESTABLISHED-SUPPORT",
                     support: [],
                   },
@@ -110,6 +117,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
                   {
                     id: "n2",
                     summary: "CANDIDATE-SUMMARY",
+                    detailedSummary: "CANDIDATE-SECRET mechanism",
                     text: "CANDIDATE-SECRET",
                     support: ["n1"],
                   },
@@ -126,7 +134,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
           premises: note.text.includes("CANDIDATE")
             ? ["Fixture premise"]
             : ["Established premise"],
-          correctedText: `${note.text} corrected`,
+          correction: content(`${note.text} corrected`),
         }));
         break;
       case "requirements":
@@ -136,9 +144,9 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
             ? {
                 verdict: "INCONCLUSIVE",
                 report: "Try this check again.",
-                correctedText: "SHOULD-NOT-APPLY inconclusive",
+                correction: content("SHOULD-NOT-APPLY inconclusive"),
               }
-            : { ...pass, correctedText: "CANDIDATE-SECRET requirements" },
+            : { ...pass, correction: content("CANDIDATE-SECRET requirements") },
         );
         break;
       case "statement":
@@ -168,11 +176,13 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
           ...pass,
           ...(note.id.endsWith("n2")
             ? {
-                correctedText: input.independent.find(
-                  (item: { noteId: string }) => item.noteId === note.id,
-                ).result.complete
-                  ? "CANDIDATE-SECRET final"
-                  : "SHOULD-NOT-APPLY incomplete proof",
+                correction: content(
+                  input.independent.find(
+                    (item: { noteId: string }) => item.noteId === note.id,
+                  ).result.complete
+                    ? "CANDIDATE-SECRET final"
+                    : "SHOULD-NOT-APPLY incomplete proof",
+                ),
               }
             : {}),
         }));
@@ -221,7 +231,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
                   searches: 1,
                   value: {
                     ...pass,
-                    correctedText: `${text} twice`,
+                    correction: content(`${text} twice`),
                     passages: [
                       {
                         premise: 0,
@@ -239,7 +249,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
             statement: "Established premise",
           });
           expect(evidence).toHaveLength(1);
-          expect(JSON.stringify(evidence)).not.toContain("correctedText");
+          expect(JSON.stringify(evidence)).not.toContain("correction");
           if (sourceTexts.length === 2)
             throw new Error("Temporary source execution failure");
           return {
@@ -250,7 +260,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
                 searches: 0,
                 value: {
                   ...pass,
-                  correctedText: null,
+                  correction: null,
                   passages: [{ premise: 0, passageId: "support-source/0" }],
                 },
               },
@@ -281,9 +291,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     expect(notes.flatMap((note) => noteInfo(note).feedback)).toEqual([]);
     expect(sourceEvidence([{ ...notes[0]!, dead: true }])).toEqual([]);
     expect(sourceEvidence([{ ...notes[0]!, verified: false }])).toEqual([]);
-    expect(JSON.stringify(notes)).not.toContain('"correctedText"');
     expect(JSON.stringify(notes)).not.toContain('"correction"');
-    expect(rawResults).toContain('"correctedText"');
     expect(rawResults).toContain('"correction"');
     expect(JSON.stringify(result.work)).toBe(rawResults);
     const verifications = result.work.filter(
@@ -309,9 +317,16 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     ).toMatchObject([
       { result: null, error: "Temporary source execution failure" },
     ]);
-    expect(notes.map(({ text, revision }) => ({ text, revision }))).toEqual([
-      { text: "ESTABLISHED-SUPPORT corrected twice", revision: 1 },
-      { text: "CANDIDATE-SECRET final", revision: 3 },
+    expect(
+      notes.map(({ text, summary, detailedSummary, revision }) => ({
+        text,
+        summary,
+        detailedSummary,
+        revision,
+      })),
+    ).toEqual([
+      { ...content("ESTABLISHED-SUPPORT corrected twice"), revision: 1 },
+      { ...content("CANDIDATE-SECRET final"), revision: 3 },
     ]);
     expect(verifications[0]!.input).toMatchObject({
       notes: [
@@ -377,6 +392,7 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
     id,
     text: id,
     summary: id,
+    detailedSummary: id,
     support: id === "dependent" ? ["base"] : [],
     revision: 0,
     imported: false,
@@ -431,7 +447,7 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
               ? {
                   verdict: "INCONCLUSIVE" as const,
                   report: "Missing source",
-                  correctedText: "SHOULD-NOT-APPLY",
+                  correction: content("SHOULD-NOT-APPLY"),
                 }
               : pass,
         }));
@@ -503,6 +519,7 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
       id: "n1",
       text: "ORIGINAL-PROOF",
       summary: "Claim",
+      detailedSummary: "ORIGINAL-METHOD in the detailed summary",
       support: [],
       revision: 0,
       imported: false,
@@ -569,6 +586,7 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
   expect(prefix).toContain("ORIGINAL-PROOF");
   expect(reconstruction.prompt.startsWith(prefix)).toBe(true);
   expect(calls.get("proof")!.prompt).not.toContain("ORIGINAL-PROOF");
+  expect(calls.get("proof")!.prompt).not.toContain("ORIGINAL-METHOD");
   expect(reconstruction.prompt).toContain("INDEPENDENT-PROOF");
 });
 
@@ -593,6 +611,7 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     support,
     text: `SECRET-${id}`,
     summary: id,
+    detailedSummary: `SECRET-METHOD-${id}`,
     revision: 0,
     imported: id === "imported" || id === "theorem",
     checks: [],

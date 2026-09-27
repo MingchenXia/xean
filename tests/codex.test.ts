@@ -124,7 +124,7 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
       value: {
         verdict: "PASS" as const,
         report: "Reported passage",
-        correctedText: null,
+        correction: null,
         passages: [
           { premise: 0, url: "https://example.com/paper", quote: "P holds" },
         ],
@@ -167,16 +167,27 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
     expect(bindCodex(source, ["P", "Q"]).verdict).toBe("INCONCLUSIVE");
     const verified = bindCodex(source, ["P"]);
     expect(verified.verdict).toBe("PASS");
-    expect(verified).not.toHaveProperty("correctedText");
+    expect(verified).not.toHaveProperty("correction");
     expect(
       bindCodex(
         {
           ...source,
-          value: { ...source.value, correctedText: "Harmless edit" },
+          value: {
+            ...source.value,
+            correction: {
+              summary: "Edited",
+              detailedSummary: "Harmless edit",
+              text: "Harmless edit",
+            },
+          },
         },
         ["P"],
-      ).correctedText,
-    ).toBe("Harmless edit");
+      ).correction,
+    ).toEqual({
+      summary: "Edited",
+      detailedSummary: "Harmless edit",
+      text: "Harmless edit",
+    });
     expect(verified).toMatchObject({
       kind: "codex-report",
       operationId: "fixture",

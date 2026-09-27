@@ -1,7 +1,7 @@
 import type { CampaignView, JsonValue } from "../types.ts";
 import { json } from "../json.ts";
 import type { SolverCommand } from "./commands.ts";
-import { verificationStages } from "./contracts.ts";
+import { declarationVersion, verificationStages } from "./contracts.ts";
 import type {
   Check,
   Exploration,
@@ -74,8 +74,12 @@ export function validateNotes(
   );
   const local = new Set<string>();
   for (const note of drafts) {
-    if (!note.text.trim() || !note.summary.trim())
-      throw new Error("Note text and summary must not be blank");
+    if (
+      !note.text.trim() ||
+      !note.summary.trim() ||
+      !note.detailedSummary.trim()
+    )
+      throw new Error("Note text and summaries must not be blank");
     if (local.has(note.id)) throw new Error(`Duplicate new note: ${note.id}`);
     if (new Set(note.support).size !== note.support.length)
       throw new Error(`Duplicate support for note: ${note.id}`);
@@ -178,6 +182,12 @@ export function refresh(notes: Note[]): Note[] {
 
 /** Project immutable worker results and accepted inputs without modifying either. */
 export function project(view: CampaignView): Note[] {
+  const declaration = view.task as { kind?: string; version?: number } | null;
+  if (
+    declaration?.kind?.startsWith("xean.solve") &&
+    declaration.version !== declarationVersion
+  )
+    throw new Error("Unsupported solver declaration; use its matching runtime");
   const notes: Note[] = [];
   const append = (
     prefix: string,
@@ -231,14 +241,15 @@ export function project(view: CampaignView): Note[] {
               `Verification refers to unknown note: ${check.noteId}`,
             );
           if (check.correction && note.revision === check.correction.revision) {
-            note.text = check.correction.text;
+            const { revision: _revision, ...content } = check.correction;
+            Object.assign(note, content);
             note.revision++;
           }
           // Edit proposals stay in immutable worker evidence, not later inputs.
           const projected = json(check);
           delete projected.correction;
           for (const stage of verificationStages)
-            if (projected[stage]) delete projected[stage]!.correctedText;
+            if (projected[stage]) delete projected[stage]!.correction;
           note.checks.push(projected);
         }
       } else throw new Error(`Invalid solver result from ${work.id}`);
@@ -254,7 +265,8 @@ export function project(view: CampaignView): Note[] {
           `Invalid correction history: ${command.note}@${command.revision}`,
         );
       note.text = command.text;
-      if (command.summary !== undefined) note.summary = command.summary;
+      note.summary = command.summary;
+      note.detailedSummary = command.detailedSummary;
       note.revision++;
     } else if (command.kind !== "guide")
       throw new Error("Invalid solver input");

@@ -26,7 +26,13 @@ test("an increased total resumes only additional rounds and preserves prior work
       kind: "notes",
       candidate: false,
       notes: [
-        { id: "n1", text: "Partial work", summary: "Partial", support: [] },
+        {
+          id: "n1",
+          text: "Partial work",
+          summary: "Partial",
+          detailedSummary: "Partial work remains incomplete.",
+          support: [],
+        },
       ],
     });
     return { solver, rounds: limitRounds(solver, directory, allowance) };

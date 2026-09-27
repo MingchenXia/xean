@@ -6,12 +6,12 @@ import { json } from "../json.ts";
 import { campaignAddress } from "../store.ts";
 import type { JsonValue, XeanOptions } from "../types.ts";
 import { readSettings, settingsSchema } from "./config.ts";
-import { decode, object, taskSchema } from "./contracts.ts";
+import { decode, declarationVersion, object, taskSchema } from "./contracts.ts";
 import type { PiRuntime } from "./pi.ts";
 import { createSolver } from "./solver.ts";
 import { codexResearch } from "./research.ts";
 
-export const declarationVersion = 7;
+export { declarationVersion } from "./contracts.ts";
 const common = {
   version: Type.Literal(declarationVersion),
   task: taskSchema,

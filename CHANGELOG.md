@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.0.0 — Unreleased
+
+Notes now require `summary`, `detailedSummary`, and authoritative full `text`.
+Harmless corrections replace all three together. This changes public note and
+correction APIs, CLI input files, and persisted solver inputs. Solver declarations
+use version 8 and observer exports use `xean-observe/v2`. Keep historical
+campaigns and exports on their matching runtime. No migration is provided.
+
+- Select `explorer: "retrieval"` to query an invocation's frozen notes through
+  bounded search and batched detailed/full reads. The default `prefilled` Explorer
+  retains selected full context upfront. Both use the same verification and
+  four-response allowance, including retrieval responses.
+- Explicit antecedents in conditional claims remain part of the claim.
+  Correctness checks the implication, source checks its external results, and
+  requirements decides whether it solves the original task.
+- The observer shows detailed summaries before the full-note disclosure.
+- Completed private-work recovery was investigated against Pi and the predecessor.
+  Whole-worker recovery remains in place. The missing durable integration is
+  documented in Pi alignment.
+
 ## 2.0.0 — 2026-09-27
 
 Xean now uses Pi's durable storage and agent loop, with a smaller campaign kernel,

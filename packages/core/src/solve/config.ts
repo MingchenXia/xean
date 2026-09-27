@@ -51,12 +51,14 @@ const profile = object({
     StringEnum(["sse", "websocket", "websocket-cached"] as const),
   ),
 });
+export const explorerSchema = StringEnum(["prefilled", "retrieval"] as const);
 export const settingsSchema = object({
   profiles: object({
     default: profile,
     ...Type.Record(Type.Enum(profileNames), Type.Optional(profile)).properties,
   }),
   maxExplorerResponses: Type.Optional(positiveIntegerSchema),
+  explorer: Type.Optional(explorerSchema),
   literature: Type.Optional(Type.Boolean()),
   research: Type.Optional(researchSchema),
   usagePrefix: Type.Optional(

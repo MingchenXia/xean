@@ -56,10 +56,14 @@ An old snapshot saying `running` alone does not establish process liveness.
 Runs launched before snapshot publishing retain their original runner. Observe
 shows their task, round markers, and Nomad logs until a result export appears.
 Detailed in-flight notes require an owner endpoint or an observation snapshot.
-Snapshots include committed note text and checks, worker outcomes, and native
+Snapshots use `xean-observe/v2` and include committed index and detailed summaries,
+full note text and checks, worker outcomes, and native
 usage counts. Private model reasoning and complete request bodies stay in the
 campaign journal. Exported results without embedded records show usage as
 unavailable. Gateway billing reconciliation remains separate.
+
+Opening a note shows its detailed summary. Full text and checks have separate
+disclosures. Historical snapshots require their matching observer version.
 
 ## Verify
 

@@ -1,14 +1,14 @@
 import type { Context } from "@earendil-works/chord";
 import { Assert } from "typebox/value";
-import { Type, type Static, type TSchema } from "@earendil-works/pi-ai";
+import { type Static, type TSchema } from "@earendil-works/pi-ai";
 import type { Execution } from "../types.ts";
 import {
   correctnessSchema,
   batchSchema,
   batchResults,
   explorationSchema,
+  noteContentSchema,
   planSchema,
-  object,
   proofSchema,
   statementSchema,
   verdictSchema,
@@ -42,17 +42,12 @@ import {
 import { ask, type PiRuntime, type ProfileName } from "./pi.ts";
 import { type Research, type LiteratureInput } from "./research.ts";
 import type { Settings } from "./config.ts";
+import { noteTools } from "./reader.ts";
 
 const mathematicalCheck =
-  "Check exact statements and hypotheses. PASS requires an established argument. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. On PASS, you may supply correctedText containing the complete note with only harmless typo, formatting, or unambiguous notation corrections. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. A substantial repair requires a new note. Treat established support results as given, but verify their applicability and all new reasoning. Do not infer mathematical truth from an earlier model's confidence.";
+  "Check exact statements and hypotheses. PASS requires an established argument. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. On PASS, you may supply correction with the complete text and consistent summary and detailedSummary, changing only harmless typos, formatting, or unambiguous notation. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. A substantial repair requires a new note. Treat established support results as given, but verify their applicability and all new reasoning. Do not infer mathematical truth from an earlier model's confidence.";
 const packet = (notes: VerifierInput["notes"]) =>
   notes.map(({ id, text, support }) => ({ id, text, support }));
-const readSchema = object({
-  ids: Type.Array(Type.String({ minLength: 1 }), {
-    minItems: 1,
-    uniqueItems: true,
-  }),
-});
 export type CoordinationInput = {
   task: Task;
   notes: Note[];
@@ -61,7 +56,7 @@ export type CoordinationInput = {
   literatureUsed: boolean;
 };
 export type RoleOptions = Required<
-  Pick<Settings, "maxExplorerResponses" | "literature">
+  Pick<Settings, "maxExplorerResponses" | "literature" | "explorer">
 >;
 
 /** Ordinary functions used by both campaigns and standalone role execution. */
@@ -127,7 +122,7 @@ export function createRoles(
     );
     const extracted = await batch(
       "statement",
-      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. Restate only the supplied source-checked external premises in premises, without application hints. Use [] when there are none. Supporting note results remain declared dependencies, not external premises. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
+      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P or listing P as an external premise. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. Restate only the supplied source-checked external premises in premises, without application hints. Use [] when there are none. Supporting note results remain declared dependencies, not external premises. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
       {
         task: input.task,
         support: originals.filter(
@@ -151,7 +146,7 @@ export function createRoles(
     const selectedIds = new Set(selected.map((note) => note.id));
     const independent = await batch(
       "proof",
-      "Independently prove all requested statements together, returning a proof per note. You have not received their original proofs or methods. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. The support statements are trusted imports or previously reconstructed claims and may be assumed without reproving them. Claims in notes must be proved in dependency order. A conditional proof may use a declared supporting claim being proved in this batch, but never a descendant or unrelated claim. Check hypotheses at every application. Set complete=false and state the gap when a note's own proof is incomplete. Supporting lemmas need not solve the original task.",
+      "Independently prove all requested statements together, returning a proof per note. You have not received their original proofs or methods. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. To prove P implies Q, assume its explicit antecedent P and derive Q; this does not establish P. The support statements are trusted imports or previously reconstructed claims and may be assumed without reproving them. Claims in notes must be proved in dependency order. A conditional proof may use a declared supporting claim being proved in this batch, but never a descendant or unrelated claim. Check hypotheses at every application. Set complete=false and state the gap when a note's own proof is incomplete. Supporting lemmas need not solve the original task.",
       {
         task: input.task,
         support: statements.filter((note) => !selectedIds.has(note.id)),
@@ -163,7 +158,7 @@ export function createRoles(
     );
     const compared = await batch(
       "reconstruction",
-      `${mathematicalCheck} Compare each original claim and proof with its extracted statement and independent proof. Check that extracted statements, definitions, and external premises faithfully match the originals, including every assumption used from support. PASS requires the exact original claim and a correct independent proof, using only declared transitive support, source-checked external premises, and task-permitted background. Judge support proved in this batch conditionally: code separately requires the whole dependency chain. Reject circular or undeclared use of another batch claim. These notes may be supporting lemmas and need not solve the original task. FAIL requires a concrete defect in the original claim or argument. An extraction mismatch, leaked proof method, or a gap, error, or unapproved premise in the independent proof alone gives INCONCLUSIVE, even if it claims to be complete.`,
+      `${mathematicalCheck} Compare each original claim and proof with its extracted statement and independent proof. Check that extracted statements, definitions, and external premises faithfully match the originals, including every assumption used from support. Preserve explicit conditional claims: proving P implies Q may assume P, but does not by itself establish P or an unconditional Q. PASS requires the exact original claim and a correct independent proof, using only declared transitive support, source-checked external premises, and task-permitted background. Judge support proved in this batch conditionally: code separately requires the whole dependency chain. Reject circular or undeclared use of another batch claim. These notes may be supporting lemmas and need not solve the original task. FAIL requires a concrete defect in the original claim or argument. An extraction mismatch, leaked proof method, or a gap, error, or unapproved premise in the independent proof alone gives INCONCLUSIVE, even if it claims to be complete.`,
       {
         task: input.task,
         support: packet(notes.filter((note) => !selectedIds.has(note.id))),
@@ -206,12 +201,14 @@ export function createRoles(
           noteId: note.id,
           reconstruction,
           ...(reconstruction.verdict === "PASS" &&
-          reconstruction.correctedText !== undefined &&
-          reconstruction.correctedText !== note.text
+          reconstruction.correction !== undefined &&
+          (reconstruction.correction.text !== note.text ||
+            reconstruction.correction.summary !== note.summary ||
+            reconstruction.correction.detailedSummary !== note.detailedSummary)
             ? {
                 correction: {
                   revision: note.revision,
-                  text: reconstruction.correctedText,
+                  ...reconstruction.correction,
                 },
               }
             : {}),
@@ -226,15 +223,18 @@ export function createRoles(
       execution: Execution,
       context: Context,
     ): Promise<SolverResult> {
+      input = structuredClone(input);
+      const retrieval = options.explorer === "retrieval";
+      const selected = closure(input.support, input.notes);
       const accumulated: Exploration["notes"] = [];
       const result = await ask(
         runtime,
         "explorer",
-        `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. Guidance is fallible. Do mathematics without search or external tools. Return self-contained notes, including useful partial results and failed approaches with their gaps stated. Identify pivotal claims and their unproved assumptions in the notes so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it. Merely reading or discussing a note is not a dependency. Never rely on dead notes. Existing verified support need not be reproved. Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. Empty notes end this invocation without a solution. You have at most ${options.maxExplorerResponses} responses; every response counts, including rejected submissions and responses without one.`,
+        `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. Guidance is fallible. Do mathematics without external search. ${retrieval ? "Use find_notes and read_notes to retrieve committed mathematics from your frozen snapshot. Begin with index summaries, then read detailed summaries or full notes as needed. Read full arguments when summaries omit necessary detail, and follow support IDs for dependencies. Batch independent IDs in one read. Retrieval responses count toward the same response allowance. Dead notes are readable only for diagnosis." : "Your selected support texts are supplied upfront and you have no retrieval tools."} Return self-contained notes with an index summary, detailed summary, and authoritative full text, including useful partial results and failed approaches with their gaps stated. Identify pivotal claims and their unproved assumptions in the notes so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it. Merely reading or discussing a note is not a dependency. Never rely on dead notes. Existing verified support need not be reproved. Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. Empty notes end this invocation without a solution. You have at most ${options.maxExplorerResponses} responses; every response counts, including rejected submissions and responses without one.`,
         {
           task: input.task,
-          support: packet(input.support),
-          notes: input.notes,
+          support: retrieval ? input.support : packet(selected),
+          notes: input.notes.map(noteInfo),
           guidance: input.guidance,
         },
         explorationSchema,
@@ -242,6 +242,7 @@ export function createRoles(
         context,
         {
           maxResponses: options.maxExplorerResponses,
+          tools: retrieval ? noteTools(input.notes) : [],
           submit(value) {
             validateNotes([...accumulated, ...value.notes], input.notes);
             if (value.candidate && value.notes.length === 0)
@@ -276,39 +277,19 @@ export function createRoles(
         capabilities: {
           literature: literature && !input.literatureUsed,
           sourceRetrieval: research.retrieval,
+          explorerRetrieval: options.explorer === "retrieval",
         },
       };
-      const readable = packet(notes);
       return ask(
         runtime,
         "coordinator",
-        "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy. Select Explorer context from supplied note IDs; use support=[] when no notes are needed, including the initial request when no notes exist. Continue exploration by selecting relevant notes and verifier feedback without prescribing proof steps. Explorer has no retrieval tools. Follow capabilities: when literature is false, do not request a literature search or delegate retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Dead notes may be selected as Explorer context for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Read those with read_notes, batching independent IDs in one call. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return at least one useful work request. Never declare a solution yourself: code accepts only complete verification evidence.",
+        "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy. Select Explorer context from supplied note IDs; use support=[] when no notes are needed, including the initial request when no notes exist. Continue exploration by selecting relevant notes and verifier feedback without prescribing proof steps. When explorerRetrieval is true, Explorer can query internal notes from its frozen snapshot. Otherwise its selected full support is supplied upfront. Explorer never has external retrieval tools. Follow capabilities: when literature is false, do not request a literature search or delegate external retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Dead notes may be selected as Explorer context for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes, batching independent IDs in one call. Use find_notes for bounded searches. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return at least one useful work request. Never declare a solution yourself: code accepts only complete verification evidence.",
         prompt,
         planSchema(prompt.capabilities.literature),
         execution,
         context,
         {
-          tools: [
-            {
-              name: "read_notes",
-              label: "Read notes",
-              description:
-                "Read exact frozen note texts, including failed notes when diagnosing an approach",
-              parameters: readSchema,
-              async execute(_id, args) {
-                const { ids } = args as Static<typeof readSchema>;
-                const selected = ids.map((id) => {
-                  const note = readable.find((note) => note.id === id);
-                  if (!note) throw new Error(`Unknown note: ${id}`);
-                  return note;
-                });
-                return {
-                  content: [{ type: "text", text: JSON.stringify(selected) }],
-                  details: null,
-                };
-              },
-            },
-          ],
+          tools: noteTools(notes),
           submit(plan) {
             if (plan.work.filter(({ kind }) => kind === "explorer").length > 1)
               throw new Error("Dispatch at most one Explorer");
@@ -385,13 +366,14 @@ export function createRoles(
         check[stage] = result;
         if (
           result.verdict === "PASS" &&
-          result.correctedText !== undefined &&
-          result.correctedText !== note.text
+          result.correction !== undefined &&
+          (result.correction.text !== note.text ||
+            result.correction.summary !== note.summary ||
+            result.correction.detailedSummary !== note.detailedSummary)
         ) {
-          if (!result.correctedText.trim())
-            throw new Error("Corrected note text must not be blank");
-          note.text = result.correctedText;
-          check.correction = { revision: note.revision, text: note.text };
+          Assert(noteContentSchema, result.correction);
+          Object.assign(note, result.correction);
+          check.correction = { revision: note.revision, ...result.correction };
         }
       };
       const assess = async <S extends TSchema>(
@@ -424,7 +406,7 @@ export function createRoles(
       const judgments = await assess(
         "correctness",
         correctness,
-        `Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Find missing cases, unsupported inferences, and undeclared substantive dependencies. ${research.retrieval ? "A cited theorem note may state an external result without reproving it: assess its statement and application conditionally and list it in premises for source validation. List every directly needed nonroutine external result, including hidden premises, with exact hypotheses, conclusion, and application." : "This is a closed-book check: source retrieval is disabled. Apply the task's proof rules. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses, conclusion, and application. The steps producing the requested conclusion must satisfy the task's proof requirements."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
+        `Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For an explicit conditional claim P implies Q, check the derivation of Q assuming P. Its hypothetical antecedent P is part of the claim, not an external theorem to establish; omit it from premises. Proving the implication does not establish P. An unstated assumption in an unconditional claim remains a gap: do not silently weaken the claim to an implication or promote a missing proof step to an external theorem. External results actually used to prove an implication still require the normal assessment below. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Find missing cases, unsupported inferences, and undeclared substantive dependencies. ${research.retrieval ? "A cited theorem note may state an external result without reproving it: assess its statement and application conditionally and list it in premises for source validation. List every directly needed nonroutine external result with exact hypotheses, conclusion, and application, including any invoked without citation." : "This is a closed-book check: source retrieval is disabled. Apply the task's proof rules. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses, conclusion, and application. The steps producing the requested conclusion must satisfy the task's proof requirements."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
         correctnessSchema,
       );
       correctness.forEach((note, index) =>
@@ -459,7 +441,7 @@ export function createRoles(
       const required = await assess(
         "requirements",
         requirements,
-        "Decide whether each note meets every completion criterion of the original task. Check quantifiers, variants, parameters, computational model, and bounds. Sound partial progress fails this check.",
+        "Decide whether each note meets every completion criterion of the original task. Check quantifiers, variants, parameters, computational model, and bounds. A proved implication does not establish its antecedent. If the task requires an unconditional conclusion, an extra hypothesis must be discharged by a proof within the note, established support, or the task's assumptions. Sound partial progress fails this check.",
         verdictSchema,
       );
       requirements.forEach((note, index) =>

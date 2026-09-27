@@ -129,6 +129,33 @@ inactivity for the relevant provider, without adding a separate role deadline. I
 source imports are version-specific and need review on upgrade. Both subscription
 transports remain model providers used by ordinary roles.
 
+## Completed private work
+
+Completed private submissions survive Pi's retries within a live invocation.
+Durable resumption also needs the validated tool outcome, role state, response
+allowance, frozen input and model identity, and original call accounting.
+`runAgentLoopContinue` accepts restored context but supplies none of that
+persistence. Native Session can store task checkpoints atomically. Its durable
+task executor and tool/generation settlement remain unimplemented. AgentHarness
+and experimental Pico3 provide resumption through different session and storage
+contracts. Adopting them requires a separate integration.
+
+The archived Explorer `w110-1` retained its completed `n1` and `n2` submissions
+in both failed continuations, then terminated without publication. Provider
+settlement alone does not prove that the submission tool was accepted. The next
+requests in this case contain the successful tool receipt. Exhausted Pi recovery
+throws an ordinary error and terminalizes the worker, so checkpoint-only reopening
+would not repair this failure path. The predecessor reused completed calls, but
+its incremental publication model differs from current whole-worker publication.
+
+Private-progress recovery remains deferred. Future support needs accepted
+submissions or completed verifier stages in the existing Session, guarded by
+attempt identity and cancellation. It also needs explicitly classified retries
+before terminalization, within existing attempt and call limits and provider
+replay-safety rules. Reuse must preserve completed-response counts, frozen inputs,
+model identity, and original usage records. The resumed worker must succeed
+before its complete result and completion signal become shared state.
+
 ## Next adoption opportunities
 
 - **Durable execution:** adopt Pi's task runtime when execution, recovery, and

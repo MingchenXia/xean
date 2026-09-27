@@ -6,12 +6,13 @@ import {
   type EntryId,
 } from "@earendil-works/pi-durable";
 import { Xean, type JsonValue } from "xean";
+import { declarationVersion } from "xean/solve";
 import { statusReport, usageRecord } from "../packages/cli/src/report.ts";
 
 test("status retains native usage, explicit zeros, unknown usage, and unsettled calls", async () => {
   const storage = new MemoryStorage();
   const engine = await Xean.open(storage, {
-    task: { kind: "xean.solve" },
+    task: { kind: "xean.solve", version: declarationVersion },
     roles: [],
     coordinator: { name: "fixture", run: () => ({ state: null }) },
   });
@@ -19,7 +20,15 @@ test("status retains native usage, explicit zeros, unknown usage, and unsettled 
     await engine.input({
       kind: "submit",
       id: "example",
-      notes: [{ id: "n1", text: "A proof", summary: "A claim", support: [] }],
+      notes: [
+        {
+          id: "n1",
+          text: "A proof",
+          summary: "A claim",
+          detailedSummary: "A claim with a proof",
+          support: [],
+        },
+      ],
       candidate: true,
     });
     const snapshot = await engine.inspectWithRecords();

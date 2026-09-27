@@ -3,7 +3,12 @@ import { Check } from "typebox/value";
 import type { Xean } from "../kernel.ts";
 import type { CampaignInput, CampaignView } from "../types.ts";
 import { json } from "../json.ts";
-import { decode, noteDraftSchema, object } from "./contracts.ts";
+import {
+  decode,
+  noteContentSchema,
+  noteDraftSchema,
+  object,
+} from "./contracts.ts";
 import { project, validateNotes } from "./notes.ts";
 
 const id = Type.String({ pattern: "^[A-Za-z0-9_-]{1,128}$" });
@@ -21,8 +26,7 @@ export const commandSchema = Type.Union([
     id,
     note: text,
     revision: Type.Integer({ minimum: 0 }),
-    text,
-    summary: Type.Optional(text),
+    ...noteContentSchema.properties,
   }),
 ]);
 export type SolverCommand = Static<typeof commandSchema>;

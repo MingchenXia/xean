@@ -59,7 +59,7 @@ if (args.includes("descendant")) {
               result: {
                 verdict: "PASS",
                 report: "Checked",
-                correctedText: null,
+                correction: null,
                 passages: note.premises.map((quote, premise) => ({
                   premise,
                   ...(input.task?.problem.includes(quote)

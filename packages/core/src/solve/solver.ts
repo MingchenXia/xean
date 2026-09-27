@@ -25,6 +25,7 @@ import {
 import { type PiRuntime } from "./pi.ts";
 import { codexResearch, type Research } from "./research.ts";
 import { guidance, validateCommand } from "./commands.ts";
+import { explorerSchema } from "./config.ts";
 
 export function createSolver(
   taskValue: Task,
@@ -33,9 +34,16 @@ export function createSolver(
   research?: Research | ((runtime: PiRuntime) => Research),
 ) {
   const task = decode(taskSchema, taskValue);
-  const options = { maxExplorerResponses: 4, literature: false, ...settings };
+  const options: RoleOptions = {
+    maxExplorerResponses: 4,
+    literature: false,
+    explorer: "prefilled",
+    ...settings,
+  };
   if (!Check(positiveIntegerSchema, options.maxExplorerResponses))
     throw new Error("maxExplorerResponses must be a positive integer");
+  if (!Check(explorerSchema, options.explorer))
+    throw new Error("Unknown Explorer implementation");
   let implementation: ReturnType<typeof createRoles> | undefined;
   const load = () => {
     if (!implementation) {
@@ -98,15 +106,16 @@ export function createSolver(
       const targets = verificationTargets(plan);
       const dispatch: WorkRequest[] = plan.work
         .filter((request) => request.kind !== "verifier")
-        .map((request, index) => ({
+        .map((request, index): WorkRequest => ({
           id: `w${signal.id}-${index + 1}`,
           role: `xean.${request.kind}`,
           input:
             request.kind === "explorer"
               ? ({
-                  ...common,
+                  task,
+                  notes,
                   guidance: request.guidance,
-                  support: closure(request.support, notes),
+                  support: request.support,
                 } satisfies ExplorerInput)
               : { ...common, query: request.query },
         }));

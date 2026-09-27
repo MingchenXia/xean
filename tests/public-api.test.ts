@@ -46,6 +46,7 @@ test("public solver functions replace planning, Explorer, and Verifier without c
         {
           id: "n1",
           summary: "Addition",
+          detailedSummary: "Two plus two equals four by associativity.",
           text: "2 + 2 = (1 + 1) + (1 + 1) = 4.",
           support: [],
         },

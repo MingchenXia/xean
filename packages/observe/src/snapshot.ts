@@ -14,7 +14,7 @@ export function snapshot(
     ? project(campaign)
     : [];
   return {
-    schema: "xean-observe/v1" as const,
+    schema: "xean-observe/v2" as const,
     observedAt,
     task: declaration?.task ?? null,
     status: statusReport({ campaign, records: records ?? [] }),

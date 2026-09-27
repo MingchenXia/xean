@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
-import { observe } from "../packages/observe/src/snapshot.ts";
+import { declarationVersion } from "xean/solve";
+import { observe, snapshot } from "../packages/observe/src/snapshot.ts";
 import { readRun, type Run } from "../packages/observe/src/read.ts";
 import { api, readSources } from "../packages/observe/src/server.ts";
 
@@ -30,6 +31,7 @@ test("the external observer reads coherent live snapshots without changing a loc
   const engine = await Xean.open(await openXeanStorage(database), {
     task: {
       kind: "xean.solve",
+      version: declarationVersion,
       task: {
         problem: "Observer fixture",
         completionCriteria: "Retain exact text",
@@ -67,6 +69,8 @@ test("the external observer reads coherent live snapshots without changing a loc
               {
                 id: "n1",
                 summary: "Fixture note",
+                detailedSummary:
+                  "For every integer $n$, $4n$ is even because it is twice $2n$.",
                 text: "<script>unsafe()</script> For every $n$, $4n$ is even.",
                 support: [],
               },
@@ -102,7 +106,32 @@ test("the external observer reads coherent live snapshots without changing a loc
       ...after.snapshot,
       observedAt: published.observedAt,
     });
+    expect(published.schema).toBe("xean-observe/v2");
     expect(after.snapshot?.notes[0]?.id).toBe("work/n1");
+    expect(after.snapshot?.notes[0]?.detailedSummary).toContain("twice $2n$");
+    const history = await engine.inspect();
+    for (const kind of ["xean.solve", "xean.solve.offline"])
+      expect(() =>
+        snapshot({
+          campaign: {
+            ...history,
+            task: { kind, version: declarationVersion - 1 },
+          },
+        }),
+      ).toThrow("Unsupported solver declaration");
+    const exported = join(directory, "exported");
+    await mkdir(exported);
+    await writeFile(
+      join(exported, "observation.json"),
+      JSON.stringify(published),
+    );
+    const readback = await readRun(
+      { id: "exported", directory: exported },
+      directory,
+    );
+    expect(readback.error).toBeUndefined();
+    expect(readback.kind).toBe("snapshot");
+    expect(readback.snapshot).toEqual(published);
     expect(after.snapshot?.status.calls.byModel[0]?.reportedUsage).toEqual({
       input_tokens: 0,
       output_tokens: 9,
@@ -183,7 +212,13 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
     expect(run.heartbeat?.rounds).toBe(1);
     await writeFile(
       join(directory, "observation.json"),
-      JSON.stringify({ schema: "unsupported" }),
+      JSON.stringify({
+        schema: "xean-observe/v1",
+        observedAt: new Date().toISOString(),
+        status: { calls: {} },
+        notes: [],
+        work: [],
+      }),
     );
     for (const failed of ["stdout", "stderr"] as const) {
       await fakeNomad(directory, failed);

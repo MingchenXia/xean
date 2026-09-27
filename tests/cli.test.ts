@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { version } from "../package.json";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import { declarationVersion } from "xean/solve";
 
 test("CLI metadata stays model-free, shares flags, and releases ownership after failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-"));
@@ -65,7 +66,15 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
       join(directory, "notes.json"),
       JSON.stringify({
         candidate: false,
-        notes: [{ id: "n1", text: "Note", summary: "Summary", support: [] }],
+        notes: [
+          {
+            id: "n1",
+            text: "Note",
+            summary: "Summary",
+            detailedSummary: "Note",
+            support: [],
+          },
+        ],
       }),
     );
     for (const args of [
@@ -108,7 +117,7 @@ test("CLI drains large inspection and argument output through a slow pipe", asyn
   const argument = "For every integer n, 2n is even.\n".repeat(65_536);
   try {
     const engine = await Xean.open(await openXeanStorage(database), {
-      task: { kind: "xean.solve" },
+      task: { kind: "xean.solve", version: declarationVersion },
       roles: [],
       coordinator: {
         name: "output-fixture",

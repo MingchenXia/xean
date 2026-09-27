@@ -23,8 +23,8 @@ campaigns through the read-only API and displays exported remote snapshots.
 Matching Pi packages are pinned to one tested main commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
 build, frozen model data, and hashes. Numbered releases are the stable
-distribution. The `main` branch is development. Version 2.0.0 replaces the
-earlier implementation and requires new campaigns.
+distribution. The `main` branch targets 3.0.0 and requires new campaigns for
+its three-view note format. Version 2.0.0 remains the current stable release.
 
 ## Install and run
 
@@ -47,7 +47,8 @@ bun run xean --help
 records the exact installation. Run it again after changing the checkout or Bun
 runtime. `bun run xean --version` reports the distribution version.
 Keep the release or source commit, lockfile, and runtime version with each
-campaign. Campaigns from before 2.0.0 require their original runtime.
+campaign. Historical campaigns require their original runtime, including 2.0.0
+campaigns opened after the development note-format change.
 
 Check the installation without credentials or model calls:
 

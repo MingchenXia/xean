@@ -27,6 +27,7 @@ export {
 export type {
   Task,
   Note,
+  NoteContent,
   NoteInfo,
   Verdict,
   ExplorerInput,

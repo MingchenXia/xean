@@ -92,7 +92,11 @@ function detailView(run: Run) {
                             ${note.imported ? "Imported" : "Generated"}${note.candidate ? ", candidate" : ""}.
                             Support: ${note.support.join(", ") || "none"}
                           </p>
-                          ${math(note.text)}
+                          ${math(note.detailedSummary)}
+                          <details>
+                            <summary>Full note</summary>
+                            ${math(note.text)}
+                          </details>
                           <details>
                             <summary>Checks</summary>
                             ${json(note.checks)}
