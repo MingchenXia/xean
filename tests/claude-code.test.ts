@@ -57,10 +57,11 @@ test("Claude subscription profiles keep gateway credentials out and reject unsup
   }
 });
 
-test("Claude cancellation joins its resistant process before returning", async () => {
+test("Claude has no execution deadline and cancellation joins its resistant process", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-claude-test-"));
   const command = join(directory, "claude");
   const pidPath = join(directory, "pid");
+  const signalPath = join(directory, "signal");
   const authModule = resolve(
     import.meta.dir,
     "../packages/core/node_modules/pi-claude-code-provider/src/auth.ts",
@@ -72,15 +73,22 @@ if (process.argv.includes("--version")) console.log("2.1.281");
 else if (process.argv.includes("--help")) console.log(REQUIRED_HEADLESS_FLAGS.join(" "));
 else if (process.argv.includes("auth")) console.log(JSON.stringify({loggedIn:true,authMethod:"claude.ai",apiProvider:"firstParty",subscriptionType:"max"}));
 else {
-  process.on("SIGTERM", () => {});
+  process.on("SIGTERM", () => { void Bun.write(${JSON.stringify(signalPath)}, "SIGTERM"); });
   await Bun.stdin.text();
   await Bun.write(${JSON.stringify(pidPath)}, String(process.pid));
   setInterval(() => {}, 1000);
 }\n`,
     { mode: 0o700 },
   );
-  const previous = process.env.PI_CLAUDE_CODE_PROVIDER_PATH;
-  process.env.PI_CLAUDE_CODE_PROVIDER_PATH = command;
+  const environment = {
+    PI_CLAUDE_CODE_PROVIDER_PATH: command,
+    PI_CLAUDE_CODE_PROVIDER_TOTAL_TIMEOUT_MS: "500",
+    PI_CLAUDE_CODE_PROVIDER_IDLE_TIMEOUT_MS: "200",
+  };
+  const previous = Object.fromEntries(
+    Object.keys(environment).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, environment);
   const controller = new AbortController();
   let pid: number | undefined;
   const alive = () => {
@@ -100,16 +108,25 @@ else {
         },
       }),
     );
-    const result = runtime.models.completeSimple(
-      runtime.profiles.explorer.model,
-      { messages: [{ role: "user", content: "Wait", timestamp: 0 }] },
-      { signal: controller.signal, reasoning: "max" },
-    );
+    let settled = false;
+    const result = runtime.models
+      .completeSimple(
+        runtime.profiles.explorer.model,
+        { messages: [{ role: "user", content: "Wait", timestamp: 0 }] },
+        { signal: controller.signal, reasoning: "max" },
+      )
+      .finally(() => {
+        settled = true;
+      });
     const deadline = Date.now() + 3000;
     while (!(await Bun.file(pidPath).exists()) && Date.now() < deadline)
       await Bun.sleep(5);
     pid = Number(await readFile(pidPath, "utf8"));
     expect(Number.isSafeInteger(pid) && pid > 0).toBeTrue();
+    await Bun.sleep(750);
+    expect(await Bun.file(signalPath).exists()).toBeFalse();
+    expect(settled).toBeFalse();
+    expect(alive()).toBeTrue();
     controller.abort();
     expect((await result).stopReason).toBe("aborted");
     expect(alive()).toBeFalse();
@@ -118,8 +135,10 @@ else {
     if (alive()) process.kill(pid!, "SIGKILL");
     const deadline = Date.now() + 3000;
     while (alive() && Date.now() < deadline) await Bun.sleep(5);
-    if (previous === undefined) delete process.env.PI_CLAUDE_CODE_PROVIDER_PATH;
-    else process.env.PI_CLAUDE_CODE_PROVIDER_PATH = previous;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     await rm(directory, { recursive: true, force: true });
   }
 }, 10_000);

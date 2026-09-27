@@ -56,8 +56,6 @@ type Reserved = {
 };
 const stopped = (status: XeanStatus) =>
   status === "cancelled" || status === "limited" || status === "completed";
-const deadlineReached = (deadline: Limits["deadline"]) =>
-  deadline !== null && Date.now() >= deadline;
 const owners = new WeakSet<Storage>();
 
 function limits(input: Partial<Limits> = {}): Limits {
@@ -65,12 +63,9 @@ function limits(input: Partial<Limits> = {}): Limits {
     concurrency: 4,
     attempts: 3,
     providerCalls: null,
-    deadline: null,
     ...input,
   };
-  for (const key of Object.keys(limitsSchema.properties) as (keyof Limits)[])
-    if (!Check(limitsSchema.properties[key], value[key]))
-      throw new Error(`Invalid campaign limit: ${key}`);
+  if (!Check(limitsSchema, value)) throw new Error("Invalid campaign limits");
   return json(value);
 }
 
@@ -178,7 +173,6 @@ export class Xean {
   private runRequested = false;
   private closePromise?: Promise<void>;
   private closing = false;
-  private deadlineTimer?: ReturnType<typeof setTimeout>;
   private fault: unknown;
 
   private constructor(
@@ -354,76 +348,47 @@ export class Xean {
   }
 
   private async drive(): Promise<Campaign> {
-    const deadline = await this.store.mutate((tx) =>
-      stopped(tx.state.status) ? null : tx.state.limits.deadline,
-    );
-    if (deadline !== null) this.armDeadline(deadline);
-    try {
-      for (;;) {
-        // Promise-only work chains must not starve cancellation or I/O.
-        await yieldToEvents();
-        if (this.fault) throw this.fault;
-        const changed = this.changed.promise;
-        const reserved = this.closing ? [] : await this.reserve();
-        for (const item of reserved) this.launch(item);
-        if (this.active.size === 0) {
-          // Observe idle, finish pausing, and snapshot at one serialized point.
-          const idle = await this.mutate((tx) => {
-            if (
-              !this.closing &&
-              tx.state.status === "running" &&
-              tx.tasks.some(
-                (task) =>
-                  task.state.status === "pending" &&
-                  (!tx.state.callLimitReached || task.kind === COORDINATOR),
-              )
+    for (;;) {
+      // Promise-only work chains must not starve cancellation or I/O.
+      await yieldToEvents();
+      if (this.fault) throw this.fault;
+      const changed = this.changed.promise;
+      const reserved = this.closing ? [] : await this.reserve();
+      for (const item of reserved) this.launch(item);
+      if (this.active.size === 0) {
+        // Observe idle, finish pausing, and snapshot at one serialized point.
+        const idle = await this.mutate((tx) => {
+          if (
+            !this.closing &&
+            tx.state.status === "running" &&
+            tx.tasks.some(
+              (task) =>
+                task.state.status === "pending" &&
+                (!tx.state.callLimitReached || task.kind === COORDINATOR),
             )
-              return null;
-            if (tx.state.status === "pausing") tx.state.status = "paused";
-            if (
-              !this.closing &&
-              tx.state.status === "running" &&
-              tx.state.callLimitReached
-            ) {
-              tx.state.status = "limited";
-              tx.state.error = "Provider call limit reached";
-            }
-            return snapshot(tx);
-          });
-          if (idle) return idle;
-          continue;
-        }
-        await changed;
+          )
+            return null;
+          if (tx.state.status === "pausing") tx.state.status = "paused";
+          if (
+            !this.closing &&
+            tx.state.status === "running" &&
+            tx.state.callLimitReached
+          ) {
+            tx.state.status = "limited";
+            tx.state.error = "Provider call limit reached";
+          }
+          return snapshot(tx);
+        });
+        if (idle) return idle;
+        continue;
       }
-    } finally {
-      if (this.deadlineTimer) clearTimeout(this.deadlineTimer);
+      await changed;
     }
-  }
-
-  private armDeadline(deadline: number): void {
-    if (this.deadlineTimer) clearTimeout(this.deadlineTimer);
-    this.deadlineTimer = setTimeout(
-      () => {
-        if (!deadlineReached(deadline)) this.armDeadline(deadline);
-        else
-          void this.stop("limited", "Campaign deadline reached").catch(
-            (error) => {
-              this.fault = error;
-              this.wake();
-            },
-          );
-      },
-      Math.min(Math.max(0, deadline - Date.now()), 2_147_483_647),
-    );
   }
 
   private async reserve(): Promise<Reserved[]> {
     return this.mutate(async (tx) => {
       if (tx.state.status !== "running") return [];
-      if (this.expired(tx)) {
-        this.abortActive();
-        return [];
-      }
       const selected: PiTask[] = [];
       const coordinatorRunning = tx.tasks.some(
         (t) =>
@@ -585,7 +550,6 @@ export class Xean {
           await this.mutate(async (tx) => {
             const current = this.current(tx, item);
             if (!current) return;
-            if (this.expired(tx)) return;
             if (item.task.kind === WORKER) {
               await this.finishWorker(tx, current, {
                 status: "completed",
@@ -731,7 +695,6 @@ export class Xean {
           true
         )
           throw new Error("Completion was not accepted by the application");
-        if (this.expired(tx)) return false;
         this.halt(tx, "completed", null, task.id);
         tx.state.result = decision.completion;
       }
@@ -768,7 +731,6 @@ export class Xean {
               context.abortSignal?.aborted
             )
               throw new Error("Worker attempt is no longer active");
-            if (this.expired(tx)) return null;
             if (
               tx.state.callAllowance !== null &&
               tx.state.providerCalls >= tx.state.callAllowance
@@ -792,10 +754,6 @@ export class Xean {
               item.task.id,
             );
           });
-          if (admitted === null) {
-            this.abortActive();
-            throw new Error("Campaign limit reached before provider admission");
-          }
           if (admitted === -1) throw new Error("Provider call limit reached");
           id = admitted;
         } catch (error) {
@@ -812,23 +770,15 @@ export class Xean {
               );
             requestRecorded = true;
             payload = json(payload);
-            const admitted = await this.mutate(async (tx) => {
+            await this.mutate(async (tx) => {
               if (!this.current(tx, item) || context.abortSignal?.aborted)
                 throw new Error("Worker attempt is no longer active");
-              if (this.expired(tx)) return false;
               await tx.entry(
                 "xean.call.request",
                 { callId: id, payload },
                 item.task.id,
               );
-              return true;
             });
-            if (!admitted) {
-              this.abortActive();
-              throw new Error(
-                "Campaign deadline reached before provider dispatch",
-              );
-            }
           },
           settle: async (message, usage) => {
             if (settled) throw new Error("Provider call already settled");
@@ -855,7 +805,7 @@ export class Xean {
 
   private halt(
     tx: Transaction,
-    status: "cancelled" | "limited" | "completed",
+    status: "cancelled" | "completed",
     error: string | null,
     except?: TaskId,
   ): void {
@@ -867,30 +817,14 @@ export class Xean {
       }
   }
 
-  private expired(tx: Transaction): boolean {
-    if (!deadlineReached(tx.state.limits.deadline)) return false;
-    this.halt(tx, "limited", "Campaign deadline reached");
-    return true;
-  }
-
-  private async stop(
-    status: "cancelled" | "limited",
-    reason: string,
-  ): Promise<Campaign> {
+  async cancel(): Promise<Campaign> {
     await this.mutate((tx) => {
-      if (
-        !stopped(tx.state.status) ||
-        (status === "cancelled" && tx.state.status === "limited")
-      )
-        this.halt(tx, status, reason);
+      if (tx.state.status !== "cancelled" && tx.state.status !== "completed")
+        this.halt(tx, "cancelled", "Cancelled by user");
     });
     this.abortActive();
     await Promise.all([...this.active.values()].map((a) => a.done));
     return this.inspect();
-  }
-
-  cancel(): Promise<Campaign> {
-    return this.stop("cancelled", "Cancelled by user");
   }
 
   async pause(): Promise<Campaign> {
@@ -908,10 +842,7 @@ export class Xean {
   async resume(): Promise<Campaign> {
     await this.mutate(async (tx) => {
       if (tx.state.status === "blocked") {
-        if (
-          tx.state.callLimitReached ||
-          deadlineReached(tx.state.limits.deadline)
-        )
+        if (tx.state.callLimitReached)
           throw new Error(
             "Campaign limit prevents resuming a blocked campaign",
           );
@@ -990,8 +921,6 @@ export class Xean {
       )
         throw new Error("Campaign does not accept input");
       this.options.validateInput?.(normalized, json(view(tx)));
-      if (deadlineReached(tx.state.limits.deadline))
-        throw new Error("Campaign deadline reached");
     });
   }
 
@@ -1006,12 +935,9 @@ export class Xean {
         tx.state.status === "completed" ||
         tx.state.status === "cancelled" ||
         tx.state.status === "blocked" ||
-        (tx.state.status === "limited" && !tx.state.callLimitReached) ||
         this.closing
       )
         throw new Error("Campaign does not accept call allowance");
-      if (deadlineReached(tx.state.limits.deadline))
-        throw new Error("Campaign deadline reached");
       if (tx.state.callAllowance === null)
         throw new Error("Campaign already has unlimited calls");
       const allowance = tx.state.callAllowance + additional;
@@ -1043,7 +969,6 @@ export class Xean {
     if (!this.closePromise)
       this.closePromise = (async () => {
         this.closing = true;
-        if (this.deadlineTimer) clearTimeout(this.deadlineTimer);
         this.abortActive();
         this.wake();
         await Promise.all([...this.active.values()].map((a) => a.done));

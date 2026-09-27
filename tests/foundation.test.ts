@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
@@ -184,41 +184,5 @@ test("synchronous work yields to external cancellation", async () => {
   } finally {
     clearTimeout(timer);
     await engine.close();
-  }
-});
-
-test("acceptance crossing the deadline cannot commit completion or new state", async () => {
-  let now = 0;
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
-  const engine = await Xean.open(new MemoryStorage(), {
-    task: "deadline",
-    limits: { deadline: 100 },
-    roles: [],
-    coordinator: {
-      name: "coordinate",
-      run() {
-        return { state: "must not publish", completion: true };
-      },
-    },
-    accept() {
-      now = 101;
-      return true;
-    },
-  });
-  try {
-    const result = await engine.run();
-    expect(result).toMatchObject({
-      status: "limited",
-      state: null,
-      result: null,
-    });
-    expect(
-      (await engine.records()).some(
-        (record) => record.kind === "xean.attempt.completed",
-      ),
-    ).toBe(false);
-  } finally {
-    await engine.close();
-    clock.mockRestore();
   }
 });

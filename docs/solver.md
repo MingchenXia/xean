@@ -382,7 +382,7 @@ bin/fleet-nix run .#fleet-run -- ../xean/scripts/solver-smoke.ts codex-lb/xean
 ```
 
 It initializes without model calls, then runs the tree edge-count task with
-Luna at max reasoning, forty logical calls, and a three-minute deadline. It saves
+Luna at max reasoning and forty logical calls. It saves
 the campaign and accepted argument under ignored `runs/`, then reopens without
 a credential and checks that no work or records change. The failed-attempt
 artifacts are also retained.
@@ -402,7 +402,7 @@ hyphens. Each command prints its committed `{id, key, value}` receipt. Retrying
 the same command ID with identical content returns the original receipt, even
 after the campaign ends. Reusing an ID with different content is rejected.
 New commands are rejected for terminal or blocked campaigns, after the call
-cap is reached, and once the absolute deadline has expired. Exact keyed retries
+cap is reached. Exact keyed retries
 still return their existing receipts. Only solver campaigns accept these commands.
 
 `NOTES.json` contains note drafts and a candidate flag:
@@ -498,7 +498,7 @@ campaign needs no grant.
 stay frozen. A call-limited campaign returns to `running` with its queued work
 preserved. The grant gives Coordinator a fresh signal but does not itself call
 `run()`. Offline campaigns continue with `run CAMPAIGN`.
-Paused campaigns stay paused. Deadlines, cancellation, completion, and blocking
+Paused campaigns stay paused. Cancellation, completion, and blocking
 remain binding.
 
 ## Configuration and functions
@@ -581,8 +581,10 @@ closed-book experiments. Library callers can register `chatGptWebProvider`
 from `xean/pi` directly with Pi's `models.setProvider()`.
 
 `maxExplorerResponses` defaults to four. `literature` defaults to false. `limits`
-uses the kernel's concurrency, attempts, logical provider calls, and absolute
-deadline. Token and dollar budgets remain out of scope. Set `usagePrefix` to a
+uses the kernel's concurrency, attempts, and logical provider calls. Campaigns,
+roles, experiments, and smoke runs have no wall-clock deadlines. Claude's
+process total, inactivity, and tool-bridge readiness cutoffs are disabled.
+Token and dollar budgets remain out of scope. Set `usagePrefix` to a
 unique campaign label when using codex-lb. The frozen settings retain it, and each
 call appends the kernel attempt ID. The smoke assigns a timestamped prefix.
 Configuration and library entry points share bounded integer schemas for limits,
@@ -680,7 +682,7 @@ The library is in `packages/core`, and `xean-cli` is in `packages/cli`. The CLI
 uses public declaration/loading and campaign APIs. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 6, with distinct solver, standalone-role, and review kinds. Only this
+version 7, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the

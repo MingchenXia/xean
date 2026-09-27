@@ -254,108 +254,58 @@ test("pause drains a running worker, preserves queued work, and resumes it once"
   }
 });
 
-for (const deadline of [false, true])
-  test(`${deadline ? "deadline" : "cancellation"} preserves committed work and rejects a late result`, async () => {
-    const started = latch();
-    const aborted = latch();
-    const release = latch();
-    const engine = await Xean.open(new MemoryStorage(), {
-      task: "Exact task",
-      limits: {
-        concurrency: 1,
-        ...(deadline ? { deadline: Date.now() + 250 } : {}),
-      },
-      roles: [
-        {
-          name: "worker",
-          async run(input, _execution, context) {
-            if (input === "a") return "committed";
-            context.abortSignal!.addEventListener(
-              "abort",
-              () => aborted.resolve(),
-              { once: true },
-            );
-            started.resolve();
-            await release.promise;
-            return "must not publish";
-          },
+test("cancellation preserves committed work and rejects a late result", async () => {
+  const started = latch();
+  const aborted = latch();
+  const release = latch();
+  const engine = await Xean.open(new MemoryStorage(), {
+    task: "Exact task",
+    limits: {
+      concurrency: 1,
+    },
+    roles: [
+      {
+        name: "worker",
+        async run(input, _execution, context) {
+          if (input === "a") return "committed";
+          context.abortSignal!.addEventListener(
+            "abort",
+            () => aborted.resolve(),
+            { once: true },
+          );
+          started.resolve();
+          await release.promise;
+          return "must not publish";
         },
-      ],
-      coordinator: dispatch([request("a"), request("b")]),
-    });
-    try {
-      const running = engine.run();
-      await started.promise;
-      const stopping = deadline ? running : engine.cancel();
-      await aborted.promise;
-      release.resolve();
-      const cancelled = await stopping;
-      await running;
-      expect(cancelled.status).toBe(deadline ? "limited" : "cancelled");
-      expect(cancelled.work[0]).toMatchObject({
-        status: "completed",
-        result: "committed",
-      });
-      expect(cancelled.work[1]).toMatchObject({
-        status: "cancelled",
-        result: null,
-      });
-    } finally {
-      release.resolve();
-      await engine.close();
-    }
+      },
+    ],
+    coordinator: dispatch([request("a"), request("b")]),
   });
+  try {
+    const running = engine.run();
+    await started.promise;
+    const stopping = engine.cancel();
+    await aborted.promise;
+    release.resolve();
+    const cancelled = await stopping;
+    await running;
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.work[0]).toMatchObject({
+      status: "completed",
+      result: "committed",
+    });
+    expect(cancelled.work[1]).toMatchObject({
+      status: "cancelled",
+      result: null,
+    });
+  } finally {
+    release.resolve();
+    await engine.close();
+  }
+});
 
 const measured = { ...fauxAssistantMessage([]), usageReported: true };
 measured.usage = { ...measured.usage, input: 2, output: 1, totalTokens: 3 };
-
-for (const boundary of ["begin", "recordRequest"] as const) {
-  test(`deadline is enforced at ${boundary} before its timer can run`, async () => {
-    let now = Date.now();
-    const deadline = now + 60_000;
-    const clock = spyOn(Date, "now").mockImplementation(() => now);
-    let sent = false;
-    const engine = await Xean.open(new MemoryStorage(), {
-      task: "deadline admission",
-      limits: { deadline },
-      coordinator: dispatch([request("deadline")]),
-      roles: [
-        {
-          name: "worker",
-          async run(_, execution) {
-            if (boundary === "begin") now = deadline + 1;
-            const call = await execution.recorder.begin({
-              provider: "fixture",
-              api: "openai-responses",
-              id: "fixture",
-            });
-            now = deadline + 1;
-            try {
-              await call.recordRequest({ input: "must not be sent" });
-              sent = true;
-              return "must not publish";
-            } finally {
-              await call.settle(
-                fauxAssistantMessage("", { stopReason: "aborted" }),
-                null,
-              );
-            }
-          },
-        },
-      ],
-    });
-    try {
-      expect((await engine.run()).status).toBe("limited");
-      expect(sent).toBe(false);
-      expect(
-        (await engine.records()).filter((r) => r.kind === "xean.call.request"),
-      ).toHaveLength(0);
-    } finally {
-      await engine.close();
-      clock.mockRestore();
-    }
-  });
-}
 
 test("provider accounting snapshots values, commits once, and survives a failed worker", async () => {
   const engine = await Xean.open(new MemoryStorage(), {
@@ -538,32 +488,6 @@ test("an uncertain commit stops the runner and reopen discovers the committed re
   } finally {
     unreliable.mockRestore();
     await rm(directory, { recursive: true });
-  }
-});
-
-test("an expired deadline stops before Coordinator or worker dispatch", async () => {
-  let calls = 0;
-  const engine = await Xean.open(new MemoryStorage(), {
-    task: "Exact task",
-    limits: { deadline: Date.now() - 1 },
-    roles: [],
-    coordinator: {
-      name: "unused",
-      async run() {
-        calls++;
-        return { state: null };
-      },
-    },
-  });
-  try {
-    await expect(engine.input("late", "late")).rejects.toThrow(
-      "Campaign deadline reached",
-    );
-    expect((await engine.inspect()).inputs).toEqual([]);
-    expect((await engine.run()).status).toBe("limited");
-    expect(calls).toBe(0);
-  } finally {
-    await engine.close();
   }
 });
 

@@ -60,7 +60,6 @@ test("configuration and library limits share safe integer boundaries", async () 
       concurrency: maximum,
       attempts: 1,
       providerCalls: value,
-      deadline: value,
     };
     expect(
       readSettings({ profiles, limits, maxExplorerResponses: maximum }),
@@ -73,6 +72,11 @@ test("configuration and library limits share safe integer boundaries", async () 
     }
   }
   expect(() => solver(maximum)).not.toThrow();
+  const retired = { deadline: Date.now() + 60_000 };
+  expect(() => readSettings({ profiles, limits: retired })).toThrow();
+  await expect(open(retired as Partial<Limits>)).rejects.toThrow(
+    "Invalid campaign limits",
+  );
 });
 
 function eventResponse(...events: unknown[]): Response {

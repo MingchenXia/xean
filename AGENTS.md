@@ -69,8 +69,10 @@ canonical terminology. Reuse an existing term before defining and justifying a n
 - Private-progress recovery is deferred. Retain whole-worker recovery until
   suitable Pi support or a concrete workload justifies adopting it. Future
   private resumption must preserve atomic shared publication.
-- Call caps stop admission and drain admitted work. Deadlines and cancellation
-  prevent late publication. Keyed call grants preserve frozen startup limits
+- Campaigns, roles, experiments, and smoke runs have no wall-clock deadlines.
+  Do not add execution cutoffs, including provider total or inactivity limits.
+  Call caps stop admission and drain admitted work. Cancellation prevents late
+  publication. Keyed call grants preserve frozen startup limits
   and cannot bypass other stopping conditions. Token and dollar budgets are out of scope.
 - Permit independent read-only inspection while retaining one campaign owner.
   Inspection must not acquire ownership or perform recovery. Keep SQL as the backend direction.

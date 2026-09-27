@@ -19,7 +19,6 @@ settings.limits = {
   concurrency: 2,
   attempts: 1,
   providerCalls: 40,
-  deadline: Date.now() + 300_000,
 };
 const settingsPath = resolve(directory, "settings.json");
 await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n");

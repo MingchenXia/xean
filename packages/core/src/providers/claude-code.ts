@@ -74,7 +74,7 @@ function stream(
         onRateLimitNotice: () => {},
         resolution: "registered",
       }),
-    })(model, context, options);
+    })(model, context, { ...options, timeoutMs: 0 });
     return (async function* () {
       let terminal:
         Extract<AssistantMessageEvent, { type: "done" | "error" }> | undefined;

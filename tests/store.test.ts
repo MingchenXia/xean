@@ -16,7 +16,6 @@ test("Store snapshots entries and keeps rejected commits separate from uncertain
       concurrency: 1,
       attempts: 1,
       providerCalls: null,
-      deadline: null,
     },
     providerCalls: 0,
     callAllowance: null,

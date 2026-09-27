@@ -9,7 +9,7 @@ export type { JsonValue };
 /** Select or reduce detached records in Pi's newest-first scan order. */
 export type RecordProjection = (entry: EntryRecord) => EntryRecord | undefined;
 
-export const campaignVersion = 5;
+export const campaignVersion = 6;
 
 /** Opt in to whole-attempt recovery only for a known transient execution failure. */
 export class TransientError extends Error {
@@ -108,16 +108,17 @@ export const positiveIntegerSchema = Type.Integer({
   minimum: 1,
 });
 const nullableLimitSchema = Type.Union([nonnegativeIntegerSchema, Type.Null()]);
-export const limitsSchema = Type.Object({
-  /** Concurrent admitted workers; Coordinator may run alongside them. */
-  concurrency: positiveIntegerSchema,
-  /** Transient recovery allowance, including attempts interrupted by close/crash. */
-  attempts: positiveIntegerSchema,
-  /** Logical calls admitted by the recorder; backend-internal requests are opaque. */
-  providerCalls: nullableLimitSchema,
-  /** Absolute Unix milliseconds. Remains fixed across restart. */
-  deadline: nullableLimitSchema,
-});
+export const limitsSchema = Type.Object(
+  {
+    /** Concurrent admitted workers; Coordinator may run alongside them. */
+    concurrency: positiveIntegerSchema,
+    /** Transient recovery allowance, including attempts interrupted by close/crash. */
+    attempts: positiveIntegerSchema,
+    /** Logical calls admitted by the recorder; backend-internal requests are opaque. */
+    providerCalls: nullableLimitSchema,
+  },
+  { additionalProperties: false },
+);
 export type Limits = Static<typeof limitsSchema>;
 
 export type CampaignState = {

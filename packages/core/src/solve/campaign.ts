@@ -11,7 +11,7 @@ import type { PiRuntime } from "./pi.ts";
 import { createSolver } from "./solver.ts";
 import { codexResearch } from "./research.ts";
 
-export const declarationVersion = 6;
+export const declarationVersion = 7;
 const common = {
   version: Type.Literal(declarationVersion),
   task: taskSchema,

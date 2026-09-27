@@ -96,8 +96,7 @@ A supplied key makes retries idempotent. The same key and value return the
 original receipt. A different value with that key is rejected. Exact retries
 are resolved before lifecycle checks, so a terminal campaign can still return
 an existing receipt. New inputs are rejected after termination, while blocked,
-after the call cap is reached, after the absolute deadline expires, or while the
-owner is closing. An expired deadline does not reject an exact keyed retry.
+after the call cap is reached, or while the owner is closing.
 
 The solver uses these inputs for external notes, guidance, and harmless
 corrections. Running workers retain their immutable requests. New Coordinator
@@ -146,7 +145,7 @@ An ordinary Coordinator exception or exhausted Coordinator allowance records
 `blocked` rejects new input. Explicit `resume()` renews the failed Coordinator
 signal's attempt allowance and records its previous checkpoint, preserving the
 signal ID, accepted input receipts, completed work, and immutable attempt history.
-Call caps and deadlines remain in force. During provider-call draining,
+Call caps remain in force. During provider-call draining,
 automatic retries stop. A worker failure becomes terminal, and a
 Coordinator failure or exhausted allowance ends that signal so remaining work
 and signals can drain.
@@ -176,7 +175,6 @@ acceptance policy.
 | `pause()`                  | Stops starting new attempts, lets active workers and Coordinator finish, then records `paused`                  |
 | `resume()`                 | Resumes a paused campaign and runs queued work                                                                  |
 | `cancel()`                 | Records `cancelled`, aborts active execution, and prevents late publication                                     |
-| Deadline                   | Records `limited`, aborts active execution, and preserves committed results                                     |
 | Request beyond call cap    | Sets `callLimitReached`, stops new workers, and lets active work and Coordinator signals finish                 |
 | Terminal worker failure    | Records failed work and sends its `failed` signal to Coordinator                                                |
 | Terminal Coordinator error | Records `blocked`, except while draining                                                                        |
@@ -184,7 +182,7 @@ acceptance policy.
 
 Pause preserves queued work and completion signals for resumption. An active
 Coordinator can finish registering work that remains queued. Cancellation
-and deadlines use cooperative abort signals. Roles and their tools must honor
+uses cooperative abort signals. Roles and their tools must honor
 those signals for prompt shutdown. Xean rejects a late result after cancellation
 even if its role ignores the signal. `cancel()` and `close()` wait for active
 execution to settle. A role that ignores cancellation can therefore keep them
@@ -215,7 +213,10 @@ interrupt several concurrent workers.
 | `concurrency`   | Concurrent worker attempts, with Coordinator allowed alongside them                                      | `4`               |
 | `attempts`      | Maximum invocations per logical worker or Coordinator signal, including initial and interrupted attempts | `3`               |
 | `providerCalls` | Initial logical-call allowance, retained unchanged when reopening                                        | `null`, unlimited |
-| `deadline`      | Absolute Unix time in milliseconds, retained across restart                                              | `null`, unlimited |
+
+Campaigns and roles have no wall-clock deadlines. Elapsed time does not stop
+admission, abort an invocation, or prevent publication. Settings reject the
+retired `deadline` field. Experiment and smoke runners follow the same rule.
 
 Token and dollar budgets are outside the planned scope. Usage records support
 observation and comparisons. Pi's internal HTTP or WebSocket retry
@@ -231,8 +232,6 @@ Coordinator during draining. Once active work and runnable Coordinator signals
 are exhausted, the campaign becomes `limited` and remaining queued work is
 preserved for a possible allowance extension. An accepted completion can finish
 the campaign before that point.
-The absolute deadline continues to apply during draining and across pauses or
-restarts.
 
 Call-cap draining is tracked separately from pause and Coordinator blocking.
 A pause still stops new Coordinator attempts while admitted workers settle.
@@ -251,8 +250,8 @@ remain valid on reopen.
 
 A grant can return a campaign stopped by its call cap to `running`, clear the
 admission block, and make preserved work runnable. It does not invoke `run()`.
-A paused campaign stays paused. Grants cannot override an expired deadline,
-cancellation, completion, or a blocked Coordinator. The CLI's `extend` command
+A paused campaign stays paused. Grants cannot override cancellation,
+completion, or a blocked Coordinator. The CLI's `extend` command
 uses the active owner's control socket or acquires storage offline.
 
 `auditedStream` from `xean/pi` wraps Pi's native `streamSimple` function. At Pi's
@@ -314,11 +313,11 @@ The internal `PiTask` type represents those task records. Their native
 `checkpoint` field stores `AttemptState` for whole-attempt recovery. Private
 execution checkpoints remain deferred.
 
-Xean's campaign state and campaign document use format version 5. Earlier formats
+Xean's campaign state and campaign document use format version 6. Earlier formats
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 6.
+version 1. Solver declarations independently use version 7.
 
 Pi configures WAL journaling; Xean selects `synchronous = FULL`. Readers hold
 consistent SQLite snapshots while the owner continues committing work. A separate
