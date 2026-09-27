@@ -50,6 +50,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
       },
     },
     maxExplorerResponses: 3,
+    maxExplorerReads: 0,
     limits: { concurrency: 1, attempts: 1, providerCalls: 3 },
   });
   const runtime = piRuntime(settings, "unrelated-gateway-key");
@@ -133,7 +134,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
         role: "explorer",
         task,
         settings,
-        input: { task, notes: [], support: [], guidance: "Explore" },
+        input: { task, notes: [], guidance: "Explore" },
       },
       runtime,
     ),

@@ -19,7 +19,7 @@ test("an increased total resumes only additional rounds and preserves prior work
       expect(input).not.toHaveProperty("allowance");
       expect(JSON.stringify(input)).not.toContain("bounded-continue-");
       return {
-        work: [{ kind: "explorer", guidance: "Continue", support: [] }],
+        work: [{ kind: "explorer", guidance: "Continue" }],
       };
     };
     solver.functions.explorer = async () => ({

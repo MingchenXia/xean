@@ -7,7 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
-export const declarationVersion = 8;
+export const declarationVersion = 9;
 const text = Type.String({ minLength: 1 });
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -147,11 +147,6 @@ export type Note = Static<typeof noteDraftSchema> & {
 export const explorePlan = object({
   kind: Type.Literal("explorer"),
   guidance: text,
-  support: Type.Array(text, {
-    uniqueItems: true,
-    description:
-      "Existing note IDs selected as Explorer context. Use [] when no notes are needed, including initial exploration. The task is supplied separately.",
-  }),
 });
 export const verificationStages = [
   "correctness",
@@ -194,7 +189,6 @@ export type NoteInfo = Pick<
 > & { passed: VerificationStage[]; feedback: string[] };
 export type ExplorerInput = SolverInput & {
   guidance: string;
-  support: string[];
 };
 export type VerifierInput = SolverInput & {
   targets: { id: string; through: VerificationStage }[];

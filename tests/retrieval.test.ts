@@ -36,46 +36,51 @@ const draft = {
 const reply = (...calls: ReturnType<typeof fauxToolCall>[]) =>
   fauxAssistantMessage(calls, { stopReason: "toolUse" });
 
-test("both Explorer implementations share the solver boundary and prefilled remains the default", async () => {
-  for (const explorer of [undefined, "prefilled", "retrieval"] as const) {
+test("Explorer receives automatic summaries and keeps its prefix stable across read allowances", async () => {
+  const prefixes: string[][] = [];
+  for (const maxExplorerReads of [0, 1, 4]) {
     const notes = [note("live", "Live lemma")];
     const runtime = fixtureRuntime((context) => {
-      const input = JSON.parse(
-        String(
-          context.messages.find((message) => message.role === "user")!.content,
-        ),
-      );
-      const tools = getDeclaredTools(context.messages).map(({ name }) => name);
-      expect(input.notes[0]).not.toHaveProperty("text");
-      expect(input.notes[0]).not.toHaveProperty("detailedSummary");
-      expect(input.support).toEqual(
-        explorer === "retrieval"
-          ? ["live"]
-          : [{ id: "live", text: "FULL-live", support: [] }],
-      );
-      expect(tools).toEqual(
-        explorer === "retrieval"
-          ? ["submit_result", "read_notes"]
-          : ["submit_result"],
+      const inputs = context.messages
+        .filter((message) => message.role === "user")
+        .map((message) => JSON.parse(String(message.content)));
+      expect(inputs[0]).toEqual({ task });
+      expect(inputs[1]).toEqual({ id: "live", summary: "Live lemma" });
+      expect(inputs[2].notes[0]).not.toHaveProperty("summary");
+      expect(inputs[2].notes[0]).not.toHaveProperty("text");
+      expect(inputs[2].notes[0]).not.toHaveProperty("detailedSummary");
+      expect(inputs[2]).not.toHaveProperty("support");
+      expect(inputs[2].allowance).toEqual({
+        reads: maxExplorerReads,
+        responses: maxExplorerReads + 4,
+      });
+      expect(
+        getDeclaredTools(context.messages).map(({ name }) => name),
+      ).toEqual(["submit_result", "read_notes"]);
+      prefixes.push(
+        context.messages.slice(0, 3).map((message) => String(message.content)),
       );
       return reply(
         fauxToolCall("submit_result", { notes: [draft], candidate: true }),
       );
     });
-    const solver = createSolver(task, runtime, explorer ? { explorer } : {});
-    expect(solver.options.explorer).toBe(explorer ?? "prefilled");
-    expect(solver.options.maxExplorerResponses).toBe(
-      explorer === "retrieval" ? 16 : 4,
-    );
-    expect(solver.options.literature).toBe(false);
+    const solver = createSolver(task, runtime, { maxExplorerReads });
+    expect(solver.options.maxExplorerResponses).toBe(maxExplorerReads + 4);
     expect(
       await solver.functions.explorer(
-        { task, notes, support: ["live"], guidance: "Continue" },
+        { task, notes, guidance: "Continue" },
         execution,
         BACKGROUND_CONTEXT,
       ),
     ).toEqual({ kind: "notes", notes: [draft], candidate: true });
   }
+  expect(prefixes[1]).toEqual(prefixes[0]);
+  expect(prefixes[2]).toEqual(prefixes[0]);
+  const runtime = fixtureRuntime(() => {
+    throw new Error("No model call");
+  });
+  for (const maxExplorerReads of [-1, 1.5, Infinity, Number.MAX_SAFE_INTEGER])
+    expect(() => createSolver(task, runtime, { maxExplorerReads })).toThrow();
 });
 
 test("retrieval freezes batched reads and rejects invalid IDs and dead dependencies", async () => {
@@ -187,10 +192,10 @@ test("retrieval freezes batched reads and rejects invalid IDs and dead dependenc
     }
   });
   const result = await createSolver(task, runtime, {
-    explorer: "retrieval",
+    maxExplorerReads: 4,
     maxExplorerResponses: 4,
   }).functions.explorer(
-    { task, notes, support: ["live"], guidance: "Continue" },
+    { task, notes, guidance: "Continue" },
     execution,
     BACKGROUND_CONTEXT,
   );
@@ -198,33 +203,61 @@ test("retrieval freezes batched reads and rejects invalid IDs and dead dependenc
   expect(responses).toBe(4);
 });
 
-test("retrieval responses consume the default or explicitly configured allowance", async () => {
-  for (const maxExplorerResponses of [undefined, 2]) {
-    const maximum = maxExplorerResponses ?? 16;
+test("read limits cover batched calls, zero reads, and the final response without changing tools", async () => {
+  for (const { reads, responses: maximum, admitted } of [
+    { reads: 0, responses: 4, admitted: 0 },
+    { reads: 2, responses: 6, admitted: 2 },
+    { reads: 9, responses: 2, admitted: 3 },
+  ]) {
     let responses = 0;
-    const runtime = fixtureRuntime(() => {
-      if (++responses > maximum)
-        throw new Error("Unexpected extra retrieval response");
+    const runtime = fixtureRuntime((context) => {
+      responses++;
+      expect(
+        getDeclaredTools(context.messages).map(({ name }) => name),
+      ).toEqual(["submit_result", "read_notes"]);
+      const results = context.messages.filter(
+        (message) => message.role === "toolResult",
+      );
+      if (responses === 1)
+        return reply(
+          ...Array.from({ length: 3 }, (_, i) =>
+            fauxToolCall(
+              "read_notes",
+              { ids: ["live"], level: "full" },
+              { id: "read-" + i },
+            ),
+          ),
+        );
+      expect(responses).toBe(2);
+      expect(results.filter((result) => !result.isError)).toHaveLength(
+        admitted,
+      );
+      expect(results.filter((result) => result.isError)).toHaveLength(
+        3 - admitted,
+      );
+      expect(JSON.stringify(context.messages.at(-1))).toContain(
+        "Reading is disabled",
+      );
       return reply(
-        fauxToolCall("read_notes", { ids: ["live"], level: "detailed" }),
+        fauxToolCall(
+          "read_notes",
+          { ids: ["live"], level: "full" },
+          { id: "over-limit" },
+        ),
+        fauxToolCall("submit_result", { notes: [draft], candidate: true }),
       );
     });
     const solver = createSolver(task, runtime, {
-      explorer: "retrieval",
-      ...(maxExplorerResponses === undefined ? {} : { maxExplorerResponses }),
+      maxExplorerReads: reads,
+      maxExplorerResponses: maximum,
     });
-    await expect(
-      solver.functions.explorer(
-        {
-          task,
-          notes: [note("live", "Live lemma")],
-          support: [],
-          guidance: "",
-        },
+    expect(
+      await solver.functions.explorer(
+        { task, notes: [note("live", "Live lemma")], guidance: "Continue" },
         execution,
         BACKGROUND_CONTEXT,
       ),
-    ).rejects.toThrow("exhausted its responses without a valid result");
-    expect(responses).toBe(maximum);
+    ).toEqual({ kind: "notes", notes: [draft], candidate: true });
+    expect(responses).toBe(2);
   }
 });

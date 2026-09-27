@@ -82,15 +82,16 @@ canonical terminology. Reuse an existing term before defining and justifying a n
 
 ## Mathematical roles
 
-- Explorer owns mathematical strategy. Coordinator selects relevant notes and
-  feedback and prioritizes pivotal or repeatedly reused claims for verification,
-  without prescribing proof steps or imposing a verification quota.
+- Explorer owns mathematical strategy and selects its own note reads from the
+  automatically supplied index and feedback. Coordinator supplies guidance and
+  prioritizes pivotal or repeatedly reused claims for verification, without
+  prescribing proof steps or imposing a verification quota.
 - The built-in Coordinator admits at most one Explorer per group, with other
   roles allowed alongside it. This is replaceable Coordinator policy.
 - Experiment round allowances belong only to the outer runner. No role receives
   remaining rounds, approaching-limit warnings, or an end-of-run strategy.
 - Notes and summaries must suffice as shared mathematical memory, including
-  failed approaches. Select existing notes for context instead of a separate
+  failed approaches. Read existing notes for context instead of a separate
   digest or mathematical information held only in guidance. Rejected notes may
   be read for diagnosis but cannot supply mathematical dependencies.
 - Preserve exact statements, hypotheses, and completion criteria. Keep private

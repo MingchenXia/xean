@@ -547,6 +547,150 @@ test("cache routing follows identical prefixes while sessions and caller choices
   expect(new Set(sessions).size).toBe(7);
 });
 
+test("Responses preserves cache boundaries and tool definitions when reading ends", async () => {
+  const prefix = [{ task: "Exact task" }, { id: "n1", summary: "Useful note" }];
+  for (const { reads, responses: maxResponses, cache } of [
+    { reads: 1, responses: 4, cache: "auto" },
+    { reads: 4, responses: 2, cache: "auto" },
+    { reads: 0, responses: 4, cache: "disabled" },
+    { reads: 1, responses: 4, cache: "custom" },
+    { reads: 1, responses: 4, cache: "explicit-disabled" },
+  ]) {
+    const payloads: {
+      input: { role?: string; content?: unknown }[];
+      tools: { name: string }[];
+      tool_choice?: unknown;
+      prompt_cache_key?: string;
+      metadata?: unknown;
+    }[] = [];
+    let admitted = 0;
+    const runtime = fixtureRuntime(() => fauxAssistantMessage(""));
+    runtime.profiles.explorer = {
+      model: {
+        ...model,
+        api: "openai-responses",
+        compat: { supportsExplicitPromptCacheMode: true },
+      },
+      options: {
+        ...(cache === "disabled" ? { cacheRetention: "none" } : {}),
+        onPayload: (payload) => ({
+          ...(payload as object),
+          metadata: { caller: "preserved" },
+          ...(cache === "custom" ? { prompt_cache_key: "caller-key" } : {}),
+          ...(cache === "explicit-disabled"
+            ? { prompt_cache_options: { mode: "explicit" } }
+            : {}),
+        }),
+      },
+    };
+    runtime.models.streamSimple = fixtureModels(async (init) => {
+      payloads.push(await requestBody(init));
+      const first = payloads.length === 1;
+      const tool = {
+        type: "function_call",
+        id: `fc_${payloads.length}`,
+        call_id: `call_${payloads.length}`,
+        name: first ? "read_notes" : "submit_result",
+        arguments: first ? '{"ids":["n1"]}' : '{"answer":7}',
+        status: "completed",
+      };
+      const output = first
+        ? [tool]
+        : [
+            {
+              ...tool,
+              id: "fc_blocked_read",
+              call_id: "call_blocked_read",
+              name: "read_notes",
+              arguments: '{"ids":["n1"]}',
+            },
+            tool,
+          ];
+      return eventResponse(
+        ...output.flatMap((item, output_index) => [
+          { type: "response.output_item.added", output_index, item },
+          { type: "response.output_item.done", output_index, item },
+        ]),
+        {
+          type: "response.completed",
+          response: { id: "resp_reader", status: "completed", output },
+        },
+      );
+    }).streamSimple;
+    expect(
+      await ask(
+        runtime,
+        "explorer",
+        "Read notes and answer",
+        { guidance: "Use the relevant note" },
+        Type.Object({ answer: Type.Number() }),
+        { attemptId: "reader-payload", recorder: recording().recorder },
+        BACKGROUND_CONTEXT,
+        {
+          prefix,
+          maxReads: reads,
+          maxResponses,
+          tools: [
+            {
+              name: "read_notes",
+              label: "Read notes",
+              description: "Read complete notes by ID",
+              parameters: Type.Object({ ids: Type.Array(Type.String()) }),
+              async execute() {
+                admitted++;
+                return {
+                  content: [{ type: "text", text: "Full note" }],
+                  details: undefined,
+                };
+              },
+            },
+          ],
+        },
+      ),
+    ).toEqual({ answer: 7 });
+    expect(admitted).toBe(reads === 0 ? 0 : 1);
+    expect(payloads).toHaveLength(2);
+    const [first, last] = payloads;
+    expect(last!.tools).toEqual(first!.tools);
+    expect(last!.tools.map(({ name }) => name)).toEqual([
+      "submit_result",
+      "read_notes",
+    ]);
+    const restriction = {
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [{ type: "function", name: "submit_result" }],
+    };
+    expect(first!.tool_choice).toEqual(reads === 0 ? restriction : undefined);
+    expect(last!.tool_choice).toEqual(restriction);
+    for (const payload of payloads) {
+      expect(payload.metadata).toEqual({ caller: "preserved" });
+      expect(
+        payload.input.filter(({ role }) => role === "user").slice(0, 3),
+      ).toEqual(
+        [...prefix, { guidance: "Use the relevant note" }].map((value, i) => ({
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: JSON.stringify(value),
+              ...(i < prefix.length && !cache.endsWith("disabled")
+                ? { prompt_cache_breakpoint: { mode: "explicit" } }
+                : {}),
+            },
+          ],
+        })),
+      );
+      if (cache === "disabled")
+        expect(payload.prompt_cache_key).toBeUndefined();
+      else if (cache === "custom")
+        expect(payload.prompt_cache_key).toBe("caller-key");
+      else expect(payload.prompt_cache_key).toMatch(/^[a-f0-9]{64}$/);
+    }
+    expect(last!.prompt_cache_key).toBe(first!.prompt_cache_key);
+  }
+});
+
 test("interrupted turns retain completed reasoning and prior submissions without executing failed tools", async () => {
   const state = recording();
   const replies = [1, 99, 2, 3].map((answer) =>
@@ -759,7 +903,6 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
       {
         kind: "explorer",
         guidance: "Try a new approach",
-        support: [rejected.id],
       },
       { kind: "verifier", notes: [imported.id], through: "source" },
     ],
@@ -774,7 +917,6 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
       expect(prompt.capabilities).toEqual({
         literature: false,
         sourceRetrieval: false,
-        explorerRetrieval: false,
       });
       expect(
         prompt.notes.find((note: Note) => note.id === imported.id),
@@ -821,7 +963,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     return reply("submit_result", plan);
   };
   const roles = createRoles(runtime, offlineResearch, {
-    explorer: "prefilled",
+    maxExplorerReads: 0,
     maxExplorerResponses: 4,
     literature: true,
   });

@@ -9,17 +9,18 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
 
 ## Roles and acceptance
 
-- Explorer receives note summaries, verification feedback, selected support
-  texts, and Coordinator guidance by default. Setting `explorer: "retrieval"`
-  gives it `read_notes` instead of upfront full texts. It owns mathematical
-  strategy. Both variants have no external search tools. Its submissions stay private until the whole worker
+- Explorer automatically receives the exact task, every note's ID and index
+  summary, current verification state and feedback, and Coordinator guidance.
+  It owns mathematical strategy and chooses detailed summaries or full notes
+  through `read_notes`, within its configured read allowance. It has no external
+  search tools. Its submissions stay private until the whole worker
   returns. A `candidate` claim, an empty submission, prose after a valid
-  submission, or `maxExplorerResponses` ends the worker. Every response counts
-  toward that limit, and each follow-up states how many remain.
-- Coordinator chooses work and context. It may dispatch several independent
-  workers, with at most one Explorer in the built-in implementation. It waits
-  for that group before choosing more
-  work. Failed workers reach Coordinator, which schedules logical retries or
+  submission, or `maxExplorerResponses` ends the worker. Every completed response
+  counts toward that limit, and each follow-up states how many remain.
+- Coordinator chooses work and supplies guidance to Explorer. It may dispatch
+  several independent workers, with at most one Explorer in the built-in
+  implementation. It waits for that group before choosing more work.
+  Failed workers reach Coordinator, which schedules logical retries or
   further work. Schema and note-reference errors are returned through Pi tool replies.
   Verification requests from one decision share a batch, so common support is
   checked once while Explorer may run alongside it.
@@ -139,7 +140,7 @@ normal submission, without a separate summarization call or fixed length ratio.
 Verification receives full notes and dependencies. Summary views change neither
 verification status nor dependency obligations.
 
-Coordinator and the retrieval Explorer begin with every note's ID, index summary,
+Coordinator and Explorer begin with every note's ID, index summary,
 status, and feedback. They select IDs directly from that complete index.
 Their only retrieval tool, `read_notes`, takes up to 20 unique `ids`
 and a `level` of `detailed` or `full`. Reads include verification state, support
@@ -147,16 +148,30 @@ IDs, and failure feedback. Independent IDs should be batched. Full text is never
 truncated, and support IDs can be read in further calls. Read the full note when
 a summary omits material detail.
 
-Set `explorer` to `prefilled` (the default) or `retrieval` at campaign creation.
-Both use the same frozen `ExplorerInput`: the full committed `notes` snapshot,
-selected `support` IDs, task, and guidance. The prefilled variant receives the
-selected support closure as full texts. The retrieval variant receives those IDs
-and may query the snapshot. Notes committed after dispatch remain invisible,
-including on a worker retry. Internal retrieval works with literature and source
-retrieval disabled. Every response, including a read request, counts toward
-`maxExplorerResponses`. Retrieval mode has a larger default allowance for reads
-and subsequent mathematical work. Both variants use the same single-Explorer
-scheduling and verification contracts.
+An Explorer work request contains only `kind: "explorer"` and `guidance`.
+The library builds its frozen `ExplorerInput` from the exact task, the full
+committed `notes` snapshot, and that guidance. Full notes stay behind the reader
+until Explorer requests them. Notes committed after dispatch remain invisible,
+including on a worker retry. Internal reads work with literature and source
+retrieval disabled.
+
+`maxExplorerReads` limits reads per invocation. Each admitted `read_notes` call
+consumes one read, including a batch of IDs or a call that fails because an
+ID is unknown. Pi rejects schema-invalid arguments before admission, so those
+requests consume no reads. Several calls in one response each consume a read.
+The local guard enforces the allowance before executing a call, including when
+the model requests several calls at once. Zero allows work from the supplied
+summaries without reading full notes. Coordinator's own reader has no
+per-invocation read allowance.
+
+`maxExplorerResponses` bounds completed responses, including read requests,
+rejected submissions, and responses without a submission. Reading is disabled when its allowance is
+exhausted and on the final response, leaving that response available for
+`submit_result`. Read results and follow-ups report the remaining allowance.
+Providers that support the reader retain its tool definition in the
+conversation, and attempts after it is disabled receive a blocked result.
+The submission tool remains available. The ChatGPT Web provider requires
+zero reads, as described under [configuration](#configuration-and-functions).
 
 Failed approaches belong in notes, and guidance supplies scheduling direction.
 Dead notes remain readable for diagnosis but cannot be mathematical dependencies.
@@ -189,7 +204,7 @@ proposals. Immutable worker results and call records retain the original payload
 
 ## Research
 
-Pi roles use role-specific system instructions, a JSON user input, and a typed
+Pi roles use role-specific system instructions, JSON user messages, and a typed
 `submit_result` tool. Explorer continuation stays in the same Pi conversation;
 each verification check starts its own conversation. Prompts preserve Xean's
 exact-task, dependency, and independent-proof principles in shorter form.
@@ -204,9 +219,17 @@ cancellation. Only validated `submit_result` arguments count as results.
 Verifier requests put the shared task, support, and note text before the stage
 instructions under a common system prompt. Stages keep their required result
 schemas, so different tools, models, or changed notes can limit cache reuse.
+Explorer places the task and each note's ID and summary in separate messages
+before mutable state, feedback, guidance, and allowances. This preserves earlier
+message boundaries when new notes are appended. Its system prompt and tool
+definitions stay the same across read allowances and after reading is disabled
+on providers that support the reader.
 OpenAI's default prompt cache key is stable for the same model, system, and
 tools while transport sessions remain separate. Caller-supplied keys and
-disabled caching are preserved. Blind proof inputs remain statement-only.
+disabled caching are preserved. Cache reuse depends on the provider and eligible
+prefix boundaries. Measure reported cached tokens rather than inferring a hit
+from a shared key. [Pi alignment](pi-alignment.md#provider-integration) records
+the provider-specific controls. Blind proof inputs remain statement-only.
 
 Pi roles other than ChatGPT Web recover transient response failures through Pi's `retryAssistantCall`,
 with at most eight retries per response and exponential backoff starting at one
@@ -241,8 +264,8 @@ become a published result merely because context is running short.
 This also applies when a Coordinator note read leaves insufficient room for its
 next request: the invocation fails, and a Coordinator failure blocks the campaign.
 The estimate is conservative, and Codex Responses does not enforce an output
-token cap on the wire. Large initial inputs still require smaller selected
-context or a larger-context model. No mathematical text is silently truncated,
+token cap on the wire. An oversized task and complete note index require a
+larger-context model. No mathematical text is silently truncated,
 and this adds neither a spending budget nor private checkpoint recovery.
 
 Codex implements literature, source verification, and independent full-proof
@@ -603,8 +626,12 @@ To use the existing Explorer with ChatGPT Pro, select its browser provider:
 }
 ```
 
-Put this in `profiles.explorer`. The provider accepts text and a single
-object-shaped output function. It requests the function's arguments as strict
+Put this in `profiles.explorer` and set `maxExplorerReads: 0` in the campaign
+settings. This Explorer works from the task, summaries, state, and guidance.
+Its unusable reader is omitted, leaving only `submit_result`. Positive read
+allowances are unsupported and fail before dispatch.
+The provider accepts text and a single object-shaped output function. It
+requests the function's arguments as strict
 JSON, validates them without coercion, and returns a Pi tool call for the
 normal result handler. Multiple tools and images fail before dispatch.
 `toolChoice: "none"` requests ordinary text. Each request carries the complete
@@ -624,8 +651,11 @@ disabling ChatGPT-native retrieval. It is not qualified for enforced
 closed-book experiments. Library callers can register `chatGptWebProvider`
 from `xean/pi` directly with Pi's `models.setProvider()`.
 
-`maxExplorerResponses` defaults to four for `prefilled` and 16 for `retrieval`.
-An explicit value overrides either default. `literature` defaults to false. `limits`
+`maxExplorerReads` is a nonnegative safe integer and defaults to four.
+`maxExplorerResponses` is a positive safe integer and defaults to
+`maxExplorerReads + 4`. An explicit response limit overrides that default.
+The [read contract](#roles-and-acceptance) defines admission and the final-response
+restriction. `literature` defaults to false. `limits`
 uses the kernel's concurrency, attempts, and logical provider calls. Campaigns,
 roles, experiments, and smoke runs have no added wall-clock deadlines. Existing
 provider timeouts remain in place and are tuned from observed provider data.
@@ -633,8 +663,8 @@ Token and dollar budgets remain out of scope. Set `usagePrefix` to a
 unique campaign label when using codex-lb. The frozen settings retain it, and each
 call appends the kernel attempt ID. The smoke assigns a timestamped prefix.
 Configuration and library entry points share bounded integer schemas for limits,
-call grants, and Explorer response counts. Settings, declarations, and commands
-are validated strictly, without converting strings or truncating numbers.
+call grants, and Explorer read and response counts. Settings, declarations, and
+commands are validated strictly, without converting strings or truncating numbers.
 
 Install and authenticate the Codex CLI for research. To configure its model and
 reasoning, add:
@@ -675,9 +705,9 @@ The `xean/solve` export provides `createSolver`, `createRoles`, the native Pi
 runtime configuration, and note projection. Roles remain ordinary functions.
 The selected `Research` implementation declares its `retrieval` capability.
 Coordinator sees whether source retrieval and literature are available. A
-disabled external capability cannot be delegated to Explorer. Its optional tools
-only read internal frozen notes. Codex failures expose stderr as their diagnostic, while the journal
-retains the complete process output.
+disabled external capability cannot be delegated to Explorer. Its reader
+only accesses internal frozen notes. Codex failures expose stderr as their
+diagnostic, while the journal retains the complete process output.
 `createSolver` and `campaignOptions` accept either a `PiRuntime` or a factory
 `() => PiRuntime`. A supplied factory runs once, on the first role invocation.
 Opening, inspecting, validating commands, and exporting committed work do not
@@ -754,7 +784,7 @@ The library is in `packages/core`, and `xean-cli` is in `packages/cli`. The CLI
 uses public declaration/loading and campaign APIs. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 8, with distinct solver, standalone-role, and review kinds. Only this
+version 9, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the

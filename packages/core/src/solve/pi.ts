@@ -56,6 +56,8 @@ export async function ask<S extends TSchema>(
     submit?: (value: Static<S>) => { done: boolean; receipt: unknown };
     continuation?: string;
     maxResponses?: number;
+    maxReads?: number;
+    prefix?: unknown[];
     tools?: AgentContext["tools"];
   } = {},
 ): Promise<Static<S>> {
@@ -64,6 +66,12 @@ export async function ask<S extends TSchema>(
   let value: Static<S> | undefined;
   let reminded = false;
   let responses = 0;
+  let reads = 0;
+  const prefix = options.prefix?.map((value) => JSON.stringify(value)) ?? [];
+  const canRead = () =>
+    options.maxReads === undefined ||
+    (reads < options.maxReads &&
+      responses < (options.maxResponses ?? Infinity) - 1);
   const capacity = new Error(
     `${name} input leaves insufficient context for an answer; select less context or use a larger-context model`,
   );
@@ -89,7 +97,11 @@ export async function ask<S extends TSchema>(
   };
   try {
     await runAgentLoop(
-      [{ role: "user", content: JSON.stringify(input), timestamp: Date.now() }],
+      [...prefix, JSON.stringify(input)].map((content) => ({
+        role: "user",
+        content,
+        timestamp: Date.now(),
+      })),
       {
         messages: [
           {
@@ -98,7 +110,17 @@ export async function ask<S extends TSchema>(
             timestamp: Date.now(),
           },
         ],
-        tools: [submit, ...(options.tools ?? [])],
+        tools: [
+          submit,
+          ...(options.tools ?? []).filter(
+            (tool) =>
+              !(
+                profile.model.provider === chatGptWebProviderId &&
+                options.maxReads === 0 &&
+                tool.name === "read_notes"
+              ),
+          ),
+        ],
       },
       {
         ...profile.options,
@@ -133,13 +155,67 @@ export async function ask<S extends TSchema>(
           // Share cache routing for the same prefix and tools, keeping transport
           // sessions isolated. Preserve disabled caching and caller-supplied keys.
           let request = body;
+          // Native Responses supports cache boundaries and tool restrictions.
+          // Codex transport is qualified separately; its read limit stays local.
+          if (model.api === "openai-responses") {
+            const fields = body as {
+              input?: { role?: string; content?: unknown }[];
+              tools?: { type: string; name?: string }[];
+              tool_choice?: unknown;
+              prompt_cache_options?: { mode?: string };
+            };
+            if (
+              prefix.length &&
+              model.compat &&
+              "supportsExplicitPromptCacheMode" in model.compat &&
+              model.compat.supportsExplicitPromptCacheMode &&
+              profile.options?.cacheRetention !== "none" &&
+              fields.prompt_cache_options?.mode !== "explicit" &&
+              Array.isArray(fields.input)
+            )
+              request = {
+                ...request,
+                input: fields.input.map((item) =>
+                  item.role === "user" && Array.isArray(item.content)
+                    ? {
+                        ...item,
+                        content: item.content.map((part) =>
+                          part.type === "input_text" &&
+                          prefix.includes(part.text)
+                            ? {
+                                ...part,
+                                prompt_cache_breakpoint: { mode: "explicit" },
+                              }
+                            : part,
+                        ),
+                      }
+                    : item,
+                ),
+              };
+            if (
+              !canRead() &&
+              Array.isArray(fields.tools) &&
+              (fields.tool_choice === undefined ||
+                fields.tool_choice === "auto")
+            )
+              request = {
+                ...request,
+                tool_choice: {
+                  type: "allowed_tools",
+                  mode: "auto",
+                  tools: fields.tools
+                    .filter((tool) => tool.name !== "read_notes")
+                    .map(({ type, name }) => ({ type, name })),
+                },
+              };
+          }
           if (
             "prompt_cache_key" in body &&
             (body.prompt_cache_key === sessionId ||
               body.prompt_cache_key === clampOpenAIPromptCacheKey(sessionId))
           )
             request = {
-              ...body,
+              ...request,
               prompt_cache_key: createHash("sha256")
                 .update(
                   JSON.stringify([
@@ -166,7 +242,7 @@ export async function ask<S extends TSchema>(
               }
             : {}),
         },
-        async beforeToolCall({ assistantMessage }) {
+        async beforeToolCall({ assistantMessage, toolCall }) {
           if (
             assistantMessage.content.filter(
               (part) =>
@@ -177,7 +253,32 @@ export async function ask<S extends TSchema>(
               block: true,
               reason: "Submit exactly once in each response",
             };
+          if (
+            toolCall.name === "read_notes" &&
+            options.maxReads !== undefined
+          ) {
+            if (!canRead())
+              return {
+                block: true,
+                reason:
+                  "Reading is disabled. Submit results from the available context.",
+              };
+            reads++;
+          }
           return undefined;
+        },
+        async afterToolCall({ toolCall, result }) {
+          if (toolCall.name !== "read_notes" || options.maxReads === undefined)
+            return undefined;
+          return {
+            content: [
+              ...result.content,
+              {
+                type: "text",
+                text: `${options.maxReads - reads} reads remain.`,
+              },
+            ],
+          };
         },
         finishTurn({ message, toolResults }) {
           context.abortSignal?.throwIfAborted();
@@ -231,7 +332,15 @@ export async function ask<S extends TSchema>(
             options.maxResponses === undefined
               ? undefined
               : `${options.maxResponses - responses} of ${options.maxResponses} responses remain.`;
-          const content = [continuation, budget].filter(Boolean).join("\n\n");
+          const reading =
+            options.maxReads === undefined
+              ? undefined
+              : canRead()
+                ? `${options.maxReads - reads} reads remain.`
+                : "Reading is disabled. Use the available context and submit results.";
+          const content = [continuation, budget, reading]
+            .filter(Boolean)
+            .join("\n\n");
           return content
             ? {
                 messages: [

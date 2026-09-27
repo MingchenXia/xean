@@ -6,7 +6,8 @@ and obstacles for later work. Pi supplies standard execution and storage behavio
 
 1. **Let Explorer choose the mathematics.** Explorer chooses subproblems,
    proposes lemmas, searches for counterexamples, and changes methods.
-   Coordinator schedules work and selects relevant notes and feedback. People
+   Coordinator schedules work and supplies guidance. Explorer receives the
+   complete note index and feedback, then chooses which notes to read. People
    and other agents can supply guidance, which Explorer may question or move
    beyond. The exact task, hypotheses, and completion criteria remain fixed.
    A useful intermediate result is progress toward that task.
@@ -36,9 +37,9 @@ and obstacles for later work. Pi supplies standard execution and storage behavio
 4. **Make notes sufficient to continue the task.** Notes and their summaries
    are the shared mathematical memory. Record useful results, limitations,
    counterexamples, and failed approaches there. A new invocation starts from
-   the task and selected recorded mathematics, with room to reconsider the
-   method. Guidance directs work, and the journal retains execution evidence
-   for inspection. Harmless corrections preserve a note's mathematical meaning
+   the task and complete note index, with room to read the recorded mathematics
+   and reconsider the method. Guidance directs work, and the journal retains
+   execution evidence for inspection. Harmless corrections preserve a note's mathematical meaning
    and checks. Changes to its mathematics require a new note with explicit
    dependencies.
 

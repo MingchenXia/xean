@@ -82,7 +82,6 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
                   {
                     kind: "explorer",
                     guidance: "Solve the exact task",
-                    support: [],
                   },
                 ]
               : next === "correctness"
@@ -412,7 +411,7 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
   const requests: Plan["work"] = [
     { kind: "verifier", notes: ["base"], through: "source" },
     { kind: "verifier", notes: ["dependent"], through: "reconstruction" },
-    { kind: "explorer", guidance: "Find a supported argument", support: [] },
+    { kind: "explorer", guidance: "Find a supported argument" },
   ];
   const runtime = fixtureRuntime((context, _options, selected) => {
     expect(selected.id).toBe("coordinator");

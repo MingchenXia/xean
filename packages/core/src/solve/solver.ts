@@ -26,7 +26,7 @@ import {
 import { type PiRuntime } from "./pi.ts";
 import { codexResearch, type Research } from "./research.ts";
 import { guidance, validateCommand } from "./commands.ts";
-import { explorerSchema } from "./config.ts";
+import { readLimitSchema } from "./config.ts";
 
 export function createSolver(
   taskValue: Task,
@@ -35,16 +35,17 @@ export function createSolver(
   research?: Research | ((runtime: PiRuntime) => Research),
 ) {
   const task = decode(taskSchema, taskValue);
+  const maxExplorerReads = settings.maxExplorerReads ?? 4;
   const options: RoleOptions = {
-    maxExplorerResponses: settings.explorer === "retrieval" ? 16 : 4,
+    maxExplorerResponses: maxExplorerReads + 4,
     literature: false,
-    explorer: "prefilled",
+    maxExplorerReads,
     ...settings,
   };
   if (!Check(positiveIntegerSchema, options.maxExplorerResponses))
     throw new Error("maxExplorerResponses must be a positive integer");
-  if (!Check(explorerSchema, options.explorer))
-    throw new Error("Unknown Explorer implementation");
+  if (!Check(readLimitSchema, options.maxExplorerReads))
+    throw new Error("maxExplorerReads must be a nonnegative integer");
   let implementation: ReturnType<typeof createRoles> | undefined;
   const load = () => {
     if (!implementation) {
@@ -116,7 +117,6 @@ export function createSolver(
                   task,
                   notes,
                   guidance: request.guidance,
-                  support: request.support,
                 } satisfies ExplorerInput)
               : { ...common, query: request.query },
         }));

@@ -56,7 +56,7 @@ export type CoordinationInput = {
   literatureUsed: boolean;
 };
 export type RoleOptions = Required<
-  Pick<Settings, "maxExplorerResponses" | "literature" | "explorer">
+  Pick<Settings, "maxExplorerResponses" | "maxExplorerReads" | "literature">
 >;
 
 /** Ordinary functions used by both campaigns and standalone role execution. */
@@ -224,25 +224,31 @@ export function createRoles(
       context: Context,
     ): Promise<SolverResult> {
       input = structuredClone(input);
-      const retrieval = options.explorer === "retrieval";
-      const selected = closure(input.support, input.notes);
+      const index = input.notes.map(noteInfo);
       const accumulated: Exploration["notes"] = [];
       const result = await ask(
         runtime,
         "explorer",
-        `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. Guidance is fallible. Do mathematics without external search. ${retrieval ? "Use read_notes to retrieve committed mathematics from your frozen snapshot. All note IDs and index summaries are supplied; select IDs directly and read detailed summaries or full notes as needed. Read full arguments when summaries omit necessary detail, and follow support IDs for dependencies. Batch independent IDs in one read. Retrieval responses count toward the same response allowance. Dead notes are readable only for diagnosis." : "Your selected support texts are supplied upfront and you have no retrieval tools."} Return self-contained notes with an index summary, detailed summary, and authoritative full text, including useful partial results and failed approaches with their gaps stated. Identify pivotal claims and their unproved assumptions in the notes so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it. Merely reading or discussing a note is not a dependency. Never rely on dead notes. Existing verified support need not be reproved. Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. Empty notes end this invocation without a solution. You have at most ${options.maxExplorerResponses} responses; every response counts, including rejected submissions and responses without one.`,
+        "Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. The preceding messages contain the task and the complete index of note IDs and summaries. The final input supplies note states, feedback, guidance, and your read and response allowances. Guidance is fallible. Use read_notes to choose detailed summaries or full arguments from your frozen snapshot, batching independent IDs. Follow support IDs when needed. Reading is disabled when its allowance is exhausted and on your final response; then work from available context and submit. Every response counts, including reads, rejected submissions, and responses without a submission. Do mathematics without external search. Return self-contained notes with an index summary, detailed summary, and authoritative full text, including useful partial results and failed approaches with their gaps stated. Identify pivotal claims and their unproved assumptions in the notes so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it. Merely reading or discussing a note is not a dependency. Dead notes are diagnostic only; never use them as mathematical support. Existing verified support need not be reproved. Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. Empty notes end this invocation without a solution.",
         {
-          task: input.task,
-          support: retrieval ? input.support : packet(selected),
-          notes: input.notes.map(noteInfo),
+          notes: index.map(({ summary: _summary, ...state }) => state),
           guidance: input.guidance,
+          allowance: {
+            reads: options.maxExplorerReads,
+            responses: options.maxExplorerResponses,
+          },
         },
         explorationSchema,
         execution,
         context,
         {
           maxResponses: options.maxExplorerResponses,
-          tools: retrieval ? [noteReader(input.notes)] : [],
+          maxReads: options.maxExplorerReads,
+          prefix: [
+            { task: input.task },
+            ...index.map(({ id, summary }) => ({ id, summary })),
+          ],
+          tools: [noteReader(input.notes)],
           submit(value) {
             validateNotes([...accumulated, ...value.notes], input.notes);
             if (value.candidate && value.notes.length === 0)
@@ -277,13 +283,12 @@ export function createRoles(
         capabilities: {
           literature: literature && !input.literatureUsed,
           sourceRetrieval: research.retrieval,
-          explorerRetrieval: options.explorer === "retrieval",
         },
       };
       return ask(
         runtime,
         "coordinator",
-        "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy. Select Explorer context from supplied note IDs; use support=[] when no notes are needed, including the initial request when no notes exist. Continue exploration by selecting relevant notes and verifier feedback without prescribing proof steps. When explorerRetrieval is true, Explorer can query internal notes from its frozen snapshot. Otherwise its selected full support is supplied upfront. Explorer never has external retrieval tools. Follow capabilities: when literature is false, do not request a literature search or delegate external retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Dead notes may be selected as Explorer context for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes, batching independent IDs in one call. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return at least one useful work request. Never declare a solution yourself: code accepts only complete verification evidence.",
+        "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy. For Explorer, supply only guidance. The library supplies the exact task, every note summary, verification feedback, and a bounded reader. Explorer chooses which notes to read. Continue exploration without prescribing proof steps. Explorer never has external retrieval tools. Follow capabilities: when literature is false, do not request a literature search or delegate external retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Explorer may read dead notes for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes, batching independent IDs in one call. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return at least one useful work request. Never declare a solution yourself: code accepts only complete verification evidence.",
         prompt,
         planSchema(prompt.capabilities.literature),
         execution,
@@ -298,13 +303,6 @@ export function createRoles(
             )
               throw new Error("Literature already dispatched");
             const find = (id: string) => notes.find((note) => note.id === id);
-            for (const request of plan.work)
-              if (request.kind === "explorer")
-                for (const id of request.support)
-                  if (!find(id))
-                    throw new Error(
-                      `Unknown Explorer context note: ${id}. Choose existing note IDs or use support=[] when no notes are needed.`,
-                    );
             const targets = verificationTargets(plan);
             for (const { id } of targets) {
               const note = find(id);

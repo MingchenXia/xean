@@ -106,6 +106,26 @@ replaces only that generated default with a model/system/tools hash, preserving
 caller keys and disabled caching. Native selective replay and an independent
 cache-key option would remove these integrations.
 
+Explorer supplies the task and each index entry as separate user messages,
+followed by mutable note states, feedback, guidance, and allowances. Pi preserves
+those message boundaries during Responses conversion. Xean keeps tool definitions
+stable when the read allowance is exhausted. Its `beforeToolCall` hook runs after
+native schema validation and reserves each admitted read before execution.
+Pi prepares calls sequentially even when it executes a batch in parallel, so the
+guard also bounds several calls in one response. Unknown IDs consume an admitted
+read. Schema-invalid arguments do not. Pi owns the transcript and blocked-tool
+results, while Xean owns the allowance and final-response restriction.
+
+For public OpenAI Responses models that advertise explicit cache support, the
+payload hook marks stable prefix messages as cache boundaries. It preserves
+`cacheRetention: "none"` and caller-supplied explicit cache policy. When reading
+ends, `allowed_tools` restricts calls to the remaining tools without changing
+their definitions. These controls are covered through Pi's native request
+conversion with a local transport fixture. They have not been live-qualified on
+the public API. Codex Responses currently uses local read enforcement without
+these payload additions. Pi exposes neither a provider-neutral tool allowlist
+nor per-message cache boundaries; native equivalents would remove these hooks.
+
 ChatGPT Web uses native `createProvider`, `lazyStream`, Responses transport, and
 transcript conversion. Pi owns asynchronous setup, event delivery, and stream
 completion. The adapter selects the unique final answer and converts typed JSON
@@ -116,6 +136,10 @@ terminal event. The custom API identity excludes it from OpenAI reasoning
 replay. Both the underlying transport and the solver disable automatic request
 retries for this provider. Pi's retry policy is provider-agnostic and has no
 provider replay-safety flag, so the solver selects this exception explicitly.
+The adapter supports a single output function. Explorer therefore requires
+`maxExplorerReads: 0` and omits the unavailable reader for this provider.
+Positive read allowances fail before dispatch rather than falling back to
+summary-only work.
 
 Claude subscription transport uses `pi-claude-code-provider` pinned to `0.5.0`
 ([source](https://github.com/chem/pi-claude-code-provider/tree/a87b98539f57945b8a6df8c26db4cdcf3ed38a7a)).

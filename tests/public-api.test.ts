@@ -86,7 +86,6 @@ test("public solver functions replace planning, Explorer, and Verifier without c
             {
               kind: "explorer",
               guidance: "Prove the exact claim",
-              support: [],
             },
           ],
     };
