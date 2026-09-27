@@ -582,8 +582,8 @@ from `xean/pi` directly with Pi's `models.setProvider()`.
 
 `maxExplorerResponses` defaults to four. `literature` defaults to false. `limits`
 uses the kernel's concurrency, attempts, and logical provider calls. Campaigns,
-roles, experiments, and smoke runs have no wall-clock deadlines. Claude's
-process total, inactivity, and tool-bridge readiness cutoffs are disabled.
+roles, experiments, and smoke runs have no added wall-clock deadlines. Existing
+provider timeouts remain in place and are tuned from observed provider data.
 Token and dollar budgets remain out of scope. Set `usagePrefix` to a
 unique campaign label when using codex-lb. The frozen settings retain it, and each
 call appends the kernel attempt ID. The smoke assigns a timestamped prefix.

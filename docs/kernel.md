@@ -214,9 +214,10 @@ interrupt several concurrent workers.
 | `attempts`      | Maximum invocations per logical worker or Coordinator signal, including initial and interrupted attempts | `3`               |
 | `providerCalls` | Initial logical-call allowance, retained unchanged when reopening                                        | `null`, unlimited |
 
-Campaigns and roles have no wall-clock deadlines. Elapsed time does not stop
-admission, abort an invocation, or prevent publication. Settings reject the
-retired `deadline` field. Experiment and smoke runners follow the same rule.
+The kernel imposes no wall-clock deadline on campaigns or roles. Elapsed time
+does not stop kernel admission or publication. Settings reject the retired
+`deadline` field. Experiment and smoke runners add no such cutoff. Existing
+dependency timeouts remain provider behavior and are tuned from measured data.
 
 Token and dollar budgets are outside the planned scope. Usage records support
 observation and comparisons. Pi's internal HTTP or WebSocket retry

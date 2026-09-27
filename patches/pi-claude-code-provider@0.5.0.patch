@@ -1,106 +1,21 @@
 diff --git a/src/context-serializer.ts b/src/context-serializer.ts
-index 95e2358b1bd96874df566a747b70675de206af31..99de7daf8dadba26bafbd83a8613da18e6674c4f 100644
 --- a/src/context-serializer.ts
 +++ b/src/context-serializer.ts
-@@ -123,10 +123,6 @@ function validateImage(image: ImageContent, limits: RequestPreparationLimits): {
+@@ -121,10 +121,6 @@
+     throw new ClaudeCodeError("image_size", `Image size must be between 1 byte and ${limits.imageBytes} bytes`);
+   }
    return { bytes, extension };
- }
- 
--function recordField(value: unknown, field: string): unknown {
--  return value && typeof value === "object" ? (value as Record<string, unknown>)[field] : undefined;
 -}
 -
- /**
-  * Serialize conversational semantics into append-stable NDJSON records. Each
-  * record is transported as its own text block. Historical tool identities are
-diff --git a/src/process-utils.ts b/src/process-utils.ts
-index bc8a8815265f5c2dcfb8841a96440f7c2ee2a8d2..2cc05b887d22fad88f4bc0fed2601e4fb82ae2de 100644
---- a/src/process-utils.ts
-+++ b/src/process-utils.ts
-@@ -115,6 +115,7 @@ export function superviseProcess(child: ChildProcess, options: ProcessSupervisor
-   const onStderrError = (error: Error): void => fail(new Error(`Claude Code stderr failed: ${error.message}`));
- 
-   const armIdle = (): void => {
-+    if (options.idleTimeoutMs === 0) return;
-     if (idleTimer) clearTimeout(idleTimer);
-     idleTimer = setTimeout(() => {
-       fail(new Error(`Claude Code produced no protocol activity for ${options.idleTimeoutMs}ms`));
-@@ -128,10 +129,12 @@ export function superviseProcess(child: ChildProcess, options: ProcessSupervisor
-   child.stdout?.on("error", onStdoutError);
-   child.stderr?.on("error", onStderrError);
-   armIdle();
--  totalTimer = setTimeout(() => {
--    fail(new Error(`Claude Code request exceeded ${options.totalTimeoutMs}ms`));
--  }, options.totalTimeoutMs);
--  totalTimer.unref();
-+  if (options.totalTimeoutMs > 0) {
-+    totalTimer = setTimeout(() => {
-+      fail(new Error(`Claude Code request exceeded ${options.totalTimeoutMs}ms`));
-+    }, options.totalTimeoutMs);
-+    totalTimer.unref();
-+  }
- 
-   return {
-     touch: armIdle,
-diff --git a/src/provider.ts b/src/provider.ts
-index 6ee34923e1fc9512e4bc2360aa5b512d46aab6c7..458de7f91ca32c762bf77b23fe60af141e6f67b3 100644
---- a/src/provider.ts
-+++ b/src/provider.ts
-@@ -59,6 +59,8 @@ function recoverProviderContext(context: TranscriptContext): Context {
+-function recordField(value: unknown, field: string): unknown {
+-  return value && typeof value === "object" ? (value as Record<string, unknown>)[field] : undefined;
  }
  
- export interface ClaudeStreamDependencies {
-+  /** Notify an SDK owner after process and private-state cleanup settles. */
-+  onSettled?: () => void;
-   cleanupDirectory?: CleanupDirectory;
-   claimLaunch?: ClaimLaunch;
-   supervise?: typeof superviseProcess;
-@@ -290,14 +292,15 @@ export function createClaudeStream(
- 
-         // Configuration must fail before a paid budget slot is claimed or a
-         // Claude process is spawned.
--        const configuredTotal = timeoutSetting("PI_CLAUDE_CODE_PROVIDER_TOTAL_TIMEOUT_MS", DEFAULT_TOTAL_TIMEOUT_MS);
-+        // An explicit zero disables execution and readiness cutoffs for SDK owners.
-+        const configuredTotal = options?.timeoutMs === 0 ? 0 : timeoutSetting("PI_CLAUDE_CODE_PROVIDER_TOTAL_TIMEOUT_MS", DEFAULT_TOTAL_TIMEOUT_MS);
-         const requestedTotal = options?.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : configuredTotal;
-         const totalTimeoutMs = Math.min(requestedTotal, configuredTotal);
--        const idleTimeoutMs = Math.min(
-+        const idleTimeoutMs = totalTimeoutMs === 0 ? 0 : Math.min(
-           timeoutSetting("PI_CLAUDE_CODE_PROVIDER_IDLE_TIMEOUT_MS", DEFAULT_IDLE_TIMEOUT_MS),
-           totalTimeoutMs,
-         );
--        const readyTimeoutMs = Math.min(
-+        const readyTimeoutMs = totalTimeoutMs === 0 ? 0 : Math.min(
-           timeoutSetting("PI_CLAUDE_CODE_PROVIDER_MCP_READY_TIMEOUT_MS", DEFAULT_MCP_READY_TIMEOUT_MS),
-           totalTimeoutMs,
-         );
-@@ -491,7 +494,11 @@ export function createClaudeStream(
-           stream.end();
-         }
-       } finally {
--        await finalizeLifecycle();
-+        try {
-+          await finalizeLifecycle();
-+        } finally {
-+          dependencies.onSettled?.();
-+        }
-       }
-     })();
- 
-@@ -747,7 +754,7 @@ export async function waitForReadyOrExit(
-     (error) => { processError = error; },
-   );
-   const deadline = Date.now() + timeoutMs;
--  while (Date.now() < deadline) {
-+  while (timeoutMs === 0 || Date.now() < deadline) {
-     if (signal?.aborted) throw new ClaudeCodeError("aborted", "Claude Code request was aborted");
-     if (processError) throw processError;
-     if (exited) {
+ /**
 diff --git a/src/session-registry.ts b/src/session-registry.ts
-index 89ff4e9495a1ebbef6275d7c85d7198ed648ed70..628039e139ccf27aee892596d135e88e656856b9 100644
 --- a/src/session-registry.ts
 +++ b/src/session-registry.ts
-@@ -111,18 +111,18 @@ export function resolveSession(
+@@ -111,18 +111,18 @@
      // which that caller's own tools never touch. The rest of the session state is
      // borrowed, preferring a live session already in that directory; both are
      // private temporary state.
@@ -122,3 +37,28 @@ index 89ff4e9495a1ebbef6275d7c85d7198ed648ed70..628039e139ccf27aee892596d135e88e
    }
    return {
      error: live.length === 1
+diff --git a/src/provider.ts b/src/provider.ts
+--- a/src/provider.ts
++++ b/src/provider.ts
+@@ -59,6 +59,8 @@
+ }
+ 
+ export interface ClaudeStreamDependencies {
++  /** Notify an SDK owner after process and private-state cleanup settles. */
++  onSettled?: () => void;
+   cleanupDirectory?: CleanupDirectory;
+   claimLaunch?: ClaimLaunch;
+   supervise?: typeof superviseProcess;
+@@ -491,7 +493,11 @@
+           stream.end();
+         }
+       } finally {
+-        await finalizeLifecycle();
++        try {
++          await finalizeLifecycle();
++        } finally {
++          dependencies.onSettled?.();
++        }
+       }
+     })();
+ 

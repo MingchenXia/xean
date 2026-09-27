@@ -69,8 +69,9 @@ canonical terminology. Reuse an existing term before defining and justifying a n
 - Private-progress recovery is deferred. Retain whole-worker recovery until
   suitable Pi support or a concrete workload justifies adopting it. Future
   private resumption must preserve atomic shared publication.
-- Campaigns, roles, experiments, and smoke runs have no wall-clock deadlines.
-  Do not add execution cutoffs, including provider total or inactivity limits.
+- Do not impose arbitrary wall-clock deadlines on campaigns, roles, experiments,
+  or smoke runs. Keep existing dependency timeouts and tune them from measured
+  run and provider data, distinguishing total duration from inactivity.
   Call caps stop admission and drain admitted work. Cancellation prevents late
   publication. Keyed call grants preserve frozen startup limits
   and cannot bypass other stopping conditions. Token and dollar budgets are out of scope.

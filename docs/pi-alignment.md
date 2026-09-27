@@ -121,13 +121,9 @@ Pi supplies the Opus model definition, provider registration, and lazy stream.
 The package owns CLI authentication, serialization, process termination,
 temporary files, and usage parsing. Xean owns the request's image-store lifetime
 and holds terminal events until process and image cleanup settle. A small patch
-exposes the finalization callback and resolves strict TypeScript issues. It also
-lets an explicit `timeoutMs: 0` disable process total, inactivity, and tool-bridge
-readiness cutoffs. Xean always selects that mode. Upstream's default total and
-inactivity limits would otherwise interrupt long mathematical invocations.
-Remove this part of the patch when upstream provides an equivalent unbounded
-execution mode. Process failure and explicit cancellation still terminate and
-join the owned process tree. Its
+exposes the finalization callback and resolves strict TypeScript issues. Existing
+dependency timeouts remain in place. Tune them from measured durations and
+inactivity for the relevant provider, without adding a separate role deadline. Its
 source imports are version-specific and need review on upgrade. Both subscription
 transports remain model providers used by ordinary roles.
 

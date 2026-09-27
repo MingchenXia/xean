@@ -66,7 +66,7 @@
     },
     {
       "path": "patches/pi-claude-code-provider@0.5.0.patch",
-      "sha256": "2b5f3916e3e3b249733c7899d91b5fe15636c31e9c9e9cd6eeaa2077dc969d10",
+      "sha256": "90d8940efe9fcfd71ecf23587746e348545a4e3f932ad1a8c5bd8f1d239867e5",
       "appliedBy": "Bun patchedDependencies at installation"
     }
   ],
