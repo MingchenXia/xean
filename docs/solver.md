@@ -160,9 +160,9 @@ consumes one read, including a batch of IDs or a call that fails because an
 ID is unknown. Pi rejects schema-invalid arguments before admission, so those
 requests consume no reads. Several calls in one response each consume a read.
 The local guard enforces the allowance before executing a call, including when
-the model requests several calls at once. Zero allows work from the supplied
-summaries without reading full notes. Coordinator's own reader has no
-per-invocation read allowance.
+the model requests several calls at once. The allowance must be at least one,
+so Explorer can obtain details absent from the summaries. Coordinator's own
+reader has no per-invocation read allowance.
 
 `maxExplorerResponses` bounds completed responses, including read requests,
 rejected submissions, and responses without a submission. Reading is disabled when its allowance is
@@ -170,8 +170,7 @@ exhausted and on the final response, leaving that response available for
 `submit_result`. Read results and follow-ups report the remaining allowance.
 Providers that support the reader retain its tool definition in the
 conversation, and attempts after it is disabled receive a blocked result.
-The submission tool remains available. The ChatGPT Web provider requires
-zero reads, as described under [configuration](#configuration-and-functions).
+The submission tool remains available.
 
 Failed approaches belong in notes, and guidance supplies scheduling direction.
 Dead notes remain readable for diagnosis but cannot be mathematical dependencies.
@@ -626,16 +625,21 @@ To use the existing Explorer with ChatGPT Pro, select its browser provider:
 }
 ```
 
-Put this in `profiles.explorer` and set `maxExplorerReads: 0` in the campaign
-settings. This Explorer works from the task, summaries, state, and guidance.
-Its unusable reader is omitted, leaving only `submit_result`. Positive read
-allowances are unsupported and fail before dispatch.
-The provider accepts text and a single object-shaped output function. It
-requests the function's arguments as strict
-JSON, validates them without coercion, and returns a Pi tool call for the
-normal result handler. Multiple tools and images fail before dispatch.
+Put this in `profiles.explorer`. The adapter derives a structured response
+schema from every tool declared by Pi, including each name, description, and
+argument schema. ChatGPT returns text and a list of selected calls. The adapter
+validates the whole response without coercion and emits native Pi tool calls.
+Pi executes the tools, applies limits, and supplies results on the next turn.
+This supports arbitrary caller tools, including Explorer's `read_notes` and
+`submit_result`, without role-specific behavior in the provider. An empty call
+list permits a final text answer. Images remain unsupported.
 `toolChoice: "none"` requests ordinary text. Each request carries the complete
 transcript, including earlier results and validation feedback.
+
+Each outer tool round sends another browser request and can consume another
+ChatGPT Pro allowance. General tool support does not make these round trips
+quota-free. For scarce Pro usage, prepare the full context before one mathematical
+request instead of using this provider for an iterative Explorer tool loop.
 
 The Responses bridge owns browser login and model selection. Its JSON-schema
 responses must preserve the native answer source. The tested codex-chatgpt-web
@@ -651,7 +655,7 @@ disabling ChatGPT-native retrieval. It is not qualified for enforced
 closed-book experiments. Library callers can register `chatGptWebProvider`
 from `xean/pi` directly with Pi's `models.setProvider()`.
 
-`maxExplorerReads` is a nonnegative safe integer and defaults to four.
+`maxExplorerReads` is a positive safe integer and defaults to four.
 `maxExplorerResponses` is a positive safe integer and defaults to
 `maxExplorerReads + 4`. An explicit response limit overrides that default.
 The [read contract](#roles-and-acceptance) defines admission and the final-response

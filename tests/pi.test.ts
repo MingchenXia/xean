@@ -963,7 +963,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     return reply("submit_result", plan);
   };
   const roles = createRoles(runtime, offlineResearch, {
-    maxExplorerReads: 0,
+    maxExplorerReads: 1,
     maxExplorerResponses: 4,
     literature: true,
   });

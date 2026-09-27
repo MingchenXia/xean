@@ -15,6 +15,9 @@ import {
 import { project } from "../packages/core/src/solve/notes.ts";
 import { ask } from "../packages/core/src/solve/pi.ts";
 
+const selection = (name: string, args: unknown) =>
+  JSON.stringify({ text: "", calls: [{ name, arguments: args }] });
+
 function response(text: string) {
   const item = (phase: string, text: string) => ({
     type: "message",
@@ -49,9 +52,9 @@ test("browser provider runs the ordinary Explorer with private continuation and 
         baseUrl: "https://bridge.invalid/v1",
       },
     },
-    maxExplorerResponses: 3,
-    maxExplorerReads: 0,
-    limits: { concurrency: 1, attempts: 1, providerCalls: 3 },
+    maxExplorerResponses: 4,
+    maxExplorerReads: 1,
+    limits: { concurrency: 1, attempts: 1, providerCalls: 4 },
   });
   const runtime = piRuntime(settings, "unrelated-gateway-key");
   expect(runtime.profiles.explorer.options?.apiKey).toBeUndefined();
@@ -106,18 +109,23 @@ test("browser provider runs the ordinary Explorer with private continuation and 
       expect(body.reasoning.effort).toBe("max");
       expect(body.text.format).toMatchObject({
         type: "json_schema",
-        name: "submit_result",
+        name: "tool_response",
         strict: true,
       });
-      if (requests.length > 1) {
+      if (requests.length > 2) {
         expect(JSON.stringify(body.input)).toContain("n1");
         expect(JSON.stringify(body.input)).toContain("function_call_output");
       }
-      if (requests.length === 3)
+      if (requests.length === 4)
         expect(JSON.stringify(body.input)).toContain(
           "Unknown, dead, or forward support",
         );
-      return response(JSON.stringify(drafts[requests.length - 1]));
+      if (requests.length === 1)
+        return response(
+          selection("read_notes", { ids: ["given"], level: "full" }),
+        );
+      expect(JSON.stringify(body.input)).toContain("FROZEN-NOTE");
+      return response(selection("submit_result", drafts[requests.length - 2]));
     },
     { preconnect: fetch.preconnect },
   );
@@ -134,7 +142,26 @@ test("browser provider runs the ordinary Explorer with private continuation and 
         role: "explorer",
         task,
         settings,
-        input: { task, notes: [], guidance: "Explore" },
+        input: {
+          task,
+          notes: [
+            {
+              id: "given",
+              summary: "Read me",
+              detailedSummary: "A fixture",
+              text: "FROZEN-NOTE",
+              support: [],
+              revision: 0,
+              imported: true,
+              checks: [],
+              verified: true,
+              dead: false,
+              accepted: false,
+              candidate: false,
+            },
+          ],
+          guidance: "Explore",
+        },
       },
       runtime,
     ),
@@ -143,7 +170,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
     await engine.run();
     const snapshot = await engine.inspectWithRecords();
     expect(snapshot.campaign.status).toBe("completed");
-    expect(snapshot.campaign.providerCalls).toBe(3);
+    expect(snapshot.campaign.providerCalls).toBe(4);
     const notes = project(snapshot.campaign);
     expect(notes.map((n) => n.text)).toEqual([
       drafts[0]!.notes[0]!.text,
@@ -158,7 +185,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
       "xean.call.request",
       "xean.call.settled",
     ])
-      expect(snapshot.records.filter((r) => r.kind === kind)).toHaveLength(3);
+      expect(snapshot.records.filter((r) => r.kind === kind)).toHaveLength(4);
     const settled = snapshot.records
       .filter((r) => r.kind === "xean.call.settled")
       .map((r) => r.data as any);
@@ -171,7 +198,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
       JSON.parse(r.client_metadata["x-codex-turn-metadata"]),
     );
     expect(new Set(identities.map((i) => i.thread_id)).size).toBe(1);
-    expect(new Set(identities.map((i) => i.turn_id)).size).toBe(3);
+    expect(new Set(identities.map((i) => i.turn_id)).size).toBe(4);
   } finally {
     await engine.close();
   }
@@ -193,9 +220,20 @@ test("browser provider returns final text and validates a generic typed output w
     messages: [{ role: "user" as const, content: "Answer", timestamp: 0 }],
   };
   for (const [text, valid] of [
-    ['{"count":2}', true],
-    ['{"count":"2"}', false],
-    ['{"count":2,"extra":1}', false],
+    [selection("answer", { count: 2 }), true],
+    [selection("answer", { count: "2" }), false],
+    [selection("answer", { count: 2, extra: 1 }), false],
+    [selection("missing", { count: 2 }), false],
+    [
+      JSON.stringify({
+        text: "",
+        calls: [
+          { name: "answer", arguments: { count: 2 } },
+          { name: "missing", arguments: {} },
+        ],
+      }),
+      false,
+    ],
     ['{"count":\\[\\]}', false],
   ] as const) {
     const options = {
@@ -228,6 +266,51 @@ test("browser provider returns final text and validates a generic typed output w
     );
     expect(plain.content).toEqual([{ type: "text", text }]);
   }
+  const lookup = {
+    name: "lookup",
+    description: "Look up a key",
+    parameters: Type.Object(
+      { key: Type.String() },
+      { additionalProperties: false },
+    ),
+  };
+  for (const envelope of [
+    {
+      text: "Checking",
+      calls: [
+        { name: "lookup", arguments: { key: "x" } },
+        { name: "answer", arguments: { count: 2 } },
+      ],
+    },
+    { text: "Finished", calls: [] },
+  ]) {
+    const result = await models.completeSimple(
+      model,
+      { ...input, tools: [tool, lookup] },
+      {
+        fetch: Object.assign(async () => response(JSON.stringify(envelope)), {
+          preconnect: fetch.preconnect,
+        }),
+      },
+    );
+    expect(result.stopReason).toBe(envelope.calls.length ? "toolUse" : "stop");
+    expect(result.content).toMatchObject([
+      { type: "text", text: envelope.text },
+      ...envelope.calls.map((call) => ({ type: "toolCall", ...call })),
+    ]);
+  }
+  const mismatched = await models.completeSimple(
+    model,
+    { ...input, tools: [tool, lookup] },
+    {
+      fetch: Object.assign(
+        async () => response(selection("answer", { key: "x" })),
+        { preconnect: fetch.preconnect },
+      ),
+    },
+  );
+  expect(mismatched.stopReason).toBe("error");
+  expect(mismatched.content).toEqual([]);
   let dispatched = false;
   const invalidPayload = await models.completeSimple(model, input, {
     onPayload: () => null,
@@ -244,7 +327,7 @@ test("browser provider returns final text and validates a generic typed output w
   expect(dispatched).toBeFalse();
 });
 
-test("browser provider rejects unsupported calls and settles cancellation without replay", async () => {
+test("browser provider rejects images and settles cancellation without replay", async () => {
   const models = createModels();
   models.setProvider(chatGptWebProvider());
   const model = models.getModel("codex-chatgpt-web", "chatgpt-web/gpt-6-pro")!;
@@ -274,7 +357,18 @@ test("browser provider rejects unsupported calls and settles cancellation withou
     (
       await models.completeSimple(
         model,
-        { ...input, tools: [tool, { ...tool, name: "two" }] },
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "image", data: "fixture", mimeType: "image/png" },
+              ],
+              timestamp: 0,
+            },
+          ],
+          tools: [tool],
+        },
         options,
       )
     ).stopReason,
@@ -310,7 +404,7 @@ test("solver recovery never resubmits a disconnected browser request", async () 
       // A second request would hide the disconnect behind a successful result.
       return calls === 1
         ? new Response("upstream connection lost", { status: 502 })
-        : response('{"answer":true}');
+        : response(selection("submit_result", { answer: true }));
     },
     { preconnect: fetch.preconnect },
   );

@@ -26,7 +26,6 @@ import {
 import { type PiRuntime } from "./pi.ts";
 import { codexResearch, type Research } from "./research.ts";
 import { guidance, validateCommand } from "./commands.ts";
-import { readLimitSchema } from "./config.ts";
 
 export function createSolver(
   taskValue: Task,
@@ -44,8 +43,8 @@ export function createSolver(
   };
   if (!Check(positiveIntegerSchema, options.maxExplorerResponses))
     throw new Error("maxExplorerResponses must be a positive integer");
-  if (!Check(readLimitSchema, options.maxExplorerReads))
-    throw new Error("maxExplorerReads must be a nonnegative integer");
+  if (!Check(positiveIntegerSchema, options.maxExplorerReads))
+    throw new Error("maxExplorerReads must be a positive integer");
   let implementation: ReturnType<typeof createRoles> | undefined;
   const load = () => {
     if (!implementation) {

@@ -128,18 +128,22 @@ nor per-message cache boundaries; native equivalents would remove these hooks.
 
 ChatGPT Web uses native `createProvider`, `lazyStream`, Responses transport, and
 transcript conversion. Pi owns asynchronous setup, event delivery, and stream
-completion. The adapter selects the unique final answer and converts typed JSON
-into one Pi tool call. It retains response metadata on failure and marks browser
+completion. The adapter selects the unique final answer and validates its typed
+JSON envelope against the current Pi tool names and argument schemas. It emits
+native tool calls and optional text, with Pi owning execution and continuation.
+An empty call list permits final text. It retains response metadata on failure and marks browser
 usage unmeasured. Pi's setup-error helper has no partial-response or cancellation
 metadata, so response validation and cancellation still need the adapter's
 terminal event. The custom API identity excludes it from OpenAI reasoning
 replay. Both the underlying transport and the solver disable automatic request
 retries for this provider. Pi's retry policy is provider-agnostic and has no
 provider replay-safety flag, so the solver selects this exception explicitly.
-The adapter supports a single output function. Explorer therefore requires
-`maxExplorerReads: 0` and omits the unavailable reader for this provider.
-Positive read allowances fail before dispatch rather than falling back to
-summary-only work.
+The adapter contains no role-specific tool names. Browser tool calls are
+structured proposals executed locally by Pi, including submission. This general
+translation has transport-fixture coverage for multiple tools, multiple calls,
+validation, result feedback, and cancellation. The prior single-output adapter
+was live-qualified on ChatGPT Pro. The generalized envelope still needs a live
+browser qualification.
 
 Claude subscription transport uses `pi-claude-code-provider` pinned to `0.5.0`
 ([source](https://github.com/chem/pi-claude-code-provider/tree/a87b98539f57945b8a6df8c26db4cdcf3ed38a7a)).

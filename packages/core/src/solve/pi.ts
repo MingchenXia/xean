@@ -110,17 +110,7 @@ export async function ask<S extends TSchema>(
             timestamp: Date.now(),
           },
         ],
-        tools: [
-          submit,
-          ...(options.tools ?? []).filter(
-            (tool) =>
-              !(
-                profile.model.provider === chatGptWebProviderId &&
-                options.maxReads === 0 &&
-                tool.name === "read_notes"
-              ),
-          ),
-        ],
+        tools: [submit, ...(options.tools ?? [])],
       },
       {
         ...profile.options,

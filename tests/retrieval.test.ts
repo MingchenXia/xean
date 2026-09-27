@@ -5,6 +5,7 @@ import { getDeclaredTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { Execution } from "../packages/core/src/types.ts";
 import type { Note } from "../packages/core/src/solve/contracts.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
+import { readSettings } from "../packages/core/src/solve/config.ts";
 import { fixtureRuntime } from "./fixtures/pi.ts";
 
 const task = { problem: "Exact task", completionCriteria: "Complete proof" };
@@ -38,7 +39,7 @@ const reply = (...calls: ReturnType<typeof fauxToolCall>[]) =>
 
 test("Explorer receives automatic summaries and keeps its prefix stable across read allowances", async () => {
   const prefixes: string[][] = [];
-  for (const maxExplorerReads of [0, 1, 4]) {
+  for (const maxExplorerReads of [1, 2, 4]) {
     const notes = [note("live", "Live lemma")];
     const runtime = fixtureRuntime((context) => {
       const inputs = context.messages
@@ -79,8 +80,20 @@ test("Explorer receives automatic summaries and keeps its prefix stable across r
   const runtime = fixtureRuntime(() => {
     throw new Error("No model call");
   });
-  for (const maxExplorerReads of [-1, 1.5, Infinity, Number.MAX_SAFE_INTEGER])
+  for (const maxExplorerReads of [
+    0,
+    -1,
+    1.5,
+    Infinity,
+    Number.MAX_SAFE_INTEGER,
+  ])
     expect(() => createSolver(task, runtime, { maxExplorerReads })).toThrow();
+  expect(() =>
+    readSettings({
+      profiles: { default: { provider: "openai", model: "gpt-6-astra" } },
+      maxExplorerReads: 0,
+    }),
+  ).toThrow();
 });
 
 test("retrieval freezes batched reads and rejects invalid IDs and dead dependencies", async () => {
@@ -203,9 +216,9 @@ test("retrieval freezes batched reads and rejects invalid IDs and dead dependenc
   expect(responses).toBe(4);
 });
 
-test("read limits cover batched calls, zero reads, and the final response without changing tools", async () => {
+test("read limits cover batched calls and the final response without changing tools", async () => {
   for (const { reads, responses: maximum, admitted } of [
-    { reads: 0, responses: 4, admitted: 0 },
+    { reads: 1, responses: 4, admitted: 1 },
     { reads: 2, responses: 6, admitted: 2 },
     { reads: 9, responses: 2, admitted: 3 },
   ]) {

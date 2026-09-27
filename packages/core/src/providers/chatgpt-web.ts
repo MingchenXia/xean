@@ -4,9 +4,11 @@ import {
   getDeclaredTools,
   normalizeContext,
   resolveTranscript,
+  Type,
   type AssistantMessageEvent,
   type Model,
   type SimpleStreamOptions,
+  type ToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
@@ -15,7 +17,7 @@ import { Value } from "typebox/value";
 export const chatGptWebProviderId = "codex-chatgpt-web";
 const api = "chatgpt-web";
 
-/** Plain text or one typed output function, using a browser-only Responses bridge. */
+/** Map structured browser replies to native Pi tool calls. Pi executes the tools. */
 export function chatGptWebProvider(baseUrl = "http://127.0.0.1:17841/v1") {
   const model: Model<typeof api> = {
     id: "chatgpt-web/gpt-6-pro",
@@ -58,10 +60,6 @@ function stream(
       options.toolChoice === "none"
         ? []
         : getDeclaredTools(normalized.messages);
-    if (tools.length > 1)
-      throw new Error(
-        "ChatGPT Web supports one object-shaped output function per request",
-      );
     if (
       normalized.messages.some(
         (m) =>
@@ -69,19 +67,43 @@ function stream(
       )
     )
       throw new Error("ChatGPT Web provider currently accepts text only");
-    const tool = tools[0];
+    const output = tools.length
+      ? Type.Object(
+          {
+            text: Type.String(),
+            calls: Type.Array(
+              Type.Union(
+                tools.map((tool) =>
+                  Type.Object(
+                    {
+                      name: Type.Literal(tool.name),
+                      arguments: tool.parameters,
+                    },
+                    {
+                      additionalProperties: false,
+                      description: tool.description,
+                    },
+                  ),
+                ),
+              ),
+            ),
+          },
+          { additionalProperties: false },
+        )
+      : undefined;
     const input = normalizeContext({
       messages: normalized.messages.map((m) =>
         m.role === "system" ? { ...m, toolsAdded: [], toolsRemoved: [] } : m,
       ),
     });
-    if (tool)
+    if (output)
       input.messages = [
         ...input.messages,
         {
           role: "system",
           timestamp: Date.now(),
-          content: `Express the result for the caller's output function ${JSON.stringify(tool.name)} as one JSON object containing its arguments. The supplied output schema defines those arguments. The caller processes the result after this response. Do not attempt to call a ChatGPT-native tool for this function.\n${tool.description}`,
+          content:
+            'Return {"text":...,"calls":[{"name":...,"arguments":...}]} matching the supplied schema. Use calls for the caller-owned tools you need, with optional accompanying text. Use an empty calls array for a final text answer. The caller executes these tools and supplies their results before your next response. Do not substitute ChatGPT-native tools for these functions.',
         },
       ];
     const threadId = createHash("sha256")
@@ -121,13 +143,13 @@ function stream(
             id: `msg_${randomUUID()}`,
             internal_chat_message_metadata_passthrough: { turn_id: turnId },
           });
-          if (tool)
+          if (output)
             body.text = {
               format: {
                 type: "json_schema",
-                name: tool.name,
+                name: "tool_response",
                 strict: true,
-                schema: tool.parameters,
+                schema: output,
               },
             };
           const replacement = await options.onPayload?.(body, model);
@@ -175,31 +197,35 @@ function stream(
           );
         if (finalAnswers?.length !== 1 || !finalAnswers[0])
           throw new Error("ChatGPT Web returned no unique final answer");
-        const text = finalAnswers[0];
-        const args = tool ? JSON.parse(text) : undefined;
+        const selection = output ? JSON.parse(finalAnswers[0]) : undefined;
+        if (output && !Value.Check(output, selection))
+          throw new Error("ChatGPT Web returned an invalid tool selection");
+        const calls: Pick<ToolCall, "name" | "arguments">[] =
+          selection?.calls ?? [];
+        const text: string = selection?.text ?? finalAnswers[0];
         if (
-          tool &&
-          (args === null ||
-            typeof args !== "object" ||
-            Array.isArray(args) ||
-            !Value.Check(tool.parameters, args))
+          calls.some(
+            (call) =>
+              call.arguments === null ||
+              typeof call.arguments !== "object" ||
+              Array.isArray(call.arguments),
+          )
         )
-          throw new Error(
-            `ChatGPT Web returned invalid arguments for ${tool.name}`,
-          );
+          throw new Error("ChatGPT Web tool arguments must be an object");
+        if (!calls.length && !text.trim())
+          throw new Error("ChatGPT Web returned no text or tool calls");
         // A buffered provider emits one complete result. Pi owns tool execution.
         yield { type: "start", partial: message };
         message.content = [
-          tool
-            ? {
-                type: "toolCall",
-                id: `call_${randomUUID()}`,
-                name: tool.name,
-                arguments: args,
-              }
-            : { type: "text", text },
+          ...(text ? [{ type: "text" as const, text }] : []),
+          ...calls.map((call) => ({
+            type: "toolCall" as const,
+            id: `call_${randomUUID()}`,
+            name: call.name,
+            arguments: call.arguments,
+          })),
         ];
-        message.stopReason = tool ? "toolUse" : "stop";
+        message.stopReason = calls.length ? "toolUse" : "stop";
         yield { type: "done", reason: message.stopReason, message };
       } catch (error) {
         message.stopReason = options.signal?.aborted ? "aborted" : "error";
