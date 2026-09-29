@@ -8,6 +8,19 @@ correction APIs, CLI input files, and persisted solver inputs. Solver declaratio
 use version 9 and observer exports use `xean-observe/v2`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
+- Pin all Pi/Chord packages to upstream main commit `312184edb68c`, with a fresh
+  frozen model catalog and matching hashes from two clean builds. The changed
+  Pi SQLite schema and Harness checkpoints require campaign format 8 and fresh campaigns.
+- Store uses Pi's public commit subscriptions after document adoption, removing
+  its Storage proxy. Native Session poisoning determines whether failed
+  operations require reopening.
+- Pi Harness owns dispatch, invocation cancellation, joining, and whole-worker
+  recovery through local admission, pause, recovery, and failure-settlement
+  extensions. Xean retains campaign admission and atomic result/signal policy.
+  Shutdown drains call accounting before closing storage. Unfinished admissions
+  roll back on pause, and interrupted invocations cannot publish late results.
+- Status and observer exports share solver-campaign recognition, so closed-book
+  campaigns also report note counts.
 - Explorer always starts with the task, all note IDs and summaries, and current
   feedback. Coordinator supplies only guidance. Explorer selects frozen detailed
   summaries or full notes through `read_notes`. `maxExplorerReads` defaults to four

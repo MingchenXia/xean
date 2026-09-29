@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/earendil-works/pi",
-  "commit": "2b0a123de98318c2ff8069661721ce0c3794c34e",
+  "commit": "312184edb68c38248e1acfc3eec68500ba49d9cb",
   "build": {
     "node": "26.5.0",
     "npm": "11.17.0",
@@ -10,58 +10,58 @@
     "otherScript": "build",
     "pack": "npm pack --ignore-scripts"
   },
-  "upstreamPackageLockSha256": "0f4f0a1878e667a02a5dd72049249c80fb6f50ee2518533ec5eefaa7482379aa",
+  "upstreamPackageLockSha256": "cc61c95085c12f12174eddbc780b783b7210f81106fd709aa021510fa020ff1c",
   "modelData": {
-    "generatedAt": "2026-09-24T12:47:59.708Z",
-    "manifestSha256": "3cbb2ad64106325c197a52bbdd0dcac28ef5b8a4862c0a390f57c4e53da8eee7",
+    "generatedAt": "2026-09-29T16:11:44.971Z",
+    "manifestSha256": "14e5993258ba429c8672f9cdb6dba19fff7f0f034bf89faae9bb760ce19f455f",
     "frozenIn": "@earendil-works/pi-ai:package/dist/providers/data"
   },
   "artifacts": [
     {
       "name": "@earendil-works/chord",
-      "version": "0.87.1",
-      "bytes": 203309,
-      "sha256": "4043a838ce23963029f5c667c6475a93e6391f555f55cc6bdc34cb6b476ab8b9",
-      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-chord-0.87.1.tgz"
+      "version": "0.99.0",
+      "bytes": 208689,
+      "sha256": "d7db5393a5c4c0cc6a60e29ec270b25351ed6f8587a59d79a2fba29f25b76b0a",
+      "path": "vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-chord-0.99.0.tgz"
     },
     {
       "name": "@earendil-works/pi-telemetry",
-      "version": "0.87.1",
-      "bytes": 27277,
-      "sha256": "67bf2718c363a26520b1c124801e4c9c11ff15d10144319d7533d2138771f53d",
-      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-telemetry-0.87.1.tgz"
+      "version": "0.99.0",
+      "bytes": 27276,
+      "sha256": "a362f4e100c042751dd9d5c15ec8e80e906c66b86b02a195ea6266e5ab634c6d",
+      "path": "vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-telemetry-0.99.0.tgz"
     },
     {
       "name": "@earendil-works/pi-ai",
-      "version": "0.87.1",
-      "bytes": 730742,
-      "sha256": "a0283ab48549ca656e118156503c901a73b9c284ca0ff9e0150fcc0b391c15f2",
-      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-ai-0.87.1.tgz"
+      "version": "0.99.0",
+      "bytes": 759785,
+      "sha256": "8dd3ba249f1305834e4a19ea2d7cffc2f6c2bf918af9618d80208e6d7f55c5c1",
+      "path": "vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-ai-0.99.0.tgz"
     },
     {
       "name": "@earendil-works/pi-durable",
-      "version": "0.87.1",
-      "bytes": 261375,
-      "sha256": "d9f23bf2a0c0eae6455a0006802c3e97f642853a8e4b9218b13d1821319bc519",
-      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-durable-0.87.1.tgz"
+      "version": "0.99.0",
+      "bytes": 372789,
+      "sha256": "63cf1556c9f0cb463c502757b0faea2cd1443f0acff5b8754d49478081f03ed6",
+      "path": "vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-durable-0.99.0.tgz"
     },
     {
       "name": "@earendil-works/pi-agent-core",
-      "version": "0.87.1",
-      "bytes": 807872,
-      "sha256": "04e71323a581df848173a7b14539614926f6719cac05d4978a9ad895e4da2cc6",
-      "path": "vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-agent-core-0.87.1.tgz"
+      "version": "0.99.0",
+      "bytes": 810725,
+      "sha256": "3bb25a3cf17f4db68aae802bcbe0225ecf4c159f9e720217cb0d402145187d4b",
+      "path": "vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-agent-core-0.99.0.tgz"
     }
   ],
   "patches": [
     {
-      "path": "patches/@earendil-works%2Fpi-ai@0.87.1.patch",
-      "sha256": "533b4c7cd3c5d8d9cfab1cf41a8ec13451d83fd6dbb9eb59e86f23790ae5ade9",
+      "path": "patches/@earendil-works%2Fpi-ai@0.99.0.patch",
+      "sha256": "4b0b36a1fee037d5dcc7ebfa99388ced9be1ecd321ce7c109083297a5722457d",
       "appliedBy": "Bun patchedDependencies at installation"
     },
     {
-      "path": "patches/@earendil-works%2Fpi-durable@0.87.1.patch",
-      "sha256": "85b4f0bce03931b18ec5ff06a3b8344d3c6ee395b4dcf9cb1071e96475011781",
+      "path": "patches/@earendil-works%2Fpi-durable@0.99.0.patch",
+      "sha256": "df809952348609b1fc953c34349c51ea2f44bdebe71523ce210fa3eff296f31e",
       "appliedBy": "Bun patchedDependencies at installation"
     },
     {

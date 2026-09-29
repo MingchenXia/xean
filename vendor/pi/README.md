@@ -1,15 +1,15 @@
 # Pi artifacts
 
 Xean consumes the five packages listed in [provenance.json](provenance.json)
-from Pi commit `2b0a123de98318c2ff8069661721ce0c3794c34e`.
+from Pi commit `312184edb68c38248e1acfc3eec68500ba49d9cb`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
-Pi's internal dependencies. Their upstream package version remains `0.87.1`.
+Pi's internal dependencies. Their upstream package version remains `0.99.0`.
 The commit and artifact hashes identify this build.
 
 Normal installation uses Xean's existing locked Bun command, documented in the
 [root README](../../README.md). Bun installs the artifacts selected by the
-lockfile and applies the retained Pi AI patch and the Pi durable read-only patch.
+lockfile and applies the retained Pi AI and durable patches.
 The install receipt also fingerprints
 the local tarball bytes, workspace manifests, lockfile, and patch bytes.
 
@@ -24,8 +24,9 @@ The Node/npm versions used for these artifacts are recorded in the provenance.
 
 Pi's model values are a second build input. They were hydrated once with the
 upstream `npm run hydrate:model-data` command and are frozen in the AI tarball
-under `package/dist/providers/data/`. This upgrade retains the previous frozen
-model snapshot. To rebuild, extract that directory,
+under `package/dist/providers/data/`. This upgrade refreshes the snapshot because
+the new provider factories require classifier catalogs absent from the previous
+data. To rebuild, extract that directory,
 including `.manifest.json`, into the checkout's `packages/ai/src/providers/data/`.
 Check the manifest SHA-256 against the provenance. Rehydrating queries live
 catalogs and creates a new snapshot.
@@ -54,7 +55,7 @@ the committed artifact set.
 The tarballs contain unpatched upstream output. Xean's patches live
 in `patches/` and are applied during Bun installation. Each key in
 `patchedDependencies` uses the exact tarball resolution, without the `file:`
-prefix. A `name@0.87.1` key does not match these local artifacts.
+prefix. A `name@0.99.0` key does not match these local artifacts.
 
 The AI patch retains measured usage on failed and zero-token
 responses, custom Codex authentication and credential-specific connection
@@ -79,4 +80,14 @@ The Pi durable patch adds `SqliteStorage.open(db, {readOnly: true})`. It checks
 the existing schema instead of running migrations, and rejects `commit` and
 `mintId`. All record decoding, document reconstruction, and scans remain native.
 Xean supplies the read-only SQLite connection and its snapshot transaction.
-Remove this patch when upstream supplies an equivalent read-only opener.
+The Harness extensions add transactional admission, recovery, and failure hooks,
+plus pause and quiescence controls. Harness owns dispatch, invocation cancellation,
+joining, and whole-worker recovery. Xean uses the hooks for campaign policy and
+atomic failure signals, and keeps Session accounting writable until interrupted
+invocations settle. The patch also exposes native `Tx.setTask()` and preserves
+explicit entry `byTaskId` outside a Harness invocation. Task creation uses the
+registered executable definitions and the unmodified native API.
+These are local extensions, not upstream guarantees. The
+[alignment notes](../../docs/pi-alignment.md#durable-integration) record their
+contracts and removal criteria. Unpatched artifacts remain reproducible;
+the patch separately identifies the code executed by Xean.

@@ -1,0 +1,505 @@
+diff --git a/dist/harness/harness.js b/dist/harness/harness.js
+index 843576a..123cd0a 100644
+--- a/dist/harness/harness.js
++++ b/dist/harness/harness.js
+@@ -121,6 +121,7 @@ class HarnessImpl extends SessionImpl {
+             now,
+             report: options.onReport ?? (() => { }),
+             settleOutcome: settleSchedulerOutcome,
++            policy: options,
+             context: withoutAbortSignal(context),
+         });
+         this.#submissions = new Submissions(this, storage, now, () => this.#tasks.resume());
+@@ -141,6 +142,13 @@ class HarnessImpl extends SessionImpl {
+         this.#assertOpen();
+         this.#tasks.resume();
+     }
++    pause(options) {
++        this.#assertOpen();
++        this.#tasks.pause(options?.interrupt ?? false);
++    }
++    waitForQuiescence(context) {
++        return this.#tasks.waitForQuiescence(context);
++    }
+     getTask(id, context) {
+         return this.readOnLine(() => this.#storage.task(id, context));
+     }
+diff --git a/dist/harness/scheduler.d.ts b/dist/harness/scheduler.d.ts
+index b004ff9..9140d8b 100644
+--- a/dist/harness/scheduler.d.ts
++++ b/dist/harness/scheduler.d.ts
+@@ -3,7 +3,7 @@ import type { Models } from "@earendil-works/pi-ai";
+ import type { SessionImpl } from "../session/session.ts";
+ import type { Transaction } from "../session/transaction.ts";
+ import type { ConversationId, Storage, TaskId, TaskOutcome, TaskRecord } from "../types.ts";
+-import type { HarnessInspection, RegistryReader, RegistrySnapshot, SettledTask, TaskInspection } from "./types.ts";
++import type { HarnessInspection, HarnessOptions, RegistryReader, RegistrySnapshot, SettledTask, TaskInspection } from "./types.ts";
+ type AnyTaskRecord = TaskRecord<JsonValue, JsonValue, JsonValue>;
+ /** Terminal outcomes the scheduler writes without running task code. */
+ export type SchedulerOutcome = Extract<TaskOutcome<JsonValue>, {
+@@ -20,6 +20,7 @@ export type TaskSchedulerOptions = {
+     readonly settleOutcome: (tx: Transaction, record: AnyTaskRecord, outcome: SchedulerOutcome) => Promise<void>;
+     /** Context for scheduler commits and invocations; carries no caller cancellation. */
+     readonly context: Context;
++    readonly policy: Pick<HarnessOptions, "admitTasks" | "onTaskRecovery" | "onTaskFailure">;
+ };
+ /**
+  * Durable task scheduler of one Harness.
+@@ -39,6 +40,8 @@ export declare class TaskScheduler {
+     open(context: Context): Promise<void>;
+     /** Enable scheduling. Idempotent; the kick does nothing once closing. */
+     resume(): void;
++    pause(interrupt: boolean): void;
++    waitForQuiescence(context: Context): Promise<void>;
+     /** Wait for every invocation signalled by `#seal()`. Writes nothing. */
+     join(): Promise<void>;
+     /**
+diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
+index f85c0c7..ca54954 100644
+--- a/dist/harness/scheduler.js
++++ b/dist/harness/scheduler.js
+@@ -3,6 +3,7 @@ import { awaitWithContext, withAbortSignal } from "@earendil-works/chord/context
+ import { readContext } from "./context.js";
+ import { closedError, scanAll, Waiters } from "./util.js";
+ const SCAN_PAGE_SIZE = 256;
++const RESERVATION_PAUSED = Symbol("reservation paused");
+ /** Longest delay `setTimeout` supports; longer sleeps wait in several steps. */
+ const MAX_TIMER_DELAY = 2_147_483_647;
+ /**
+@@ -25,11 +26,13 @@ export class TaskScheduler {
+     #report;
+     #settleOutcome;
+     #context;
++    #policy;
+     #live = new Map();
+     #invocations = new Map();
+     #taskWaiters = new Waiters();
+     /** Idle waiters by conversation; `undefined` waits for the whole Harness. */
+     #idleWaiters = new Waiters();
++    #quiescentWaiters = new Waiters();
+     /** Definition whose migration failed per task; retried only once the registry resolves another definition. */
+     #failedMigrations = new Map();
+     #unsubscribeRegistry = () => { };
+@@ -37,6 +40,7 @@ export class TaskScheduler {
+     #closing = false;
+     #dirty = false;
+     #draining = false;
++    #pauseVersion = 0;
+     constructor(options) {
+         this.#session = options.session;
+         this.#storage = options.storage;
+@@ -46,6 +50,7 @@ export class TaskScheduler {
+         this.#report = options.report;
+         this.#settleOutcome = options.settleOutcome;
+         this.#context = options.context;
++        this.#policy = options.policy;
+     }
+     /** Load live tasks and change surviving `running` tasks back to `pending`. Dispatches nothing. */
+     async open(context) {
+@@ -59,6 +64,7 @@ export class TaskScheduler {
+             for (const record of [...pending, ...running])
+                 this.#live.set(record.id, record);
+             for (const record of running) {
++                await this.#policy.onTaskRecovery?.(tx, record);
+                 tx.setTask(withState(record, { status: "pending", checkpoint: record.state.checkpoint }));
+             }
+         }, context);
+@@ -68,6 +74,27 @@ export class TaskScheduler {
+         this.#enabled = true;
+         this.#kick();
+     }
++    pause(interrupt) {
++        this.#enabled = false;
++        this.#pauseVersion++;
++        if (interrupt)
++            for (const invocation of this.#invocations.values()) {
++                invocation.interrupted = true;
++                invocation.controller.abort();
++            }
++        this.#notifyQuiescence();
++    }
++    waitForQuiescence(context) {
++        if (this.#closing)
++            return Promise.reject(closedError());
++        const wait = this.#quiescentWaiters.add(undefined, context);
++        this.#notifyQuiescence();
++        return wait;
++    }
++    #notifyQuiescence() {
++        if (!this.#draining && this.#invocations.size === 0 && (!this.#enabled || !this.#dirty))
++            this.#quiescentWaiters.resolve(undefined);
++    }
+     /** Wait for every invocation signalled by `#seal()`. Writes nothing. */
+     async join() {
+         await Promise.allSettled([...this.#invocations.values()].map((invocation) => invocation.done));
+@@ -140,7 +167,7 @@ export class TaskScheduler {
+             this.#failedMigrations.delete(record.id);
+             this.#taskWaiters.resolve(record.id, record);
+         }
+-        if (!changed)
++        if (!changed && this.#policy.admitTasks === undefined)
+             return;
+         for (const conversationId of this.#idleWaiters.keys()) {
+             if (this.#idle(conversationId))
+@@ -155,6 +182,7 @@ export class TaskScheduler {
+         const error = closedError();
+         this.#taskWaiters.rejectAll(error);
+         this.#idleWaiters.rejectAll(error);
++        this.#quiescentWaiters.rejectAll(error);
+         for (const invocation of this.#invocations.values())
+             invocation.controller.abort();
+     }
+@@ -172,6 +200,8 @@ export class TaskScheduler {
+                 this.#dirty = false;
+                 for (const reservation of await this.#reserve())
+                     this.#start(reservation);
++                // Yield between scheduling passes so synchronous tasks cannot starve cancellation or I/O.
++                await new Promise((resolve) => setTimeout(resolve, 0));
+             }
+         }
+         catch (error) {
+@@ -183,6 +213,7 @@ export class TaskScheduler {
+             // A wakeup that arrived during a failed pass still needs its pass.
+             if (this.#dirty)
+                 this.#kick();
++            this.#notifyQuiescence();
+         }
+     }
+     /** Reserve every eligible task in one commit; orphan abort-marked tasks no definition can take. */
+@@ -192,11 +223,25 @@ export class TaskScheduler {
+             await this.#session.commitWith(async (tx) => {
+                 if (!this.#enabled || this.#closing)
+                     return;
++                const pauseVersion = this.#pauseVersion;
+                 // Taken once per pass, and only when some task is a candidate.
+                 let snapshot;
+-                for (const record of [...this.#live.values()]) {
+-                    if (this.#invocations.has(record.id) || this.#waitingOn(record).length > 0)
+-                        continue;
++                const candidates = [...this.#live.values()].filter((record) => !this.#invocations.has(record.id) && this.#waitingOn(record).length === 0);
++                const admissions = this.#policy.admitTasks === undefined
++                    ? candidates.map((record) => ({ id: record.id, checkpoint: record.state.checkpoint }))
++                    : await this.#policy.admitTasks(tx, candidates, [...this.#invocations.keys()]);
++                const remaining = new Map(candidates.map((record) => [record.id, record]));
++                for (const admission of admissions) {
++                    const candidate = remaining.get(admission.id);
++                    if (candidate === undefined)
++                        throw new Error(`Invalid or duplicate task admission ${admission.id}`);
++                    remaining.delete(admission.id);
++                    const record = admission.checkpoint === candidate.state.checkpoint
++                        ? candidate
++                        : {
++                            ...candidate,
++                            state: { ...candidate.state, checkpoint: admission.checkpoint },
++                        };
+                     const mode = record.abortRequested ? "abort" : "run";
+                     snapshot ??= this.#registry.snapshot();
+                     const resolution = this.#resolve(record, snapshot);
+@@ -205,7 +250,7 @@ export class TaskScheduler {
+                             await this.#terminate(tx, record, { status: "orphaned", reason: resolution.reason });
+                         continue;
+                     }
+-                    if (resolution.record !== record || record.state.status !== "running") {
++                    if (resolution.record !== candidate || record.state.status !== "running") {
+                         tx.setTask(withState(resolution.record, {
+                             status: "running",
+                             checkpoint: resolution.record.state.checkpoint,
+@@ -215,13 +260,19 @@ export class TaskScheduler {
+                     const invocation = this.#createInvocation(record, mode);
+                     reservations.push({ invocation, task: resolution.task, snapshot });
+                 }
++                // Roll back hook writes if pause arrived while an admission or failure hook awaited.
++                if (pauseVersion !== this.#pauseVersion || this.#closing)
++                    throw RESERVATION_PAUSED;
+             }, this.#context);
+         }
+         catch (error) {
+             for (const { invocation } of reservations) {
++                this.#end(invocation);
+                 this.#invocations.delete(invocation.taskId);
+                 invocation.finish();
+             }
++            if (error === RESERVATION_PAUSED)
++                return [];
+             throw error;
+         }
+         return reservations;
+@@ -322,8 +373,10 @@ export class TaskScheduler {
+             }
+             finally {
+                 this.#end(invocation);
++                this.#invocations.delete(invocation.taskId);
+                 invocation.finish();
+                 this.#kick();
++                this.#notifyQuiescence();
+             }
+         })();
+     }
+@@ -336,7 +389,7 @@ export class TaskScheduler {
+         for (;;) {
+             const current = await this.#step(invocation, (tx, current) => this.#decide(tx, current, previous, state));
+             // Close may seal between the decision and dispatch.
+-            if (current === undefined || this.#closing)
++            if (current === undefined || this.#closing || invocation.interrupted)
+                 return;
+             const checkpoint = current.state.checkpoint;
+             try {
+@@ -356,6 +409,9 @@ export class TaskScheduler {
+         // 3. abort mark: end; the next drain starts a fresh abort invocation.
+         if (current.abortRequested)
+             return false;
++        // A task may yield back to admission policy by committing a pending checkpoint.
++        if (current.state.status === "pending")
++            return false;
+         if (previous === undefined)
+             return true;
+         // 4. uncaught error.
+@@ -386,7 +442,7 @@ export class TaskScheduler {
+     async #runAbort(reservation) {
+         const invocation = reservation.invocation;
+         const current = this.#live.get(invocation.taskId);
+-        if (current === undefined || this.#closing)
++        if (current === undefined || this.#closing || invocation.interrupted)
+             return;
+         let failure;
+         try {
+@@ -409,7 +465,7 @@ export class TaskScheduler {
+         try {
+             return await this.#session.commitWith(async (tx) => {
+                 const current = this.#live.get(invocation.taskId);
+-                const decision = current !== undefined && !this.#closing ? decide(tx, current) : false;
++                const decision = current !== undefined && !this.#closing && !invocation.interrupted ? decide(tx, current) : false;
+                 if (decision === true)
+                     return current;
+                 this.#end(invocation);
+@@ -428,17 +484,17 @@ export class TaskScheduler {
+         }
+     }
+     /** Write a scheduler-decided terminal outcome together with its Harness cleanup. */
+-    #terminate(tx, record, outcome) {
++    async #terminate(tx, record, outcome) {
++        if (await this.#policy.onTaskFailure?.(tx, record, outcome))
++            return;
+         tx.setTask(withState(record, { status: "terminal", outcome }));
+         return this.#settleOutcome(tx, record, outcome);
+     }
+-    /** End an invocation: its runtime operations reject from now on, its watches stop, and its task is free. */
++    /** Reject further runtime operations and stop watches; retain the invocation until its final commit settles. */
+     #end(invocation) {
+         if (invocation.ended)
+             return;
+         invocation.ended = true;
+-        if (this.#invocations.get(invocation.taskId) === invocation)
+-            this.#invocations.delete(invocation.taskId);
+         for (const watch of invocation.watches)
+             void watch.stop();
+     }
+@@ -496,10 +552,10 @@ export class TaskScheduler {
+     }
+     /** Commit after rereading the task on the line and gating the invocation. */
+     #gated(invocation, change, context) {
+-        if (invocation.ended)
++        if (invocation.ended || invocation.interrupted)
+             return Promise.reject(endedError(invocation));
+         return this.#session.commitWith(async (tx) => {
+-            if (invocation.ended)
++            if (invocation.ended || invocation.interrupted)
+                 throw endedError(invocation);
+             if (this.#closing)
+                 throw closedError();
+@@ -509,7 +565,10 @@ export class TaskScheduler {
+             if (invocation.mode === "run" && current.abortRequested) {
+                 throw new Error(`Task ${invocation.taskId} has a durable abort mark`);
+             }
+-            return change(tx, current);
++            const result = await change(tx, current);
++            if (invocation.interrupted)
++                throw endedError(invocation);
++            return result;
+         }, context, { conversationId: invocation.conversationId, taskId: invocation.taskId });
+     }
+     /** Wait until the Harness clock reaches `until`, rechecking it after every timer. */
+diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
+index 9b5876b..4aa3b80 100644
+--- a/dist/harness/types.d.ts
++++ b/dist/harness/types.d.ts
+@@ -1,6 +1,6 @@
+ import type { Context, JsonValue } from "@earendil-works/chord";
+ import type { CacheRetention, Message, Models, ModelThinkingLevel, Tool, ToolResultMessage, Transport, UserMessage } from "@earendil-works/pi-ai";
+-import type { ConversationId, ConversationOwnership, ConversationRecord, Cursor, DocumentObserver, DocumentReader, EntryDraft, EntryId, EntryQuery, EntryRecord, JsonObject, Page, Session, SubmissionId, SubmissionRecord, Task, TaskId, TaskOptions, TaskRecord, TaskState, Tx } from "../types.ts";
++import type { ConversationId, ConversationOwnership, ConversationRecord, Cursor, DocumentObserver, DocumentReader, EntryDraft, EntryId, EntryQuery, EntryRecord, JsonObject, Page, Session, SubmissionId, SubmissionRecord, Task, TaskId, TaskOptions, TaskOutcome, TaskRecord, TaskState, Tx } from "../types.ts";
+ /** Provider and model ID resolved through pi-ai `Models`. */
+ export type ModelRef = {
+     readonly provider: string;
+@@ -253,6 +253,17 @@ export type HarnessOptions<Tool extends ToolRegistration = ToolRegistration> = {
+     readonly now?: () => number;
+     /** Receives extension failures that do not fail the calling operation. Must not throw. */
+     readonly onReport?: (error: unknown) => void;
++    /** Select a reservation batch on the Session line; returned checkpoints are committed with any hook writes. */
++    readonly admitTasks?: (tx: Tx, candidates: readonly TaskRecord<JsonValue, JsonValue, JsonValue>[], active: readonly TaskId[]) => Promise<readonly {
++        readonly id: TaskId;
++        readonly checkpoint: JsonValue;
++    }[]>;
++    /** Stage domain recovery records in the same commit that resets an interrupted task to pending. */
++    readonly onTaskRecovery?: (tx: Tx, task: TaskRecord<JsonValue, JsonValue, JsonValue>) => Promise<void>;
++    /** Return true after staging the task's replacement and domain records for a runtime-generated failure. */
++    readonly onTaskFailure?: (tx: Tx, task: TaskRecord<JsonValue, JsonValue, JsonValue>, outcome: Extract<TaskOutcome<JsonValue>, {
++        readonly status: "faulted" | "orphaned";
++    }>) => Promise<boolean>;
+ };
+ /** Live task and what the scheduler would do with it under the current registry. */
+ export type TaskInspection = {
+@@ -332,6 +343,12 @@ export interface Harness extends Session {
+      * `Submission.wait()`, `waitForTask()`, `waitForIdle()`) enable it too.
+      */
+     resume(): void;
++    /** Stop reservations. Interruption cancels live invocations without terminalizing their durable tasks. Session writes remain open. */
++    pause(options?: {
++        readonly interrupt?: boolean;
++    }): void;
++    /** Wait until reservations and admitted invocations settle, including when pending tasks are held by admission policy. */
++    waitForQuiescence(context: Context): Promise<void>;
+     /** Return the reserved root conversation, creating it with `init` in one commit when absent. */
+     root(context: Context, options?: {
+         readonly init?: ConversationInit;
+diff --git a/dist/session/transaction.js b/dist/session/transaction.js
+index 4650764..21e502d 100644
+--- a/dist/session/transaction.js
++++ b/dist/session/transaction.js
+@@ -153,7 +153,7 @@ export class Transaction {
+                 id,
+                 conversationId,
+                 head: head === "self" ? id : head,
+-                byTaskId: this.#scope.taskId,
++                byTaskId: this.#scope.taskId ?? value.byTaskId,
+             }, TABLE_JSON_COPY_OPTIONS);
+             this.#writes.push({ type: "entry", value: record });
+             return record;
+@@ -715,4 +715,4 @@ function planDocument(document) {
+ function publishes(plan) {
+     return plan.retire || plan.change?.loaded === undefined || plan.change.prepared.ops.length > 0;
+ }
+-//# sourceMappingURL=transaction.js.map
+\ No newline at end of file
++//# sourceMappingURL=transaction.js.map
+diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
+index 8e21589..7a381de 100644
+--- a/dist/storage/sqlite/storage.d.ts
++++ b/dist/storage/sqlite/storage.d.ts
+@@ -7,9 +7,10 @@ export declare class SqliteStorage implements Storage {
+     private readonly db;
+     private nextId;
+     private closed;
++    private readonly readOnly;
+     private constructor();
+     /** Initialize storage over an owned SQLite database facade. */
+-    static open(db: SqliteDatabase): Promise<SqliteStorage>;
++    static open(db: SqliteDatabase, options?: { readonly readOnly?: boolean }): Promise<SqliteStorage>;
+     commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq>;
+     mintId<I extends Id<string>>(): Promise<I>;
+     conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;
+diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
+index dbdf0e9..1105f38 100644
+--- a/dist/storage/sqlite/storage.js
++++ b/dist/storage/sqlite/storage.js
+@@ -1,7 +1,7 @@
+ import { apply } from "@earendil-works/chord/delta";
+ import { StorageRejected } from "../../errors.js";
+ import { idFromNumber, seqFromNumber } from "../../ids.js";
+-import { applySqliteMigrations } from "./migrations.js";
++import { applySqliteMigrations, CURRENT_SQLITE_SCHEMA_VERSION } from "./migrations.js";
+ const parseJson = (value) => JSON.parse(value);
+ const encodeJson = (value) => JSON.stringify(value);
+ // Some SQLite bindings replace lone UTF-16 surrogates. JSON encoding keeps indexed identities lossless.
+@@ -96,18 +96,26 @@ export class SqliteStorage {
+     db;
+     nextId;
+     closed = false;
+-    constructor(db, nextId) {
++    readOnly;
++    constructor(db, nextId, readOnly) {
+         this.db = new StatementCachingDatabase(db);
+         this.nextId = nextId;
++        this.readOnly = readOnly;
+     }
+     /** Initialize storage over an owned SQLite database facade. */
+-    static async open(db) {
++    static async open(db, { readOnly = false } = {}) {
+         try {
+-            await applySqliteMigrations(db);
++            if (readOnly) {
++                const schema = getRow(db.prepare("SELECT version FROM durable_schema WHERE singleton = 1"));
++                if (schema?.version !== CURRENT_SQLITE_SCHEMA_VERSION)
++                    throw new Error("Unsupported durable SQLite schema version");
++            } else {
++                await applySqliteMigrations(db);
++            }
+             const metadata = getRow(db.prepare("SELECT next_id, next_seq FROM durable_metadata WHERE singleton = 1"));
+             if (metadata === undefined)
+                 throw new Error("Durable SQLite metadata is missing");
+-            return new SqliteStorage(db, Number(metadata.next_id));
++            return new SqliteStorage(db, Number(metadata.next_id), readOnly);
+         }
+         catch (error) {
+             try {
+@@ -120,7 +128,7 @@ export class SqliteStorage {
+         }
+     }
+     async commit(writes, _context) {
+-        this.assertOpen();
++        this.assertOpen(true);
+         const documentActions = this.prepareDocumentActions(writes);
+         const candidateNextId = this.candidateNextId(writes);
+         const seq = await this.db.transaction(() => {
+@@ -142,7 +150,7 @@ export class SqliteStorage {
+         return seq;
+     }
+     async mintId() {
+-        this.assertOpen();
++        this.assertOpen(true);
+         if (!Number.isSafeInteger(this.nextId))
+             throw new Error("ID space is exhausted");
+         return idFromNumber(this.nextId++);
+@@ -620,9 +628,11 @@ export class SqliteStorage {
+             }
+         }
+     }
+-    assertOpen() {
++    assertOpen(write = false) {
+         if (this.closed)
+             throw new Error("SqliteStorage is closed");
++        if (write && this.readOnly)
++            throw new Error("SqliteStorage is read-only");
+     }
+ }
+ //# sourceMappingURL=storage.js.map
+\ No newline at end of file
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 15a13e1..a76ed7f 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -236,7 +236,7 @@ export type EntryRecord = {
+     readonly byTaskId?: TaskId;
+ };
+ /** Entry content supplied before the Session assigns identity and task attribution. */
+-export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "byTaskId" | "head"> & {
++export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "head"> & {
+     /** `"self"` starts active context at the newly assigned entry ID. */
+     readonly head?: EntryId | "self";
+ };
+@@ -622,6 +622,8 @@ export interface Tx {
+     createTask<I, S extends {
+         phase: string;
+     }, R, H extends object>(task: Task<I, S, R, H>, input: I, options?: TaskOptions): Promise<TaskId<R>>;
++    /** Stage a complete task replacement using the native validation and retirement path. */
++    setTask(record: TaskRecord<JsonValue, JsonValue, JsonValue>): void;
+     /**
+      * Settle a queued or placed submission; only a placed input can be answered, and a settled submission stays
+      * unchanged. Resolved against this transaction's latest record of the submission, so it works after table writes.
+@@ -756,4 +758,4 @@ export interface Storage {
+     close(context: Context): Promise<void>;
+ }
+ export {};
+-//# sourceMappingURL=types.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=types.d.ts.map

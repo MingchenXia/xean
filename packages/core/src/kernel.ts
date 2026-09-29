@@ -1,14 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
-import { setImmediate as yieldToEvents } from "node:timers/promises";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import { withTelemetryContext } from "@earendil-works/pi-agent-core/harness/context";
-import type {
-  EntryId,
-  EntryRecord,
-  Storage,
-  TaskId,
-  TaskOutcome,
+import { createModels } from "@earendil-works/pi-ai";
+import {
+  createRegistry,
+  defineTask,
+  ROOT_CONVERSATION_ID,
+  type Tx,
+  type HarnessOptions,
+  type EntryId,
+  type EntryRecord,
+  type Storage,
+  type TaskId,
+  type TaskOutcome,
 } from "@earendil-works/pi-durable";
 import { NOOP_TELEMETRY_CONTEXT } from "@earendil-works/pi-telemetry";
 import { Check } from "typebox/value";
@@ -26,6 +31,9 @@ import {
   COORDINATOR,
   Store,
   WORKER,
+  initialAttempt,
+  type Input,
+  type Runtime,
   type AttemptState,
   type PiTask,
   type Transaction,
@@ -47,7 +55,6 @@ import type {
   XeanStatus,
 } from "./types.ts";
 
-type Active = ReturnType<typeof withCancel> & { done: Promise<void> };
 type Calls = { pending: Set<Promise<void>>; failure?: Error };
 type Reserved = {
   task: PiTask;
@@ -167,8 +174,7 @@ function terminal(
 
 /** Xean's campaign policy over pi-durable's native atomic record storage. */
 export class Xean {
-  private readonly active = new Map<TaskId, Active>();
-  private changed = Promise.withResolvers<void>();
+  private driving = false;
   private runPromise?: Promise<Campaign>;
   private runRequested = false;
   private closePromise?: Promise<void>;
@@ -211,24 +217,69 @@ export class Xean {
               result: null,
               error: null,
             };
-      store = await Store.open(storage, initial);
-      const xean = new Xean(store, options);
-      await xean.mutate(async (tx) => {
-        if (tx.state.coordinator !== options.coordinator.name)
+      let xean: Xean;
+      const registry = createRegistry();
+      for (const name of [WORKER, COORDINATOR])
+        registry.tasks.add(
+          defineTask<Input, AttemptState, JsonValue, object>({
+            name,
+            version: 1,
+            initial: initialAttempt,
+            phases: {
+              run: (task, runtime, context) =>
+                xean.execute(task, runtime, context),
+            },
+            abort: async (task, runtime) => {
+              await xean.store.mutateTask(runtime, (tx) =>
+                tx.writeTask(
+                  terminal(task, { status: "aborted", reason: "cancelled" }),
+                ),
+              );
+            },
+          }),
+        );
+      const runtime: HarnessOptions = {
+        models: createModels(),
+        registry,
+        admitTasks: (tx, candidates, active) =>
+          xean.reserve(tx, candidates as PiTask[], active),
+        onTaskRecovery: async (tx, task) => {
+          await tx.appendEntry(ROOT_CONVERSATION_ID, {
+            kind: "xean.attempt.interrupted",
+            data: {
+              attemptId: (task.state.checkpoint as AttemptState).attemptId,
+            },
+            byTaskId: task.id,
+          });
+        },
+        onTaskFailure: async (tx, task, outcome) => {
+          await xean.failTask(
+            await xean.store.transaction(tx),
+            task as PiTask,
+            outcome.status === "faulted"
+              ? outcome.error.message
+              : outcome.reason,
+          );
+          return true;
+        },
+        onReport: (error) => xean?.fail(error),
+      };
+      store = await Store.open(storage, initial, runtime, (state, tasks) => {
+        if (state.coordinator !== options.coordinator.name)
           throw new Error(
             "Coordinator identity differs from the recorded campaign",
           );
         if (
           initial !== undefined &&
-          !isDeepStrictEqual(initial.task, json(tx.state.task))
+          !isDeepStrictEqual(initial.task, json(state.task))
         )
           throw new Error("Task differs from the recorded campaign");
         if (
           options.limits !== undefined &&
-          !isDeepStrictEqual(campaignLimits, json(tx.state.limits))
+          !isDeepStrictEqual(campaignLimits, json(state.limits))
         )
           throw new Error("Limits differ from the recorded campaign");
-        for (const task of tx.tasks) {
+        for (const task of tasks) {
           if (task.state.status === "terminal") continue;
           if (
             task.kind === WORKER &&
@@ -237,18 +288,10 @@ export class Xean {
             throw new Error(
               `Missing role: ${(task.input as WorkRequest).role}`,
             );
-          if (task.state.status === "running") {
-            await tx.entry(
-              "xean.attempt.interrupted",
-              { attemptId: task.state.checkpoint.attemptId },
-              task.id,
-            );
-            tx.writeTask({
-              ...task,
-              state: { status: "pending", checkpoint: task.state.checkpoint },
-            });
-          }
         }
+      });
+      xean = new Xean(store, options);
+      await xean.mutate(async (tx) => {
         if (tx.tasks.length === 0)
           await tx.newTask(COORDINATOR, { kind: "start", value: null });
         if (tx.state.status === "pausing") tx.state.status = "paused";
@@ -263,27 +306,19 @@ export class Xean {
     }
   }
 
-  private wake(): void {
-    this.changed.resolve();
-    this.changed = Promise.withResolvers<void>();
-  }
-
-  private abortActive(reason?: unknown): void {
-    for (const item of this.active.values()) item.cancel(reason);
+  private fail(error: unknown): void {
+    this.fault ??= this.store.failure ?? error;
+    this.store.harness.pause({ interrupt: true });
   }
 
   private async mutate<T>(fn: (tx: Transaction) => T | Promise<T>): Promise<T> {
-    const revision = this.store.revision;
     try {
       return await this.store.mutate(fn);
     } catch (error) {
       if (this.store.failure) {
-        this.fault = error;
-        this.abortActive(error);
+        this.fail(error);
       }
       throw error;
-    } finally {
-      if (this.store.revision !== revision || this.fault) this.wake();
     }
   }
 
@@ -348,147 +383,115 @@ export class Xean {
   }
 
   private async drive(): Promise<Campaign> {
+    this.driving = true;
     for (;;) {
-      // Promise-only work chains must not starve cancellation or I/O.
-      await yieldToEvents();
+      if (!this.closing) this.store.harness.resume();
+      await this.store.harness.waitForQuiescence(BACKGROUND_CONTEXT);
       if (this.fault) throw this.fault;
-      const changed = this.changed.promise;
-      const reserved = this.closing ? [] : await this.reserve();
-      for (const item of reserved) this.launch(item);
-      if (this.active.size === 0) {
-        // Observe idle, finish pausing, and snapshot at one serialized point.
-        const idle = await this.mutate((tx) => {
-          if (
-            !this.closing &&
-            tx.state.status === "running" &&
-            tx.tasks.some(
-              (task) =>
-                task.state.status === "pending" &&
-                (!tx.state.callLimitReached || task.kind === COORDINATOR),
-            )
+      const idle = await this.mutate((tx) => {
+        if (
+          !this.closing &&
+          tx.state.status === "running" &&
+          tx.tasks.some(
+            (task) =>
+              task.state.status === "pending" &&
+              (!tx.state.callLimitReached || task.kind === COORDINATOR),
           )
-            return null;
-          if (tx.state.status === "pausing") tx.state.status = "paused";
-          if (
-            !this.closing &&
-            tx.state.status === "running" &&
-            tx.state.callLimitReached
-          ) {
-            tx.state.status = "limited";
-            tx.state.error = "Provider call limit reached";
-          }
-          return snapshot(tx);
-        });
-        if (idle) return idle;
-        continue;
-      }
-      await changed;
+        )
+          return null;
+        if (tx.state.status === "pausing") tx.state.status = "paused";
+        if (
+          !this.closing &&
+          tx.state.status === "running" &&
+          tx.state.callLimitReached
+        ) {
+          tx.state.status = "limited";
+          tx.state.error = "Provider call limit reached";
+        }
+        this.driving = false;
+        return snapshot(tx);
+      });
+      if (idle) return idle;
     }
   }
 
-  private async reserve(): Promise<Reserved[]> {
-    return this.mutate(async (tx) => {
-      if (tx.state.status !== "running") return [];
-      const selected: PiTask[] = [];
-      const coordinatorRunning = tx.tasks.some(
-        (t) =>
-          t.kind === COORDINATOR &&
-          (t.state.status === "running" || this.active.has(t.id)),
+  private async reserve(
+    native: Tx,
+    candidates: readonly PiTask[],
+    activeIds: readonly TaskId[],
+  ) {
+    const tx = await this.store.transaction(native);
+    if (
+      !this.driving ||
+      this.closing ||
+      this.fault ||
+      tx.state.status !== "running"
+    )
+      return [];
+    const active = new Set(activeIds);
+    const selected: PiTask[] = [];
+    const coordinatorRunning = tx.tasks.some(
+      (t) => t.kind === COORDINATOR && active.has(t.id),
+    );
+    if (!coordinatorRunning) {
+      const next = candidates.find(
+        (t) => t.kind === COORDINATOR && t.state.status === "pending",
       );
-      if (!coordinatorRunning) {
-        const next = tx.tasks.find(
+      if (next) selected.push(next);
+    }
+    const occupied = tx.tasks.filter(
+      (t) => t.kind === WORKER && active.has(t.id),
+    ).length;
+    selected.push(
+      ...candidates
+        .filter(
           (t) =>
-            t.kind === COORDINATOR &&
-            t.state.status === "pending" &&
-            !this.active.has(t.id),
-        );
-        if (next) selected.push(next);
-      }
-      const occupied = tx.tasks.filter(
-        (t) =>
-          t.kind === WORKER &&
-          (t.state.status === "running" || this.active.has(t.id)),
-      ).length;
-      selected.push(
-        ...tx.tasks
-          .filter(
-            (t) =>
-              !tx.state.callLimitReached &&
-              t.kind === WORKER &&
-              t.state.status === "pending" &&
-              !this.active.has(t.id),
-          )
-          .slice(0, Math.max(0, tx.state.limits.concurrency - occupied)),
+            !tx.state.callLimitReached &&
+            t.kind === WORKER &&
+            t.state.status === "pending",
+        )
+        .slice(0, Math.max(0, tx.state.limits.concurrency - occupied)),
+    );
+    const exhausted = selected.find(
+      (task) =>
+        task.state.status !== "terminal" &&
+        task.state.checkpoint.attempts >= tx.state.limits.attempts,
+    );
+    if (exhausted) {
+      await this.failTask(
+        tx,
+        exhausted,
+        `Attempt limit reached for task ${exhausted.id}`,
       );
-      const exhausted = selected.find(
-        (task) =>
-          task.state.status !== "terminal" &&
-          task.state.checkpoint.attempts >= tx.state.limits.attempts,
-      );
-      if (exhausted) {
-        await this.failTask(
-          tx,
-          exhausted,
-          `Attempt limit reached for task ${exhausted.id}`,
-        );
-        return [];
-      }
-      const out: Reserved[] = [];
-      for (const task of selected) {
-        if (task.state.status === "terminal") continue;
-        const attemptId = crypto.randomUUID();
-        const checkpoint: AttemptState = {
-          ...task.state.checkpoint,
-          attempts: task.state.checkpoint.attempts + 1,
+      return [];
+    }
+    const out: { id: TaskId; checkpoint: AttemptState }[] = [];
+    for (const task of selected) {
+      if (task.state.status === "terminal") continue;
+      const attemptId = crypto.randomUUID();
+      const checkpoint: AttemptState = {
+        ...task.state.checkpoint,
+        attempts: task.state.checkpoint.attempts + 1,
+        attemptId,
+        callDenied: false,
+      };
+      const inputId = await tx.entry(
+        "xean.attempt.started",
+        {
           attemptId,
-          callDenied: false,
-        };
-        const running: PiTask = {
-          ...task,
-          state: { status: "running", checkpoint },
-        };
-        const input =
-          task.kind === WORKER
-            ? json((task.input as WorkRequest).input)
-            : json({
-                signal: { id: task.id, ...task.input },
-                view: view(tx),
-              });
-        await tx.entry(
-          "xean.attempt.started",
-          {
-            attemptId,
-            attempt: checkpoint.attempts,
-            ...(task.kind === COORDINATOR
-              ? {
-                  snapshot: reference((input as { view: CampaignView }).view),
-                }
-              : {}),
-          },
-          task.id,
-        );
-        tx.writeTask(running);
-        out.push({ task: running, attemptId, input });
-      }
-      return out;
-    });
-  }
-
-  private launch(item: Reserved): void {
-    const active: Active = {
-      ...withCancel(BACKGROUND_CONTEXT),
-      done: Promise.resolve(),
-    };
-    this.active.set(item.task.id, active);
-    active.done = this.execute(item, active)
-      .catch((error) => {
-        this.fault = error;
-        this.abortActive(error);
-      })
-      .finally(() => {
-        this.active.delete(item.task.id);
-        this.wake();
-      });
+          attempt: checkpoint.attempts,
+          ...(task.kind === COORDINATOR
+            ? {
+                snapshot: reference(view(tx)),
+              }
+            : {}),
+        },
+        task.id,
+      );
+      if (task.kind === COORDINATOR) checkpoint.inputId = inputId;
+      out.push({ id: task.id, checkpoint });
+    }
+    return out;
   }
 
   private current(tx: Transaction, item: Reserved): PiTask | undefined {
@@ -504,7 +507,22 @@ export class Xean {
     return task;
   }
 
-  private async execute(item: Reserved, active: Active): Promise<void> {
+  private async execute(
+    task: PiTask,
+    runtime: Runtime,
+    nativeContext: Context,
+  ): Promise<void> {
+    if (task.state.status !== "running")
+      throw new Error("Pi invoked a non-running task");
+    const item: Reserved = {
+      task,
+      attemptId: task.state.checkpoint.attemptId!,
+      input:
+        task.kind === WORKER
+          ? json((task.input as WorkRequest).input)
+          : await this.attemptInput(task.state.checkpoint.inputId!),
+    };
+    const active = withCancel(nativeContext);
     const calls: Calls = { pending: new Set() };
     const telemetry = this.options.telemetry ?? NOOP_TELEMETRY_CONTEXT;
     try {
@@ -547,7 +565,7 @@ export class Xean {
           if (calls.failure) throw calls.failure;
           if (calls.pending.size > 0)
             throw new Error("Role returned with unsettled provider calls");
-          await this.mutate(async (tx) => {
+          await this.store.mutateTask(runtime, async (tx) => {
             const current = this.current(tx, item);
             if (!current) return;
             if (item.task.kind === WORKER) {
@@ -570,7 +588,8 @@ export class Xean {
       // Keep the attempt alive until their accounting writes have settled.
       await Promise.all(calls.pending);
       if (this.store.failure) throw error;
-      await this.mutate(async (tx) => {
+      if (this.closing || nativeContext.abortSignal?.aborted) return;
+      await this.store.mutateTask(runtime, async (tx) => {
         const task = this.current(tx, item);
         if (!task || task.state.status === "terminal") return;
         const message = errorText(error);
@@ -589,9 +608,11 @@ export class Xean {
           tx.writeTask({ ...task, state: { status: "pending", checkpoint } });
         } else await this.failTask(tx, task, message);
       });
+    } finally {
+      active.cancel();
     }
     if (await this.store.mutate((tx) => stopped(tx.state.status)))
-      this.abortActive();
+      this.store.harness.pause({ interrupt: true });
   }
 
   private async failTask(
@@ -818,8 +839,8 @@ export class Xean {
       if (tx.state.status !== "cancelled" && tx.state.status !== "completed")
         this.halt(tx, "cancelled", "Cancelled by user");
     });
-    this.abortActive();
-    await Promise.all([...this.active.values()].map((a) => a.done));
+    this.store.harness.pause({ interrupt: true });
+    await this.store.harness.waitForQuiescence(BACKGROUND_CONTEXT);
     return this.inspect();
   }
 
@@ -828,7 +849,7 @@ export class Xean {
       if (tx.state.status === "running") tx.state.status = "pausing";
     });
     await this.runPromise;
-    await Promise.all([...this.active.values()].map((a) => a.done));
+    await this.store.harness.waitForQuiescence(BACKGROUND_CONTEXT);
     await this.mutate((tx) => {
       if (tx.state.status === "pausing") tx.state.status = "paused";
     });
@@ -967,9 +988,8 @@ export class Xean {
     if (!this.closePromise)
       this.closePromise = (async () => {
         this.closing = true;
-        this.abortActive();
-        this.wake();
-        await Promise.all([...this.active.values()].map((a) => a.done));
+        this.store.harness.pause({ interrupt: true });
+        await this.store.harness.waitForQuiescence(BACKGROUND_CONTEXT);
         await this.runPromise?.catch(() => {});
         await this.store.close();
         owners.delete(this.store.storage);

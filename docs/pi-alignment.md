@@ -1,6 +1,6 @@
 # Aligning Xean with Pi
 
-Pi supplies model execution and durable transactions. Xean supplies campaign
+Pi supplies model execution, durable transactions, and task execution. Xean supplies campaign
 policy and the mathematical workflow. The [kernel contract](kernel.md) defines
 publication and recovery, and the [solver guide](solver.md) defines mathematical
 acceptance. This document records native API ownership and the gaps that still
@@ -9,33 +9,37 @@ prevent further delegation.
 ## Sources and availability
 
 All five Pi/Chord packages are pinned to
-[`2b0a123de983`](https://github.com/earendil-works/pi/tree/2b0a123de98318c2ff8069661721ce0c3794c34e).
-Their upstream manifests say `0.87.1`. The
+[`312184edb68c`](https://github.com/earendil-works/pi/tree/312184edb68c38248e1acfc3eec68500ba49d9cb),
+the upstream main revision checked on 2026-09-29.
+Their upstream manifests say `0.99.0`. The
 [artifact record](../vendor/pi/provenance.json) identifies the source, frozen
 model catalog, reproducible builds, and retained patches.
 
 The [public durable types][types] and [Session implementation][session] supply
-transactions, documents, records, typed IDs, snapshots, and conversation forks.
-The [Pico5 specification][spec] describes a larger task runtime and Harness
-that remain unimplemented. The existing `pi-agent-core.AgentHarness` is a
-different API. Proposed interfaces become adoption opportunities when implemented.
+transactions, documents, records, typed IDs, snapshots, conversation forks, and
+public commit subscriptions. Pi now implements a [durable task scheduler][scheduler],
+Harness, document watches, and the first durable chat generation. Tool turns
+and live run controls remain later milestones in the [Pico5 specification][spec].
+Xean adopts Harness with local admission, pause, recovery, and failure-settlement
+extensions described below. These extensions are not upstream APIs.
+The existing `pi-agent-core.AgentHarness` is a different API.
 
 ## API ownership
 
-| Responsibility             | Current implementation and reason                                                                                                                                        |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Models and transport       | Pi catalogs, provider factories, auth helpers, conversion, and streaming. Xean profiles select models and endpoints.                                                     |
-| Role execution             | Pi `runAgentLoop` owns the transcript, tools, argument validation, and turns. Xean hooks enforce submission and invocation limits.                                       |
-| Turn state                 | Pi's completed `toolResults` determine whether submission succeeded and whether to continue. Xean retains the last valid value, response count, and one-reminder policy. |
-| Context capacity           | Pi's estimator runs in `prepareRequest`. Xean reserves answer space and hands off prior valid submissions. Compaction is outside the solver contract.                    |
-| Provider recovery          | Pi `retryAssistantCall` owns classification, backoff, and bounds. Xean records each admitted call and selectively retains completed reasoning.                           |
-| Transactions               | Native Session owns serialization, document caching, draft preparation, rollback, atomic storage, and adoption.                                                          |
-| Record identities          | Native `TaskId`, `EntryId`, `DocumentId`, and `Seq` identify tasks, entries, documents, and commits. Task creation returns the native ID.                                |
-| Storage                    | Pi's Node SQLite adapter supplies WAL, statements, transactions, and records on locked Bun. Xean adds campaign ownership and read snapshots.                             |
-| Cancellation and telemetry | Chord `Context` and `withCancel` carry cancellation. Pi's telemetry context carries attempt spans. Xean joins admitted work before closing.                              |
-| Scheduling and publication | Xean admits workers, serializes Coordinator decisions, enforces limits, and publishes each whole result with its signal. Pi's durable executor is unavailable.           |
-| Mathematical state         | Xean owns dependency closure, verification stages, corrections, evidence binding, and exact acceptance. Notes derive from immutable results and input receipts.          |
-| CLI and observation        | Separate packages use public library APIs. Read-only inspection uses Pi scans. Live mutations reach the active owner through a local socket.                             |
+| Responsibility             | Current implementation and reason                                                                                                                                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Models and transport       | Pi catalogs, provider factories, auth helpers, conversion, and streaming. Xean profiles select models and endpoints.                                                                                  |
+| Role execution             | Pi `runAgentLoop` owns the transcript, tools, argument validation, and turns. Xean hooks enforce submission and invocation limits.                                                                    |
+| Turn state                 | Pi's completed `toolResults` determine whether submission succeeded and whether to continue. Xean retains the last valid value, response count, and one-reminder policy.                              |
+| Context capacity           | Pi's estimator runs in `prepareRequest`. Xean reserves answer space and hands off prior valid submissions. Compaction is outside the solver contract.                                                 |
+| Provider recovery          | Pi `retryAssistantCall` owns classification, backoff, and bounds. Xean records each admitted call and selectively retains completed reasoning.                                                        |
+| Transactions               | Native Session owns serialization, document caching, draft preparation, rollback, atomic storage, and adoption.                                                                                       |
+| Record identities          | Native `TaskId`, `EntryId`, `DocumentId`, and `Seq` identify tasks, entries, documents, and commits. Task creation returns the native ID.                                                             |
+| Storage                    | Pi's Node SQLite adapter supplies WAL, statements, transactions, and records on locked Bun. Xean adds campaign ownership and read snapshots.                                                          |
+| Cancellation and telemetry | Harness owns invocation cancellation and joining; Chord contexts carry the signal. Pi's telemetry context carries attempt spans.                                                                      |
+| Scheduling and publication | Harness dispatches admitted tasks and recovers interrupted work. Xean admission policy enforces concurrency, Coordinator serialization, and limits. Xean publishes each whole result with its signal. |
+| Mathematical state         | Xean owns dependency closure, verification stages, corrections, evidence binding, and exact acceptance. Notes derive from immutable results and input receipts.                                       |
+| CLI and observation        | Separate packages use public library APIs. Read-only inspection uses Pi scans. Live mutations reach the active owner through a local socket.                                                          |
 
 A kernel role needs only its name and `run(input, execution, context)`. Tool
 descriptions belong to Pi's tools. Solver and standalone execution call the same
@@ -45,22 +49,52 @@ necessary. Pi's shell surface does not supply that contract.
 
 ## Durable integration
 
-Store adapts native `createSession`. Its typed campaign document uses full bases
+Store opens Harness for the campaign owner and `createSession` for inspection.
+It validates campaign format, task, limits, Coordinator identity, and required
+roles before Harness recovery can write. Its typed campaign document uses full bases
 through `checkpointWhen`. Native transactions validate task conversation
 membership and ownership. Xean detaches values at external boundaries because
 native records and drafts can be Session-owned. Coordinator copies its callable
 input once and derives its prompt and note reader from that frozen copy.
 
-Store retains a task cache and observes Storage commits for wakeup revisions and
-fatal failures. Public Session exposes neither commit subscriptions nor health
-state. Its internal listener is not a supported integration point. Removing the
-cache today would require repeated full task scans or another persisted index.
-Completed Coordinator payloads stay durable but leave the resident cache.
+Store uses public `Session.subscribeCommits()` to update its task projection
+after document adoption. The Storage proxy and wakeup revision are removed. Pi owns
+commit observation and poisoning. After a rejected operation, an empty Session
+commit checks whether the instance remains usable without a Storage write.
+The task projection avoids repeated full scans. Completed Coordinator payloads
+stay durable but leave the resident cache.
 `StorageRejected` guarantees a failed batch made no durable change and leaves
 the instance usable. Unknown commit outcomes and post-storage adoption failures
 stop the instance.
 
-The separate owner lock protects Pi's ID allocator and Xean's scheduler while
+The durable patch adds the following generic Harness controls. The unpatched
+revision reserves every eligible task, has no domain failure hook, and seals
+Session writes before joining on close.
+
+- `admitTasks` selects a batch and its checkpoints on the Session transaction
+  line. Xean uses it for concurrency, sequential Coordinator invocations, pause,
+  call-cap draining, and attempt-start records. A pause during an unfinished
+  admission rolls back the batch and its records.
+- `onTaskFailure` can replace a runtime-generated `faulted` or `orphaned` outcome
+  and stage domain records in the same transaction. Xean publishes a worker's
+  failure signal or blocks a failed Coordinator without losing its signal.
+- `pause({interrupt: true})` cancels invocations and rejects their late runtime
+  commits while keeping Session writes open. `waitForQuiescence()` joins admitted
+  invocations and their final transactions, including when admission holds queued
+  work. Xean waits for call settlements before closing the Session.
+- `onTaskRecovery` writes interruption history in the transaction that resets
+  running tasks to pending. Recovery still repeats the whole worker.
+
+Harness owns the invocation map, dispatch, cancellation, joining, and recovery.
+Its scheduler yields between passes so synchronous work cannot starve external
+cancellation. A pending checkpoint yields a logical retry back to admission.
+Xean registers executable task definitions and uses native task creation.
+The patch exposes existing `Tx.setTask()` for atomic domain transitions and
+preserves explicit entry attribution outside an invocation. Native validation,
+transaction assembly, retirement, and publication still own these operations.
+Reassess these local extensions when equivalent upstream controls become available.
+
+The separate owner lock protects Pi's ID allocator and Harness execution while
 allowing independent readers. Xean selects FULL synchronization. Read-only
 transactions give inspection coherent snapshots. The upstream opener always
 runs migrations, so the read-only patch skips writes, validates the schema, and
@@ -163,10 +197,12 @@ Completed private submissions survive Pi's retries within a live invocation.
 Durable resumption also needs the validated tool outcome, role state, response
 allowance, frozen input and model identity, and original call accounting.
 `runAgentLoopContinue` accepts restored context but supplies none of that
-persistence. Native Session can store task checkpoints atomically. Its durable
-task executor and tool/generation settlement remain unimplemented. AgentHarness
-and experimental Pico3 provide resumption through different session and storage
-contracts. Adopting them requires a separate integration.
+persistence. Native Session can store task checkpoints atomically. Harness now
+executes checkpoint phases and persists generation attempts, retry delays, and
+partial-response presentation. Tool execution and validated submission recovery
+remain outside that implementation. Adopting Harness for whole-worker execution
+does not provide private-progress recovery. AgentHarness and experimental Pico3
+use different session and storage contracts.
 
 The archived Explorer `w110-1` retained its completed `n1` and `n2` submissions
 in both failed continuations, then terminated without publication. Provider
@@ -186,13 +222,12 @@ before its complete result and completion signal become shared state.
 
 ## Next adoption opportunities
 
-- **Durable execution:** adopt Pi's task runtime when execution, recovery, and
-  terminal settlement are implemented. Preserve atomic whole-worker publication
-  and durable failure delivery. Pause and cancellation APIs may change to fit
-  native lifecycle semantics.
-- **Session observation:** remove Store's observer and cache adapter when public
-  APIs supply ordered committed records and fatal-state notification. A
-  coalescing view alone is insufficient for durable delivery.
+- **Durable execution:** replace the local Harness extensions with upstream
+  admission, domain settlement, and pause controls when available. Preserve
+  atomic whole-worker publication and durable failure delivery.
+- **Session health:** replace the empty-commit check when Session exposes fatal
+  state directly. Public commit observation is already adopted. Document watches
+  alone do not replace the scheduling projection or durable signals.
 - **Accounting and patches:** adopt native awaited admission and settlement
   when late accounting survives cancellation. Remove the read-only opener and
   provider patches as equivalent upstream guarantees become available.
@@ -206,6 +241,7 @@ Private-progress recovery, hot extension registries, alternate storage, and a
 second task framework remain deferred. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/durable/src/session/session.ts
-[spec]: https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/durable/docs/pico-v5.md
+[types]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/docs/pico-v5.md

@@ -5,7 +5,7 @@ import type {
   RecordProjection,
   Xean,
 } from "xean";
-import { project } from "xean/solve";
+import { isSolverCampaign, project } from "xean/solve";
 
 /** Status needs call metadata, without retaining prompts or response bodies. */
 export const usageRecord: RecordProjection = (
@@ -77,10 +77,7 @@ export function statusReport({
   const settled = byModel.reduce((total, group) => total + group.settled, 0);
   const work = { queued: 0, active: 0, completed: 0, failed: 0, cancelled: 0 };
   for (const item of campaign.work) work[item.status]++;
-  const notes =
-    (campaign.task as { kind?: string } | null)?.kind === "xean.solve"
-      ? project(campaign)
-      : undefined;
+  const notes = isSolverCampaign(campaign) ? project(campaign) : undefined;
   return {
     status: campaign.status,
     error: campaign.error,

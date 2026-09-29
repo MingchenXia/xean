@@ -1,10 +1,11 @@
 # Xean
 
 Xean coordinates durable mathematical work over Pi. The kernel handles campaign
-scheduling, atomic publication, limits, and recovery. The solver adds notes,
+admission, atomic publication, limits, and recovery policy. The solver adds notes,
 exploration, verification, and exact-task acceptance. Pi supplies model and tool
-execution, storage records, and atomic batches. Chord supplies invocation context
-and prepared state changes.
+execution, task dispatch, storage records, and atomic batches. Chord supplies
+invocation context and prepared state changes. Harness execution uses the
+local controls documented in [Pi alignment](docs/pi-alignment.md#durable-integration).
 
 The library lives in `packages/core`. The separate `xean-cli` package in
 `packages/cli` exposes campaign operations through public library APIs.
@@ -24,7 +25,8 @@ Matching Pi packages are pinned to one tested main commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
 build, frozen model data, and hashes. Numbered releases are the stable
 distribution. The `main` branch targets 3.0.0 and requires new campaigns for
-its three-view note format. Version 2.0.0 remains the current stable release.
+its three-view note format, updated Pi storage schema, and Harness checkpoints. Version 2.0.0 remains
+the current stable release.
 
 ## Install and run
 

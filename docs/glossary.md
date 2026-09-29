@@ -21,7 +21,7 @@ Pi names when referring to Pi APIs. Historical artifacts keep their original nam
 
 `PiTask` is the internal Pi task record for work or a Coordinator signal.
 Its native `checkpoint` field contains Xean's `AttemptState`: attempt count,
-identity, error, and call-denial state. Resuming private worker progress from a
+identity, error, call-denial state, and the Coordinator's frozen input reference. Resuming private worker progress from a
 checkpoint remains deferred. `recordRequest()` only records a call payload.
 
 Chord's native `Tracker` owns campaign-state revisions. A draft is its private

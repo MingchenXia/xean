@@ -12,12 +12,12 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
 | `pi-ai`         | Models, providers, request conversion, streaming, authentication options, and transport retries                        |
 | `pi-agent-core` | Agent and tool loops chosen by a role                                                                                  |
 | Chord           | Native invocation context, cooperative cancellation, and prepared immutable campaign-state changes                     |
-| `pi-durable`    | Native task, document, conversation, and entry records, IDs, atomic storage batches, and the SQLite schema             |
+| `pi-durable`    | Task dispatch, cancellation, joining, recovery, records, IDs, atomic storage batches, and the SQLite schema            |
 | `pi-telemetry`  | Optional native spans supplied through `XeanOptions.telemetry`                                                         |
 | Xean            | Concurrent admission, sequential Coordinator decisions, whole-worker publication, campaign limits, and recovery policy |
 
-Pi's public durable API supplies storage. Xean implements the campaign scheduler
-against that API. The kernel introduces no workflow language or plugin sandbox.
+Pi Harness executes tasks through the [local controls](pi-alignment.md#durable-integration)
+that let Xean supply admission and publication policy. The kernel introduces no workflow language or plugin sandbox.
 Roles and Coordinator are trusted implementations.
 
 ## Opening and running
@@ -69,7 +69,7 @@ Worker attempts use their original immutable input. Coordinator attempts receive
 a snapshot of committed state at the start of each attempt. The attempt-start
 entry records enough information to recover that exact input before invocation.
 Worker inputs and completed results remain in their Pi task records.
-Coordinator entries freeze mutable view fields and reference those immutable
+Coordinator checkpoints retain their attempt-start entry ID. These entries freeze mutable view fields and reference those immutable
 inputs and results. An input receipt cutoff selects the append-only input
 history visible at that attempt's start.
 `attemptInput(entryId)` reconstructs the historical worker input or
@@ -303,12 +303,15 @@ implementation and returns Pi's `SqliteStorage`. Pi owns the database
 schema and its migrations. Xean uses native task records for work and pending
 signals, a session document for campaign state, and entries for operational
 history.
-Store uses Pi's native Session to serialize mutations, acquire the campaign
-document, prepare changes, commit record/document writes, and adopt them after
-storage succeeds. Drafts close at native callback settlement, before storage
+Store uses Harness for owners and Session for inspection. Native Session
+serializes mutations, acquires the campaign document, prepares changes, commits
+record/document writes, and adopts them after storage succeeds. Drafts close at
+native callback settlement, before storage
 commits. Callback failures roll back private changes. Uncertain storage or
-post-storage adoption failures stop the open instance. Store retains its task
-cache and observes storage commits for wakeup revisions and fatal failures.
+post-storage adoption failures stop the open instance. Store updates its task
+projection through Pi's public post-adoption commit
+subscription. After a failed operation, an empty Session commit detects native
+poisoning without a Storage write.
 Pi's `StorageRejected` guarantees that a rejected batch made no durable change.
 That error reaches the caller after rollback and leaves the instance usable;
 it does not automatically retry the operation. Other commit errors remain fatal.
@@ -318,11 +321,14 @@ The internal `PiTask` type represents those task records. Their native
 `checkpoint` field stores `AttemptState` for whole-attempt recovery. Private
 execution checkpoints remain deferred.
 
-Xean's campaign state and campaign document use format version 6. Earlier formats
+Xean's campaign state and campaign document use format version 8. Earlier formats
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 9.
+version 1. Solver declarations independently use version 9. The durable patch
+adds Harness policy hooks, pause, and quiescence, exposes native task-record
+mutation for atomic domain transitions, and retains entry attribution. The
+[alignment notes](pi-alignment.md#durable-integration) describe these local extensions.
 
 Pi configures WAL journaling; Xean selects `synchronous = FULL`. Readers hold
 consistent SQLite snapshots while the owner continues committing work. A separate

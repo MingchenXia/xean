@@ -81,6 +81,9 @@ test("recorded gateway interruptions retry without retrying invalid requests", a
       2,
     ],
     ["invalid_request_error: Upstream closed stream without completion", 1],
+    ["subscription_sharing_usage_limit_exceeded: HTTP 429", 1],
+    ["subscription_sharing_usage_unavailable", 2],
+    ["subscription_sharing_user_unavailable", 2],
   ] as const) {
     let calls = 0;
     await retryAssistantCall(

@@ -2,17 +2,20 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   createSession,
   defineDoc,
+  Harness,
   ROOT_CONVERSATION_ID,
-  StorageRejected,
   type Cursor,
   type DocumentId,
   type EntryId,
   type EntryRecord,
-  type Seq,
+  type HarnessOptions,
+  type RegistryReader,
   type Session,
   type Storage,
+  type Task,
   type TaskId,
   type TaskRecord,
+  type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { json } from "./json.ts";
@@ -32,9 +35,18 @@ export type AttemptState = {
   error: string | null;
   /** A grant must not turn an earlier admission denial into a blocking failure. */
   callDenied?: boolean;
+  inputId?: EntryId;
 };
+export const initialAttempt = (): AttemptState => ({
+  phase: "run",
+  attempts: 0,
+  attemptId: null,
+  error: null,
+});
 export type Input = WorkRequest | Omit<Signal, "id">;
 export type PiTask = TaskRecord<Input, AttemptState, JsonValue>;
+type Definition = Task<Input, AttemptState, JsonValue, object>;
+export type Runtime = TaskRuntime<Input, AttemptState, JsonValue, object>;
 export const WORKER = "xean.worker";
 export const COORDINATOR = "xean.coordinator";
 export const campaignAddress = {
@@ -80,44 +92,35 @@ export interface Transaction {
   entries(project?: RecordProjection): Promise<EntryRecord[]>;
 }
 
-/** Pi owns transactions; Xean keeps its scheduling cache and wakeup metadata. */
+/** Pi publishes adopted commits; Xean retains the scheduling projection. */
 export class Store {
-  private readonly session: Session;
   failure: Error | undefined;
-  revision: Seq | 0 = 0;
 
   private constructor(
     readonly storage: Storage,
     private readonly tasks: Map<TaskId, PiTask>,
+    private readonly session: Session,
+    private readonly registry?: RegistryReader,
   ) {
-    const commit: Storage["commit"] = async (writes, context) => {
-      try {
-        const revision = await storage.commit(writes, context);
-        // The Session still holds its mutation line until document adoption.
-        for (const write of writes)
-          if (write.type === "task")
-            this.tasks.set(write.value.id, resident(write.value as PiTask));
-        return (this.revision = revision);
-      } catch (error) {
-        if (!(error instanceof StorageRejected))
-          this.failure =
-            error instanceof Error ? error : new Error(String(error));
-        throw error;
-      }
-    };
-    this.session = createSession(
-      new Proxy(storage, {
-        get(target, key) {
-          if (key === "commit") return commit;
-          const value = Reflect.get(target, key, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      }),
-    );
+    this.session.subscribeCommits(({ changes }) => {
+      for (const change of changes)
+        if (change.type === "task")
+          this.tasks.set(change.value.id, resident(change.value as PiTask));
+    });
   }
 
-  static async open(storage: Storage, initial?: CampaignState): Promise<Store> {
-    if (!(await storage.findDocument(campaignAddress, "current", context))) {
+  static async open(
+    storage: Storage,
+    initial?: CampaignState,
+    runtime?: HarnessOptions,
+    validate?: (state: CampaignState, tasks: readonly PiTask[]) => void,
+  ): Promise<Store> {
+    let record = await storage.findDocument(
+      campaignAddress,
+      "current",
+      context,
+    );
+    if (!record) {
       if (!initial) throw new Error("A new Xean campaign requires a task");
       if (await storage.conversation(ROOT_CONVERSATION_ID, context)) {
         throw new Error("Storage already contains a non-Xean session");
@@ -138,13 +141,15 @@ export class Store {
         ],
         context,
       );
+      record = await storage.findDocument(campaignAddress, "current", context);
     }
-    const tasks = new Map<TaskId, PiTask>();
-    const store = new Store(storage, tasks);
-    const state = await store.session.snapshot(campaign, context);
-    if (state?.version !== campaignVersion) {
+    const saved = await storage.document(record!.id, "current", context);
+    if (
+      saved?.version !== campaignVersion ||
+      saved.value.version !== campaignVersion
+    )
       throw new Error("Unsupported Xean campaign version");
-    }
+    const tasks = new Map<TaskId, PiTask>();
     let cursor: Cursor | undefined;
     do {
       const page = await storage.scanTasks({}, 256, cursor, context);
@@ -156,59 +161,92 @@ export class Store {
       }
       cursor = page.next;
     } while (cursor);
-    return store;
+    validate?.(saved.value as CampaignState, [...tasks.values()]);
+    const session = runtime
+      ? await Harness.open(storage, runtime, context)
+      : createSession(storage);
+    // Harness owns recovery. Refresh only records it may have changed before
+    // the post-open subscription can observe them.
+    if (runtime)
+      for (const task of tasks.values())
+        if (task.state.status === "running")
+          tasks.set(
+            task.id,
+            resident((await storage.task(task.id, context)) as PiTask),
+          );
+    return new Store(storage, tasks, session, runtime?.registry);
+  }
+
+  get harness(): Harness {
+    if (!("resume" in this.session))
+      throw new Error("Inspection has no task runtime");
+    return this.session as Harness;
+  }
+
+  async transaction(tx: Tx): Promise<Transaction> {
+    return {
+      state: await tx.doc(campaign),
+      tasks: [...this.tasks.values()],
+      writeTask: (task) => tx.setTask(task),
+      newTask: (kind, input) => {
+        const task = this.registry?.snapshot().task(kind);
+        if (!task) throw new Error(`Unregistered task ${kind}`);
+        return tx.createTask(task as Definition, json(input), {
+          conversationId: ROOT_CONVERSATION_ID,
+        });
+      },
+      entry: async (kind, data, taskId) => {
+        // Pi copies after ID minting; snapshot at Xean's call boundary.
+        const entry = await tx.appendEntry(ROOT_CONVERSATION_ID, {
+          kind,
+          data: json(data) as JsonValue,
+          ...(taskId === undefined ? {} : { byTaskId: taskId }),
+        });
+        return entry.id;
+      },
+      entries: (project) => this.scanEntries(tx, project),
+    };
   }
 
   /** Kernel supplies normalized JSON; results must detach draft references. */
   mutate<T>(action: (tx: Transaction) => T | Promise<T>): Promise<T> {
-    let revision: Seq | 0 | undefined;
-    return this.session
-      .commit(async (tx) => {
-        revision = this.revision;
-        return action({
-          state: await tx.doc(campaign),
-          tasks: [...this.tasks.values()],
-          writeTask: (task) => tx.setTask(task),
-          newTask: (kind, input) =>
-            tx.createTask<Input, AttemptState, JsonValue, object>(
-              {
-                definition: {
-                  name: kind,
-                  version: 1,
-                  initial: (): AttemptState => ({
-                    phase: "run",
-                    attempts: 0,
-                    attemptId: null,
-                    error: null,
-                  }),
-                },
-              },
-              json(input),
-              { conversationId: ROOT_CONVERSATION_ID },
-            ),
-          entry: async (kind, data, taskId) => {
-            // Pi copies after ID minting; snapshot at Xean's call boundary.
-            const entry = await tx.appendEntry(ROOT_CONVERSATION_ID, {
-              kind,
-              data: json(data) as JsonValue,
-              ...(taskId === undefined ? {} : { byTaskId: taskId }),
-            });
-            return entry.id;
-          },
-          entries: (project) => this.scanEntries(tx, project),
-        });
-      }, context)
-      .catch((error) => {
-        // A failed native adoption is as uncertain as a failed Storage reply.
-        if (revision !== undefined && this.revision !== revision)
-          this.failure =
-            error instanceof Error ? error : new Error(String(error));
-        throw error;
-      });
+    return this.checked(
+      this.session.commit(
+        async (tx) => action(await this.transaction(tx)),
+        context,
+      ),
+    );
+  }
+
+  async mutateTask(
+    runtime: Runtime,
+    action: (tx: Transaction) => void | Promise<void>,
+  ): Promise<void> {
+    await this.checked(
+      runtime.commit(async (tx) => {
+        await action(await this.transaction(tx));
+      }, context),
+    );
+  }
+
+  private checked<T>(operation: Promise<T>): Promise<T> {
+    return operation.catch(async (error) => {
+      // Pi distinguishes rejected callbacks/batches from poisoned sessions.
+      // A read-only commit checks that state without touching Storage.
+      try {
+        await this.session.commit(() => {}, context);
+      } catch (failure) {
+        const cause =
+          failure instanceof Error ? (failure.cause ?? failure) : failure;
+        this.failure ??=
+          cause instanceof Error ? cause : new Error(String(cause));
+      }
+      throw error;
+    });
   }
 
   entries(): Promise<EntryRecord[]> {
-    return this.session.commit((tx) => this.scanEntries(tx), context);
+    return this.mutate((tx) => tx.entries());
   }
 
   private async scanEntries(
