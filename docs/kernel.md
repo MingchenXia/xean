@@ -20,6 +20,12 @@ Pi Harness executes tasks through the [local controls](pi-alignment.md#durable-i
 that let Xean supply admission and publication policy. The kernel introduces no workflow language or plugin sandbox.
 Roles and Coordinator are trusted implementations.
 
+Core exposes the kernel, solver, provider integration, and shared reports through
+public library exports. The CLI and observer are optional applications with
+separate entry points. Neither is a core dependency. `xean/report` projects
+inspection data for both applications without starting a model or process.
+The [repository package map](../README.md) defines their dependency directions.
+
 ## Opening and running
 
 ```ts

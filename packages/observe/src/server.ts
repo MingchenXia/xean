@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { resolve, dirname, basename } from "node:path";
 import { parseArgs } from "node:util";
 import { readRun, type Source, type Run } from "./read.ts";

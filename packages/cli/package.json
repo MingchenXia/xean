@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./report": "./src/report.ts",
     "./control": "./src/control.ts"
   },
   "bin": {

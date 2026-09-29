@@ -49,12 +49,15 @@
     "packages/observe": {
       "name": "xean-observe",
       "version": "3.0.0-dev.0",
+      "bin": {
+        "xean-observe": "./src/server.ts",
+        "xean-observe-publish": "./src/publish.ts",
+      },
       "dependencies": {
         "execa": "catalog:",
         "katex": "0.18.9",
         "lit-html": "3.3.3",
         "xean": "workspace:*",
-        "xean-cli": "workspace:*",
       },
     },
   },

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import { declarationVersion } from "xean/solve";
-import { observe, snapshot } from "../packages/observe/src/snapshot.ts";
+import { snapshot } from "../packages/observe/src/snapshot.ts";
+import { observe } from "../packages/observe/src/publish.ts";
 import { readRun, type Run } from "../packages/observe/src/read.ts";
 import { api, readSources } from "../packages/observe/src/server.ts";
 
@@ -84,20 +85,29 @@ test("the external observer reads coherent live snapshots without changing a loc
   try {
     await entered.promise;
     const failures: unknown[] = [];
-    await observe(engine, directory, (error) => {
-      failures.push(error);
-    })();
+    // The publisher gets only a path, in another process while ownership is held.
+    const publisher = Bun.spawnSync([
+      process.execPath,
+      "--no-install",
+      "--no-env-file",
+      new URL("../packages/observe/src/publish.ts", import.meta.url).pathname,
+      directory,
+    ]);
+    expect(publisher.exitCode).toBe(0);
+    expect(publisher.stderr.toString()).toBe("");
     const before = await readRun({ id: "fixture", directory }, directory);
     expect(before.error).toBeUndefined();
     expect(before.snapshot?.notes).toHaveLength(0);
     expect(before.snapshot?.status.calls.unsettled).toBe(1);
     release.resolve();
     await running;
-    const stop = observe(engine, directory, (error) => {
+    const committed = await engine.inspectWithRecords();
+    const stop = observe(directory, (error) => {
       failures.push(error);
     });
     await stop();
     await stop();
+    expect(await engine.inspectWithRecords()).toEqual(committed);
     const after = await readRun({ id: "fixture", directory }, directory);
     const published = await Bun.file(
       join(directory, "observation.json"),

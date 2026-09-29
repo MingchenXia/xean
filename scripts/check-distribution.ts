@@ -1,12 +1,23 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import manifest from "../package.json";
 import provenance from "../vendor/pi/provenance.json";
 
 const root = resolve(import.meta.dir, "..");
+const workspaces = new Map<
+  string,
+  {
+    directory: string;
+    exports?: Record<string, string>;
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  }
+>();
 for await (const file of new Bun.Glob("packages/*/package.json").scan(root)) {
   const workspace = await Bun.file(resolve(root, file)).json();
   assert.equal(
@@ -14,6 +25,50 @@ for await (const file of new Bun.Glob("packages/*/package.json").scan(root)) {
     manifest.version,
     `${file}: release version drift`,
   );
+  workspaces.set(workspace.name, {
+    ...workspace,
+    directory: dirname(resolve(root, file)),
+  });
+}
+// The CLI and observer are sibling clients. Cross-package imports use public APIs.
+const parser = new Bun.Transpiler({ loader: "ts" });
+for (const [name, workspace] of workspaces) {
+  const allowed = (target: string) =>
+    target === name || (name !== "xean" && target === "xean");
+  for (const target of Object.keys({
+    ...workspace.dependencies,
+    ...workspace.optionalDependencies,
+    ...workspace.peerDependencies,
+    ...workspace.devDependencies,
+  }))
+    if (workspaces.has(target))
+      assert.ok(allowed(target), `${name} must not depend on ${target}`);
+  for await (const path of new Bun.Glob("{src,web}/**/*.ts").scan(
+    workspace.directory,
+  )) {
+    const file = resolve(workspace.directory, path);
+    for (const { path: imported } of parser.scanImports(
+      (await Bun.file(file).text()).replace(/^#![^\n]*\n/, ""),
+    )) {
+      for (const [target, dependency] of workspaces) {
+        if (imported === target || imported.startsWith(`${target}/`)) {
+          assert.ok(allowed(target), `${file}: forbidden import ${imported}`);
+          const entry =
+            imported === target ? "." : `.${imported.slice(target.length)}`;
+          assert.ok(
+            Object.hasOwn(dependency.exports ?? {}, entry),
+            `${file}: ${imported} is not a public export`,
+          );
+        } else if (imported.startsWith(".") && target !== name) {
+          const destination = resolve(dirname(file), imported);
+          assert.ok(
+            !destination.startsWith(`${dependency.directory}/`),
+            `${file}: use a public package import for ${imported}`,
+          );
+        }
+      }
+    }
+  }
 }
 for (const record of [...provenance.artifacts, ...provenance.patches]) {
   const bytes = await readFile(resolve(root, record.path));

@@ -76,9 +76,12 @@ canonical terminology. Reuse an existing term before defining and justifying a n
   and cannot bypass other stopping conditions. Token and dollar budgets are out of scope.
 - Permit independent read-only inspection while retaining one campaign owner.
   Inspection must not acquire ownership or perform recovery. Keep SQL as the backend direction.
-- The CLI remains a separate package using public kernel and solver APIs.
+- Core is a library. CLI and observer are optional sibling applications using
+  its public exports. Core depends on neither app, and the apps do not depend
+  on each other. Shared inspection reports belong in core. The observer owns
+  its dashboard, theme, and snapshot-publisher lifecycle outside solver execution.
   Keep operation semantics in the library and model runtime construction lazy.
-  Live mutations use the active owner, following the lifecycle contract.
+  CLI live mutations use the active owner, following the lifecycle contract.
 
 ## Mathematical roles
 

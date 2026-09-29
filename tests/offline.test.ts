@@ -90,6 +90,9 @@ test("closed-book runner honors omitted literature defaults and reopens without 
     expect(
       (await Bun.file(join(directory, "result.json")).json()).outcome,
     ).toBe("round_limit");
+    expect(await Bun.file(join(directory, "observation.json")).exists()).toBe(
+      false,
+    );
   } finally {
     await rm(directory, { recursive: true });
   }

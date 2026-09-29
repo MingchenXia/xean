@@ -3,7 +3,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { version } from "../package.json";
-import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import { declarationVersion } from "xean/solve";
 
 test("CLI metadata stays model-free, shares flags, and releases ownership after failures", async () => {
@@ -112,26 +111,39 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
 });
 
 test("CLI drains large inspection and argument output through a slow pipe", async () => {
-  // Collect earlier fixtures before this large SQLite fixture allocates its pages.
-  Bun.gc(true);
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-output-"));
   const database = join(directory, "campaign.sqlite");
   const argument = "For every integer n, 2n is even.\n".repeat(65_536);
   try {
-    const engine = await Xean.open(await openXeanStorage(database), {
-      task: { kind: "xean.solve", version: declarationVersion },
-      roles: [],
-      coordinator: {
-        name: "output-fixture",
-        run: () => ({ state: null, completion: { argument } }),
+    // Isolate the large SQLite fixture from native handles retained by earlier tests.
+    const initialized = Bun.spawnSync(
+      [
+        process.execPath,
+        "--no-install",
+        "--no-env-file",
+        "--eval",
+        `import { Xean, openXeanStorage } from "xean";
+const { database, argument, version } = await Bun.stdin.json();
+const engine = await Xean.open(await openXeanStorage(database), {
+  task: { kind: "xean.solve", version }, roles: [],
+  coordinator: { name: "output-fixture", run: () => ({ state: null, completion: { argument } }) },
+  accept: () => true,
+});
+try { await engine.run(); } finally { await engine.close(); }`,
+      ],
+      {
+        cwd: resolve(import.meta.dir, ".."),
+        stdin: Buffer.from(
+          JSON.stringify({
+            database,
+            argument,
+            version: declarationVersion,
+          }),
+        ),
       },
-      accept: () => true,
-    });
-    try {
-      await engine.run();
-    } finally {
-      await engine.close();
-    }
+    );
+    expect(initialized.stderr.toString()).toBe("");
+    expect(initialized.exitCode).toBe(0);
     for (const command of ["inspect", "export"]) {
       const child = Bun.spawn(
         [

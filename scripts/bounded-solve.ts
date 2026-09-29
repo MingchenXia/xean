@@ -7,7 +7,6 @@ import { parseArgs } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ROOT_CONVERSATION_ID, type Cursor } from "@earendil-works/pi-durable";
 import { Xean, openXeanStorage, type XeanOptions } from "xean";
-import { observe } from "xean-observe";
 import { serveControl } from "xean-cli/control";
 import { verifyInstall } from "./dependencies.ts";
 import {
@@ -148,7 +147,6 @@ if (import.meta.main) {
   const database = resolve(directory, "campaign.sqlite");
   let storage = await openXeanStorage(database);
   let engine = await Xean.open(storage, options);
-  const stopObserving = observe(engine, directory);
   let control: Awaited<ReturnType<typeof serveControl>> | undefined;
   let shutdown: Promise<unknown> | undefined;
   const interrupt = () => {
@@ -244,7 +242,6 @@ if (import.meta.main) {
         notes: project(campaign),
       });
       const recordsHash = await recordDigest(true);
-      await stopObserving();
       await engine.close();
       storage = await openXeanStorage(database);
       engine = await Xean.open(storage, {
@@ -286,7 +283,6 @@ if (import.meta.main) {
     process.off("SIGTERM", interrupt);
     await control?.close(true);
     await shutdown;
-    await stopObserving();
     await engine.close();
   }
 }

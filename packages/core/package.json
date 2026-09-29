@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./pi": "./src/pi.ts",
+    "./report": "./src/report.ts",
     "./solve": "./src/solve/index.ts"
   },
   "dependencies": {

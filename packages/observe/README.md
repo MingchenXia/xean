@@ -1,15 +1,39 @@
 # Xean Observe
 
 Xean Observe displays campaign notes, checks, workers, failures, and recorded
-usage. It is a separate workspace package. It uses Xean's public inspection and
-note-projection APIs, plus the existing CLI reporting.
+usage. It is an optional app in this repository, packaged with its dashboard,
+snapshot publisher, and theme assets. It uses Xean's public inspection,
+note-projection, and `xean/report` APIs. Core and CLI do not depend on it, and
+it does not depend on the CLI.
 
 The dashboard reads local campaigns through `inspectCampaign` and remote runs
-through exported JSON. Inspection never starts recovery or calls a model. The bounded
-experiment runner publishes `observation.json` every ten seconds and at shutdown
-through `observe(engine, directory)`. Publication uses an atomic file rename.
-An observer failure is reported on stderr and does not stop mathematical work.
+through exported JSON. Inspection never starts recovery or calls a model.
+The dashboard and publisher run separately from solver execution, including
+bounded experiments. Publication uses an atomic file rename.
+An observer failure is reported in its own process and does not stop mathematical work.
 The file is a disposable view of the campaign, not its authoritative record.
+
+## Snapshot publishing
+
+Local dashboards can read the campaign database directly. For remote artifact
+readers, run the publisher on the campaign host after the database exists:
+
+```sh
+bun packages/observe/src/publish.ts /absolute/run-directory
+bun packages/observe/src/publish.ts /absolute/run-directory --watch
+```
+
+The first command writes one `observation.json`. `--watch` refreshes it every
+ten seconds and publishes once more on SIGINT or SIGTERM. Each read opens and
+closes its own read-only snapshot while the solver retains ownership. Deploy
+the watcher as a separate supervised process with access to the run directory.
+The solver and experiment runner neither launch nor join it. Without a watcher,
+remote artifact readers retain completed exports and process logs.
+
+The workspace binaries are `xean-observe` for the dashboard and
+`xean-observe-publish` for snapshots. The commands above retain the selected Bun
+runtime. On Fleet, launch either file through the locked `fleet-run` command
+shown below.
 
 ## Run locally
 

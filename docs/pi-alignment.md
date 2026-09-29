@@ -39,7 +39,7 @@ The existing `pi-agent-core.AgentHarness` is a different API.
 | Cancellation and telemetry | Harness owns invocation cancellation and joining; Chord contexts carry the signal. Pi's telemetry context carries attempt spans.                                                                      |
 | Scheduling and publication | Harness dispatches admitted tasks and recovers interrupted work. Xean admission policy enforces concurrency, Coordinator serialization, and limits. Xean publishes each whole result with its signal. |
 | Mathematical state         | Xean owns dependency closure, verification stages, corrections, evidence binding, and exact acceptance. Notes derive from immutable results and input receipts.                                       |
-| CLI and observation        | Separate packages use public library APIs. Read-only inspection uses Pi scans. Live mutations reach the active owner through a local socket.                                                          |
+| CLI and observation        | Optional sibling apps use public core APIs, including `xean/report`. Core depends on neither app. Read-only inspection uses Pi scans. Live mutations reach the active owner through a local socket.   |
 
 A kernel role needs only its name and `run(input, execution, context)`. Tool
 descriptions belong to Pi's tools. Solver and standalone execution call the same

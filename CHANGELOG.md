@@ -2,6 +2,13 @@
 
 ## 3.0.0 — Unreleased
 
+CLI and observer are optional sibling applications over the core library.
+Shared inspection reports move from `xean-cli/report` to `xean/report`.
+The observer packages its dashboard and theme together and publishes snapshots
+through a separate read-only command. Bounded experiments no longer start an
+observer publisher. Remote live snapshots require the observer's `--watch`
+process. Existing campaign and observation formats are unchanged by this split.
+
 Notes now require `summary`, `detailedSummary`, and authoritative full `text`.
 Harmless corrections replace all three together. This changes public note and
 correction APIs, CLI input files, and persisted solver inputs. Solver declarations

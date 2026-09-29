@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { Xean, type JsonValue } from "xean";
 import { declarationVersion } from "xean/solve";
-import { statusReport, usageRecord } from "../packages/cli/src/report.ts";
+import { statusReport, usageRecord } from "xean/report";
 
 test("status retains native usage, explicit zeros, unknown usage, and unsettled calls", async () => {
   const storage = new MemoryStorage();

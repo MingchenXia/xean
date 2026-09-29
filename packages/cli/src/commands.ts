@@ -22,7 +22,7 @@ import {
   serveControl,
   type OwnerCommand,
 } from "./control.ts";
-import { statusReport, usageRecord } from "./report.ts";
+import { statusReport, usageRecord } from "xean/report";
 
 async function print(value: unknown): Promise<void> {
   await Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");

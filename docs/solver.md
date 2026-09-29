@@ -363,9 +363,11 @@ These campaigns use `xean.solve.offline` and require the same runner and flag
 when reopening. The ordinary CLI rejects that declaration. The
 [experiment protocol](steinitz-run.md) keeps round allowances private to the
 runner and operators, with no remaining-round information in role inputs.
-The bounded runner publishes observation snapshots and serves the CLI's live
-owner control. Guidance, note submissions, and lifecycle commands reach the
-active owner. Round allowances remain an outer-runner setting.
+The bounded runner opts into the CLI's live owner control. Guidance, note
+submissions, and lifecycle commands reach the active owner. Round allowances
+remain an outer-runner setting. Observation is a separate application. Use its
+[snapshot publisher](../packages/observe/README.md#snapshot-publishing) when a
+remote dashboard needs live exports.
 
 ## Running
 
@@ -829,8 +831,9 @@ change the solver's acceptance record. Repeating the exact completed review
 makes no calls. External premises require the same web activity and passage
 coverage as source verification.
 
-The library is in `packages/core`, and `xean-cli` is in `packages/cli`. The CLI
-uses public declaration/loading and campaign APIs. Distribution uses the complete
+The library is in `packages/core`, and the optional `xean-cli` app is in
+`packages/cli`. Core has no CLI or observer dependency. Both apps use public
+library APIs, including shared status reports from `xean/report`. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
 version 9, with distinct solver, standalone-role, and review kinds. Only this

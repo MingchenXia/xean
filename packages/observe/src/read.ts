@@ -2,7 +2,7 @@ import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { execa } from "execa";
 import { campaignVersion, inspectCampaign } from "xean";
-import { usageRecord } from "xean-cli/report";
+import { usageRecord } from "xean/report";
 import { readArtifacts } from "./artifacts.ts";
 import { snapshot, type Snapshot } from "./snapshot.ts";
 

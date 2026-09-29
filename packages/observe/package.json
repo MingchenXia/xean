@@ -6,9 +6,12 @@
   "exports": {
     ".": "./src/snapshot.ts"
   },
+  "bin": {
+    "xean-observe": "./src/server.ts",
+    "xean-observe-publish": "./src/publish.ts"
+  },
   "dependencies": {
     "xean": "workspace:*",
-    "xean-cli": "workspace:*",
     "execa": "catalog:",
     "lit-html": "3.3.3",
     "katex": "0.18.9"

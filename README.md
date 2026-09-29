@@ -7,10 +7,25 @@ execution, task dispatch, storage records, and atomic batches. Chord supplies
 invocation context and prepared state changes. Harness execution uses the
 local controls documented in [Pi alignment](docs/pi-alignment.md#durable-integration).
 
-The library lives in `packages/core`. The separate `xean-cli` package in
-`packages/cli` exposes campaign operations through public library APIs.
-The [observer](packages/observe/README.md) in `packages/observe` reads local
-campaigns through the read-only API and displays exported remote snapshots.
+The repository contains a core library and two optional applications:
+
+| Package        | Location           | Responsibility                                                        |
+| -------------- | ------------------ | --------------------------------------------------------------------- |
+| `xean`         | `packages/core`    | Kernel, mathematical solver, providers, and shared inspection reports |
+| `xean-cli`     | `packages/cli`     | Command parsing, terminal output, and live owner control              |
+| `xean-observe` | `packages/observe` | Read-only dashboard, snapshot publisher, and bundled theme assets     |
+
+Both applications depend on core's public APIs. Core depends on neither app,
+and the apps do not depend on each other. Library callers can use `xean`,
+`xean/solve`, `xean/pi`, and `xean/report` directly. Shared status projection
+belongs to `xean/report`; command transport and presentation belong to the apps.
+Repository checks enforce these dependency directions and public imports.
+
+The CLI runs only when invoked. The [observer](packages/observe/README.md) runs
+as a separate process and reads local campaigns or exported snapshots. Its
+dashboard, publisher, HTML, CSS, and shared theme form one app. Solver execution
+does not start or wait for it. The source archive and development setup include
+all three packages, with one dependency lock and aligned release versions.
 
 - [Philosophy](docs/philosophy.md): mathematical autonomy, shared memory, trust, and evaluation.
 - [Kernel contract](docs/kernel.md): execution, publication, limits, and storage.

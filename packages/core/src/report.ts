@@ -4,8 +4,8 @@ import type {
   JsonValue,
   RecordProjection,
   Xean,
-} from "xean";
-import { isSolverCampaign, project } from "xean/solve";
+} from "./index.ts";
+import { isSolverCampaign, project } from "./solve/notes.ts";
 
 /** Status needs call metadata, without retaining prompts or response bodies. */
 export const usageRecord: RecordProjection = (
