@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { Type, type JsonValue } from "@earendil-works/pi-ai";
 import { piRuntime, readSettings } from "../packages/core/src/solve/config.ts";
 import { reportedPiUsage } from "../packages/core/src/pi.ts";
+import { ask } from "../packages/core/src/solve/pi.ts";
+import { claudeResearch } from "../packages/core/src/solve/research.ts";
+import type { CallIdentity, CallRecorder } from "../packages/core/src/calls.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -54,6 +59,48 @@ test("Claude subscription profiles keep gateway credentials out and reject unsup
     expect(["error", "aborted"]).toContain(result.stopReason);
     expect(result.content).toEqual([]);
     expect(reportedPiUsage(result)).toBeNull();
+  }
+});
+
+test("Anthropic API and Claude subscription profiles remain distinct", () => {
+  const variable = "XEAN_TEST_ANTHROPIC_KEY";
+  const previous = process.env[variable];
+  process.env[variable] = "fixture-anthropic-key";
+  try {
+    const api = piRuntime(
+      readSettings({
+        profiles: {
+          default: {
+            provider: "anthropic",
+            model: "claude-opus-5-5",
+            apiKeyEnv: variable,
+            reasoning: "max",
+          },
+        },
+      }),
+    ).profiles.explorer;
+    expect(api.model.provider).toBe("anthropic");
+    expect(api.model.api).toBe("anthropic-messages");
+    expect(api.options?.apiKey).toBe("fixture-anthropic-key");
+
+    const subscription = piRuntime(
+      readSettings({
+        profiles: {
+          default: {
+            provider: "claude-code",
+            model: "claude-opus-5-5",
+            reasoning: "max",
+          },
+        },
+      }),
+      "must-not-be-used-by-subscription",
+    ).profiles.explorer;
+    expect(subscription.model.provider).toBe("claude-code");
+    expect(subscription.model.api).toBe("claude-code");
+    expect(subscription.options?.apiKey).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env[variable];
+    else process.env[variable] = previous;
   }
 });
 
@@ -123,3 +170,133 @@ else {
     await rm(directory, { recursive: true, force: true });
   }
 }, 10_000);
+
+test("Claude Code fixture hands a Pi submission through its tool bridge", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-claude-submit-"));
+  const command = join(directory, "claude");
+  const authModule = resolve(
+    import.meta.dir,
+    "../packages/core/node_modules/pi-claude-code-provider/src/auth.ts",
+  );
+  await writeFile(
+    command,
+    `#!${process.execPath}
+import { REQUIRED_HEADLESS_FLAGS } from ${JSON.stringify(authModule)};
+if (process.argv.includes("--version")) console.log("2.1.281");
+else if (process.argv.includes("--help")) console.log(REQUIRED_HEADLESS_FLAGS.join(" "));
+else if (process.argv.includes("auth")) console.log(JSON.stringify({loggedIn:true,authMethod:"claude.ai",apiProvider:"firstParty",subscriptionType:"max"}));
+else {
+  const config = JSON.parse(process.argv[process.argv.indexOf("--mcp-config") + 1]);
+  const ready = config.mcpServers?.pi?.env?.PI_CLAUDE_TOOL_READY;
+  if (typeof ready === "string") await Bun.write(ready, "ready");
+  // Let the provider's readiness poll observe the marker before the handoff.
+  await Bun.sleep(100);
+  const catalogPath = process.env.PI_CLAUDE_TOOL_CATALOG;
+  const catalog = catalogPath ? await Bun.file(catalogPath).json() : [];
+  const tool = catalog[0]?.name;
+  if (typeof tool !== "string") throw new Error("fixture did not receive a Pi tool catalog");
+  const transport = "mcp__pi__" + tool;
+  console.log(JSON.stringify({type:"system",subtype:"init",tools:[transport],permissionMode:"dontAsk",slash_commands:[],skills:[],plugins:[],apiKeySource:"none",mcp_server_errors:[],mcp_servers:[{name:"pi",status:"connected"}],model:"claude-opus-5-5"}));
+  console.log(JSON.stringify({type:"stream_event",event:{type:"message_start",message:{id:"fixture-message",model:"claude-opus-5-5",usage:{input_tokens:5,output_tokens:0}}}}));
+  console.log(JSON.stringify({type:"stream_event",event:{type:"content_block_start",index:0,content_block:{type:"tool_use",id:"fixture-call",name:transport,input:{answer:7}}}}));
+  console.log(JSON.stringify({type:"stream_event",event:{type:"content_block_stop",index:0}}));
+  console.log(JSON.stringify({type:"stream_event",event:{type:"message_delta",delta:{stop_reason:"tool_use"},usage:{output_tokens:1}}}));
+  console.log(JSON.stringify({type:"stream_event",event:{type:"message_stop"}}));
+  process.on("SIGTERM", () => process.exit(143));
+  await Bun.stdin.text();
+  setInterval(() => {}, 1000);
+}
+`,
+    { mode: 0o700 },
+  );
+  const previous = process.env.PI_CLAUDE_CODE_PROVIDER_PATH;
+  process.env.PI_CLAUDE_CODE_PROVIDER_PATH = command;
+  const calls: CallIdentity[] = [];
+  const recorder: CallRecorder = {
+    begin(identity) {
+      calls.push(identity);
+      return {
+        recordRequest(_payload: JsonValue) {},
+        settle(_message: unknown, _usage: unknown | null) {},
+      };
+    },
+  };
+  try {
+    const runtime = piRuntime(
+      readSettings({
+        profiles: {
+          default: { provider: "claude-code", model: "claude-opus-5-5" },
+        },
+      }),
+    );
+    const answer = await ask(
+      runtime,
+      "explorer",
+      "Return the answer through submit_result.",
+      {},
+      Type.Object({ answer: Type.Number() }),
+      { attemptId: "claude-submit-fixture", recorder },
+      BACKGROUND_CONTEXT,
+    );
+    expect(answer).toEqual({ answer: 7 });
+    expect(calls).toEqual([
+      { provider: "claude-code", id: "claude-opus-5-5", api: "claude-code" },
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CLAUDE_CODE_PROVIDER_PATH;
+    else process.env.PI_CLAUDE_CODE_PROVIDER_PATH = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 15_000);
+
+test("Claude research binds exact source passages through the shared contract", async () => {
+  const calls: CallIdentity[] = [];
+  const recorder: CallRecorder = {
+    begin(identity) {
+      calls.push(identity);
+      return {
+        recordRequest() {},
+        settle() {},
+      };
+    },
+  };
+  const research = claudeResearch({
+    search: async () =>
+      JSON.stringify({
+        results: [
+          {
+            noteId: "n1",
+            result: {
+              verdict: "PASS",
+              report: "The cited result matches the premise.",
+              correction: null,
+              passages: [
+                {
+                  premise: 0,
+                  url: "https://example.com/primary",
+                  quote: "The exact premise appears here.",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+  });
+  const result = await research.source(
+    {
+      task: { problem: "P", completionCriteria: "Q" },
+      notes: [{ id: "n1", text: "Argument", premises: ["Premise"] }],
+      evidence: [],
+    },
+    { attemptId: "claude-research-fixture", recorder },
+    BACKGROUND_CONTEXT,
+  );
+  expect(result[0]?.result).toMatchObject({ verdict: "PASS" });
+  expect(calls).toEqual([
+    {
+      provider: "claude-code",
+      id: "claude-web-search",
+      api: "claude-web-search",
+    },
+  ]);
+});
