@@ -79,15 +79,16 @@ test("status retains native usage, explicit zeros, unknown usage, and unsettled 
         entry("xean.call.settled", { callId, message: body, usage });
     snapshot.campaign.providerCalls = calls.length;
     const report = statusReport(snapshot);
-    expect(
-      statusReport({
-        ...snapshot,
-        campaign: {
-          ...snapshot.campaign,
-          task: { kind: "xean.solve.offline", version: declarationVersion },
-        },
-      }),
-    ).toEqual(report);
+    for (const kind of ["xean.solve.offline", "xean.solve.library"])
+      expect(
+        statusReport({
+          ...snapshot,
+          campaign: {
+            ...snapshot.campaign,
+            task: { kind, version: declarationVersion },
+          },
+        }),
+      ).toEqual(report);
     expect(report).toMatchObject({
       status: "running",
       pendingSignals: 2,

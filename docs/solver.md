@@ -679,6 +679,10 @@ request was sent. Xean cannot see other applications or campaigns using the same
 subscription, so it cannot enforce an account-wide daily or monthly quota;
 track that allowance outside Xean as well.
 
+Direct `createRoles()` calls derive the browser restriction from the selected
+runtime and cap Explorer at one response without a note reader, even if the
+caller supplies a larger allowance.
+
 The bridge's `/v1/chat/completions` endpoint owns browser login, prompt
 submission, waiting, and reply retrieval. It starts a fresh browser
 conversation for each request and returns a complete answer as one SSE

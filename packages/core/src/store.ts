@@ -220,11 +220,11 @@ export class Store {
 
   async mutateTask(
     runtime: Runtime,
-    action: (tx: Transaction) => void | Promise<void>,
+    action: (tx: Transaction, current: PiTask) => void | Promise<void>,
   ): Promise<void> {
     await this.checked(
-      runtime.commit(async (tx) => {
-        await action(await this.transaction(tx));
+      runtime.commit(async (tx, current) => {
+        await action(await this.transaction(tx), current);
       }, context),
     );
   }

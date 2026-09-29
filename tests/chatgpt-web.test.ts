@@ -16,6 +16,8 @@ import {
   declarationVersion,
 } from "../packages/core/src/solve/campaign.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
+import { createRoles } from "../packages/core/src/solve/roles.ts";
+import { offlineResearch } from "../scripts/bounded-solve.ts";
 import { project } from "../packages/core/src/solve/notes.ts";
 import { ask } from "../packages/core/src/solve/pi.ts";
 
@@ -217,6 +219,64 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
   } finally {
     await engine.close();
   }
+});
+
+test("direct browser roles cannot enable readers or repeat an invalid submission", async () => {
+  const runtime = piRuntime(
+    readSettings({
+      profiles: {
+        default: { provider: "openai", model: "gpt-6-astra" },
+        explorer: {
+          provider: "codex-chatgpt-web",
+          model: "chatgpt-web/gpt-6-pro",
+          baseUrl: "https://bridge.invalid/v1",
+        },
+      },
+    }),
+  );
+  let calls = 0;
+  let settled = 0;
+  runtime.profiles.explorer.options!.fetch = Object.assign(
+    async (_url: unknown, init?: RequestInit) => {
+      calls++;
+      const body = await new Response(init?.body).json();
+      expect(JSON.stringify(body.messages)).not.toContain("read_notes");
+      return response(
+        selection("submit_result", { notes: [], candidate: true }),
+      );
+    },
+    { preconnect: fetch.preconnect },
+  );
+  const roles = createRoles(runtime, offlineResearch, {
+    maxExplorerReads: 4,
+    maxExplorerResponses: 8,
+    chatGptSingleShot: false,
+    literature: false,
+  });
+  await expect(
+    roles.explorer(
+      {
+        task: { problem: "Fixture", completionCriteria: "Fixture" },
+        notes: [],
+        guidance: "Explore",
+      },
+      {
+        attemptId: "direct-browser",
+        attempt: 1,
+        recorder: {
+          begin: () => ({
+            recordRequest() {},
+            settle() {
+              settled++;
+            },
+          }),
+        },
+      },
+      BACKGROUND_CONTEXT,
+    ),
+  ).rejects.toThrow("exhausted its responses without a valid result");
+  expect(calls).toBe(1);
+  expect(settled).toBe(1);
 });
 
 test("ChatGPT Explorer is not dispatched again after an existing attempt", async () => {

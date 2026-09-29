@@ -20,7 +20,7 @@ campaigns and exports on their matching runtime. No migration is provided.
   Shutdown drains call accounting before closing storage. Unfinished admissions
   roll back on pause, and interrupted invocations cannot publish late results.
 - Status and observer exports share solver-campaign recognition, so closed-book
-  campaigns also report note counts.
+  and direct-library campaigns also report their notes.
 - Claude Code profiles now use the pinned local subscription transport, while
   Anthropic API profiles keep separate credentials and usage accounting. The
   Claude tool bridge and cancellation paths have deterministic coverage.
@@ -38,6 +38,7 @@ campaigns and exports on their matching runtime. No migration is provided.
   ChatGPT Explorer work. Recovered browser workers fail before another request,
   using the new one-based `Execution.attempt` ordinal. Xean cannot account for usage
   outside the campaign or enforce an account-wide subscription quota.
+  Direct role construction also enforces one response and disables note reads.
 - ChatGPT Web uses the bridge's text-only Chat Completions endpoint with a
   validated generic tool envelope. Browser retries are disabled and usage stays
   unknown; no live Pro request is part of this qualification.

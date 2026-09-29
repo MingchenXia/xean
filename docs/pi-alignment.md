@@ -86,6 +86,9 @@ Session writes before joining on close.
   running tasks to pending. Recovery still repeats the whole worker.
 
 Harness owns the invocation map, dispatch, cancellation, joining, and recovery.
+Its pause state also gates execution between explicit Xean `run()` calls.
+Worker publication uses the current task supplied by Pi's invocation-gated
+transaction, avoiding a second lookup through campaign history.
 Its scheduler yields between passes so synchronous work cannot starve external
 cancellation. A pending checkpoint yields a logical retry back to admission.
 Xean registers executable task definitions and uses native task creation.
@@ -160,8 +163,8 @@ the public API. Codex Responses currently uses local read enforcement without
 these payload additions. Pi exposes neither a provider-neutral tool allowlist
 nor per-message cache boundaries; native equivalents would remove these hooks.
 
-Role calls declare their complete tool catalog in the initial system message as
-well as retaining it in the agent context. This keeps the provider request's
+Role calls use Pi's `createInitialSystemMessage` to declare their complete tool
+catalog, while retaining executable tools in the agent context. This keeps the provider request's
 top-level `tools` array present when a structured submission is required,
 including after Pi retries a rejected submission; a later-only declaration can
 leave Codex with `tool_choice: required` but no tools and is rejected by the

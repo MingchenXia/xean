@@ -57,6 +57,7 @@ export function statusReport({
       };
       const group = calls.get(callId);
       if (!group) throw new Error(`Call settlement lacks admission: ${callId}`);
+      calls.delete(callId);
       group.settled++;
       const fields =
         usage && typeof usage === "object" && !Array.isArray(usage)

@@ -2,6 +2,7 @@ import type { Context } from "@earendil-works/chord";
 import { Assert } from "typebox/value";
 import { type Static, type TSchema } from "@earendil-works/pi-ai";
 import type { Execution } from "../types.ts";
+import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
 import {
   correctnessSchema,
   batchSchema,
@@ -68,6 +69,8 @@ export function createRoles(
   research: Research,
   options: RoleOptions,
 ) {
+  if (runtime.profiles.explorer.model.provider === chatGptWebProviderId)
+    options = { ...options, chatGptSingleShot: true, maxExplorerResponses: 1 };
   const literature = options.literature && research.retrieval;
   const batch = async <S extends TSchema>(
     profile: ProfileName,

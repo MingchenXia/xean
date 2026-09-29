@@ -180,10 +180,14 @@ export function refresh(notes: Note[]): Note[] {
   return notes;
 }
 
-/** Both runners share note projection; standalone role campaigns do not. */
+/** Solver runners and library campaigns share notes; standalone roles do not. */
 export function isSolverCampaign(view: Pick<CampaignView, "task">): boolean {
   const kind = (view.task as { kind?: string } | null)?.kind;
-  return kind === "xean.solve" || kind === "xean.solve.offline";
+  return (
+    kind === "xean.solve" ||
+    kind === "xean.solve.offline" ||
+    kind === "xean.solve.library"
+  );
 }
 
 /** Project immutable worker results and accepted inputs without modifying either. */

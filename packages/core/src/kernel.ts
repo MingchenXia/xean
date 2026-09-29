@@ -174,7 +174,6 @@ function terminal(
 
 /** Xean's campaign policy over pi-durable's native atomic record storage. */
 export class Xean {
-  private driving = false;
   private runPromise?: Promise<Campaign>;
   private runRequested = false;
   private closePromise?: Promise<void>;
@@ -383,7 +382,6 @@ export class Xean {
   }
 
   private async drive(): Promise<Campaign> {
-    this.driving = true;
     for (;;) {
       if (!this.closing) this.store.harness.resume();
       await this.store.harness.waitForQuiescence(BACKGROUND_CONTEXT);
@@ -408,7 +406,7 @@ export class Xean {
           tx.state.status = "limited";
           tx.state.error = "Provider call limit reached";
         }
-        this.driving = false;
+        this.store.harness.pause();
         return snapshot(tx);
       });
       if (idle) return idle;
@@ -421,13 +419,7 @@ export class Xean {
     activeIds: readonly TaskId[],
   ) {
     const tx = await this.store.transaction(native);
-    if (
-      !this.driving ||
-      this.closing ||
-      this.fault ||
-      tx.state.status !== "running"
-    )
-      return [];
+    if (this.closing || this.fault || tx.state.status !== "running") return [];
     const active = new Set(activeIds);
     const selected: PiTask[] = [];
     const coordinatorRunning = tx.tasks.some(
@@ -567,9 +559,7 @@ export class Xean {
           if (calls.failure) throw calls.failure;
           if (calls.pending.size > 0)
             throw new Error("Role returned with unsettled provider calls");
-          await this.store.mutateTask(runtime, async (tx) => {
-            const current = this.current(tx, item);
-            if (!current) return;
+          await this.store.mutateTask(runtime, async (tx, current) => {
             if (item.task.kind === WORKER) {
               await this.finishWorker(tx, current, {
                 status: "completed",
@@ -591,9 +581,8 @@ export class Xean {
       await Promise.all(calls.pending);
       if (this.store.failure) throw error;
       if (this.closing || nativeContext.abortSignal?.aborted) return;
-      await this.store.mutateTask(runtime, async (tx) => {
-        const task = this.current(tx, item);
-        if (!task || task.state.status === "terminal") return;
+      await this.store.mutateTask(runtime, async (tx, task) => {
+        if (task.state.status === "terminal") return;
         const message = errorText(error);
         await tx.entry(
           "xean.attempt.failed",

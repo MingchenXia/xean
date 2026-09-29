@@ -110,7 +110,19 @@ test("the external observer reads coherent live snapshots without changing a loc
     expect(after.snapshot?.notes[0]?.id).toBe("work/n1");
     expect(after.snapshot?.notes[0]?.detailedSummary).toContain("twice $2n$");
     const history = await engine.inspect();
-    for (const kind of ["xean.solve", "xean.solve.offline"])
+    const library = snapshot({
+      campaign: {
+        ...history,
+        task: { kind: "xean.solve.library", version: declarationVersion },
+      },
+    });
+    expect(library.notes).toEqual(after.snapshot!.notes);
+    expect(library.status.notes).toEqual(after.snapshot?.status.notes);
+    for (const kind of [
+      "xean.solve",
+      "xean.solve.offline",
+      "xean.solve.library",
+    ])
       expect(() =>
         snapshot({
           campaign: {

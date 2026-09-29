@@ -224,6 +224,13 @@ test("resume during the final pause commit runs newly queued input", async () =>
     expect(calls).toBe(2);
     expect(result.pendingSignals).toBe(0);
     expect(result.state).toBe("next");
+    await engine.input("queued");
+    // Give the Harness scheduler a turn; input alone must not restart dispatch.
+    await Bun.sleep(10);
+    expect(calls).toBe(2);
+    expect((await engine.inspect()).pendingSignals).toBe(1);
+    expect((await engine.run()).state).toBe("queued");
+    expect(calls).toBe(3);
   } finally {
     releaseCoordinator.resolve();
     releaseCommit.resolve();
