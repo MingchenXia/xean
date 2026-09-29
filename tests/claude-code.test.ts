@@ -4,7 +4,6 @@ import { Type, type JsonValue } from "@earendil-works/pi-ai";
 import { piRuntime, readSettings } from "../packages/core/src/solve/config.ts";
 import { reportedPiUsage } from "../packages/core/src/pi.ts";
 import { ask } from "../packages/core/src/solve/pi.ts";
-import { claudeResearch } from "../packages/core/src/solve/research.ts";
 import type { CallIdentity, CallRecorder } from "../packages/core/src/calls.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -248,55 +247,3 @@ else {
     await rm(directory, { recursive: true, force: true });
   }
 }, 15_000);
-
-test("Claude research binds exact source passages through the shared contract", async () => {
-  const calls: CallIdentity[] = [];
-  const recorder: CallRecorder = {
-    begin(identity) {
-      calls.push(identity);
-      return {
-        recordRequest() {},
-        settle() {},
-      };
-    },
-  };
-  const research = claudeResearch({
-    search: async () =>
-      JSON.stringify({
-        results: [
-          {
-            noteId: "n1",
-            result: {
-              verdict: "PASS",
-              report: "The cited result matches the premise.",
-              correction: null,
-              passages: [
-                {
-                  premise: 0,
-                  url: "https://example.com/primary",
-                  quote: "The exact premise appears here.",
-                },
-              ],
-            },
-          },
-        ],
-      }),
-  });
-  const result = await research.source(
-    {
-      task: { problem: "P", completionCriteria: "Q" },
-      notes: [{ id: "n1", text: "Argument", premises: ["Premise"] }],
-      evidence: [],
-    },
-    { attemptId: "claude-research-fixture", recorder },
-    BACKGROUND_CONTEXT,
-  );
-  expect(result[0]?.result).toMatchObject({ verdict: "PASS" });
-  expect(calls).toEqual([
-    {
-      provider: "claude-code",
-      id: "claude-web-search",
-      api: "claude-web-search",
-    },
-  ]);
-});

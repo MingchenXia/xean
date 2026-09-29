@@ -10,6 +10,7 @@ import { decode, declarationVersion, object, taskSchema } from "./contracts.ts";
 import type { PiRuntime } from "./pi.ts";
 import { createSolver } from "./solver.ts";
 import { codexResearch } from "./research.ts";
+import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
 
 export { declarationVersion } from "./contracts.ts";
 const common = {
@@ -72,8 +73,15 @@ export function campaignOptions(
 ): XeanOptions {
   const declaration = readDeclaration(value);
   const settings = declaration.settings;
-  const solver = createSolver(declaration.task, runtime, settings, (ready) =>
-    codexResearch(settings.research, ready.usagePrefix),
+  const solver = createSolver(
+    declaration.task,
+    runtime,
+    {
+      ...settings,
+      chatGptSingleShot:
+        settings.profiles.explorer?.provider === chatGptWebProviderId,
+    },
+    (ready) => codexResearch(settings.research, ready.usagePrefix),
   );
   const options: XeanOptions = {
     task: declaration as unknown as JsonValue,

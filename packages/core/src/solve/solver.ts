@@ -26,6 +26,7 @@ import {
 import { type PiRuntime } from "./pi.ts";
 import { codexResearch, type Research } from "./research.ts";
 import { guidance, validateCommand } from "./commands.ts";
+import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
 
 export function createSolver(
   taskValue: Task,
@@ -39,8 +40,10 @@ export function createSolver(
     maxExplorerResponses: maxExplorerReads + 4,
     literature: false,
     maxExplorerReads,
+    chatGptSingleShot: false,
     ...settings,
   };
+  const requestedExplorerResponses = settings.maxExplorerResponses;
   if (!Check(positiveIntegerSchema, options.maxExplorerResponses))
     throw new Error("maxExplorerResponses must be a positive integer");
   if (!Check(positiveIntegerSchema, options.maxExplorerReads))
@@ -49,6 +52,17 @@ export function createSolver(
   const load = () => {
     if (!implementation) {
       const ready = typeof runtime === "function" ? runtime() : runtime;
+      if (ready.profiles.explorer.model.provider === chatGptWebProviderId) {
+        if (
+          requestedExplorerResponses !== undefined &&
+          requestedExplorerResponses !== 1
+        )
+          throw new Error(
+            "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
+          );
+        options.maxExplorerResponses = 1;
+        options.chatGptSingleShot = true;
+      }
       implementation = createRoles(
         ready,
         typeof research === "function"
@@ -105,20 +119,30 @@ export function createSolver(
       const common = { task, notes: notes.map(noteInfo) };
       // Explorer workers may run alongside the single verification batch.
       const targets = verificationTargets(plan);
-      const dispatch: WorkRequest[] = plan.work
-        .filter((request) => request.kind !== "verifier")
-        .map((request, index): WorkRequest => ({
-          id: `w${signal.id}-${index + 1}`,
-          role: `xean.${request.kind}`,
-          input:
-            request.kind === "explorer"
-              ? ({
-                  task,
-                  notes,
-                  guidance: request.guidance,
-                } satisfies ExplorerInput)
-              : { ...common, query: request.query },
-        }));
+      const explorerUsed =
+        options.chatGptSingleShot === true &&
+        view.work.some((work) => work.role === "xean.explorer");
+      const dispatch: WorkRequest[] = [];
+      for (const request of plan.work) {
+        if (request.kind === "verifier") continue;
+        if (request.kind === "explorer") {
+          if (explorerUsed) continue;
+          dispatch.push({
+            id: `w${signal.id}-${dispatch.length + 1}`,
+            role: "xean.explorer",
+            input: {
+              task,
+              notes,
+              guidance: request.guidance,
+            } satisfies ExplorerInput,
+          });
+        } else
+          dispatch.push({
+            id: `w${signal.id}-${dispatch.length + 1}`,
+            role: "xean.literature",
+            input: { ...common, query: request.query },
+          });
+      }
       if (targets.length)
         dispatch.push({
           id: `w${signal.id}-${dispatch.length + 1}`,

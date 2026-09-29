@@ -8,6 +8,19 @@ correction APIs, CLI input files, and persisted solver inputs. Solver declaratio
 use version 9 and observer exports use `xean-observe/v2`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
+- Pin all Pi/Chord packages to upstream main commit `1ff5b6fddf69`, with a fresh
+  frozen model catalog and matching hashes from two clean builds. The changed
+  Pi SQLite schema requires campaign format 7 and fresh campaigns.
+- Store uses Pi's public commit subscriptions after document adoption, removing
+  its Storage proxy. Native Session poisoning determines whether failed
+  operations require reopening. The durable patch retains the low-level task
+  operations needed until Harness supplies admission, failure-signal settlement,
+  and shutdown accounting controls.
+- Status and observer exports share solver-campaign recognition, so closed-book
+  campaigns also report note counts.
+- Claude Code profiles now use the pinned local subscription transport, while
+  Anthropic API profiles keep separate credentials and usage accounting. The
+  Claude tool bridge and cancellation paths have deterministic coverage.
 - Explorer always starts with the task, all note IDs and summaries, and current
   feedback. Coordinator supplies only guidance. Explorer selects frozen detailed
   summaries or full notes through `read_notes`. `maxExplorerReads` defaults to four
@@ -16,9 +29,13 @@ campaigns and exports on their matching runtime. No migration is provided.
   Reading is disabled at its cap and on the final response, with tool definitions
   kept stable. The `explorer` mode setting and Explorer-input `support` selection
   are removed. Mathematical note dependencies remain unchanged.
-- ChatGPT Web derives its response schema from any tools supplied by Pi, maps
-  validated selections to native tool calls, and leaves execution and
-  continuation to Pi. Explorer can read notes and submit through this adapter.
+- ChatGPT Web is now an explicit Explorer-only, one-response profile. It cannot
+  be the default or a verifier profile, and built-in campaigns do not dispatch
+  another Explorer attempt after the first one. Xean cannot account for usage
+  outside the campaign or enforce an account-wide subscription quota.
+- ChatGPT Web uses the bridge's text-only Chat Completions endpoint with a
+  validated generic tool envelope. Browser retries are disabled and usage stays
+  unknown; no live Pro request is part of this qualification.
 - Explicit antecedents in conditional claims remain part of the claim.
   Correctness checks the implication, source checks its external results, and
   requirements decides whether it solves the original task.

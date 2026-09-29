@@ -277,8 +277,8 @@ task-granted assumptions and omits them from external premises. Source checks
 also receive the exact task, so any remaining task-granted premise can be
 established from that input.
 
-The optional `research` object configures Codex. Omission uses `gpt-6-astra`
-with `max` reasoning.
+The optional `research` object configures the backend. Omission selects Codex
+with `gpt-6-astra` and `max` reasoning.
 Codex starts only when a research function needs it. Literature remains an
 optional scheduling choice, disabled by default.
 Literature answers its supplied query and stops when the relevant evidence is
@@ -287,8 +287,9 @@ there is no useful new result. It records citations in ordinary note text withou
 a mandatory bibliographic schema or a Xean web-action cap. Citation typos alone do not fail
 otherwise checked mathematics.
 
-The Codex role calls `codex exec` through Execa with `web_search="live"`, a read-only
-sandbox, structured output, and a temporary working directory. Research disables
+When `provider` is `codex`, the role calls `codex exec` through Execa with
+`web_search="live"`, a read-only sandbox, structured output, and a temporary
+working directory. Research disables
 the native shell with `features.shell_tool=false`. The selected Codex runtime,
 model, and provider must expose native web search. Qualify the exact command and
 profile with a source check that opens a primary source. Successful startup alone
@@ -597,7 +598,8 @@ To use a local Claude subscription, select Opus 5.5:
 Use this profile for `explorer` to develop proofs, or for `correctness`,
 `requirements`, `statement`, `proof`, and `reconstruction` to select mathematical
 checks. It also works as `profiles.default`. Research and independent source
-review retain their separately configured Codex backend.
+review retain their separately configured Codex backend; provider profiles do not
+silently replace the retrieval and evidence boundary.
 
 Install and log in to Claude Code on the executing machine. `claude auth status`
 must report a first-party Claude subscription. The provider uses that login through
@@ -614,7 +616,34 @@ subscription billing. Claude subscription capacity is still consumed. Library
 callers can register `claudeCodeProvider` from `xean/pi` with
 `models.setProvider()`.
 
-To use the existing Explorer with ChatGPT Pro, select its browser provider:
+To use the Anthropic API instead of a Claude subscription, select the same model
+through Pi's `anthropic` provider and name the API-key environment variable:
+
+```json
+{
+  "provider": "anthropic",
+  "model": "claude-opus-5-5",
+  "reasoning": "max",
+  "apiKeyEnv": "ANTHROPIC_API_KEY"
+}
+```
+
+This uses Anthropic's Messages API and reports its API usage separately. It does
+not invoke Claude Code or use a claude.ai subscription. Conversely,
+`claude-code` profiles reject `baseUrl`, `apiKeyEnv`, and `transport`; they use
+the local first-party login described above. Keep the two profiles distinct when
+mixing providers by role.
+
+External research has a separate contract. The built-in source checker,
+literature role, and independent review use the Codex CLI. It preserves exact
+premises, quotations, URLs, and PASS/FAIL/INCONCLUSIVE evidence rules. Library
+callers may supply a `Research` implementation to `createSolver` when they need
+another backend; Claude subscription profiles do not silently replace this
+Codex-backed research boundary.
+
+ChatGPT Web is a scarce browser subscription and is an explicit, one-shot
+Explorer backend. It cannot be a default profile or a Coordinator/Verifier
+profile. Select it only under `profiles.explorer`, with a non-ChatGPT default:
 
 ```json
 {
@@ -630,25 +659,34 @@ schema from every tool declared by Pi, including each name, description, and
 argument schema. ChatGPT returns text and a list of selected calls. The adapter
 validates the whole response without coercion and emits native Pi tool calls.
 Pi executes the tools, applies limits, and supplies results on the next turn.
-This supports arbitrary caller tools, including Explorer's `read_notes` and
-`submit_result`, without role-specific behavior in the provider. An empty call
-list permits a final text answer. Images remain unsupported.
+The provider supports arbitrary caller tools without role-specific behavior in
+the adapter, but Xean's ChatGPT profile deliberately supplies only
+`submit_result`: the Explorer receives the summaries once and must return in a
+single response. This avoids spending another Pro allowance on a read or
+continuation. An empty call list permits a final text answer. Images remain
+unsupported.
 `toolChoice: "none"` requests ordinary text. Each request carries the complete
 transcript, including earlier results and validation feedback.
 
 Each outer tool round sends another browser request and can consume another
 ChatGPT Pro allowance. General tool support does not make these round trips
-quota-free. For scarce Pro usage, prepare the full context before one mathematical
-request instead of using this provider for an iterative Explorer tool loop.
+quota-free. Xean rejects a response budget other than one for this profile and
+does not dispatch another ChatGPT Explorer worker after the first attempt in a
+built-in campaign. The campaign journal makes that one-attempt rule survive a
+reopen. Xean cannot see other applications or campaigns using the same
+subscription, so it cannot enforce an account-wide daily or monthly quota;
+track that allowance outside Xean as well.
 
-The Responses bridge owns browser login and model selection. Its JSON-schema
-responses must preserve the native answer source. The tested codex-chatgpt-web
-build includes that extraction fix. `baseUrl` defaults to the address above on
-the executing machine. Set `apiKeyEnv` if the bridge requires a key. Shared
-gateway keys are not forwarded to this provider. Browser token counts remain
-estimates and recorded measured usage is null. Requests use SSE and max
-reasoning. Automatic replay is disabled because a disconnected request may
-already be running.
+The bridge's `/v1/chat/completions` endpoint owns browser login, prompt
+submission, waiting, and reply retrieval. It starts a fresh browser
+conversation for each request and returns a complete answer as one SSE
+message; `stream: true` is compatibility framing, not token streaming. Xean
+adds the tool schema and envelope to the prompt, removes native tool fields
+before dispatch, and validates the returned JSON before emitting Pi tool calls.
+The bridge's model picker controls the served model; the requested model name
+is retained as provenance and does not switch that picker. Browser token counts
+remain unavailable and recorded measured usage is null. Automatic replay is
+disabled because a disconnected request may already be running.
 
 The provider follows Explorer's no-search instructions but cannot enforce
 disabling ChatGPT-native retrieval. It is not qualified for enforced
