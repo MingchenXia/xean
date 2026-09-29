@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { realpath, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -145,8 +144,8 @@ if (import.meta.main) {
     limits: settings.limits,
   };
   const database = resolve(directory, "campaign.sqlite");
-  let storage = await openXeanStorage(database);
-  let engine = await Xean.open(storage, options);
+  const storage = await openXeanStorage(database);
+  const engine = await Xean.open(storage, options);
   let control: Awaited<ReturnType<typeof serveControl>> | undefined;
   let shutdown: Promise<unknown> | undefined;
   const interrupt = () => {
@@ -174,7 +173,7 @@ if (import.meta.main) {
   }, 30_000);
   const write = (name: string, value: unknown) =>
     Bun.write(resolve(directory, name), JSON.stringify(value, null, 2) + "\n");
-  const recordDigest = async (exportRecords = false) => {
+  const exportRecords = async () => {
     // The campaign is quiescent here. Pi pages newest first; retain only page
     // cursors so export can revisit them in chronological order.
     const page = (cursor?: Cursor) =>
@@ -185,35 +184,28 @@ if (import.meta.main) {
         BACKGROUND_CONTEXT,
       );
     const cursors: (Cursor | undefined)[] = [];
-    const hash = createHash("sha256");
     let cursor: Cursor | undefined;
     do {
-      if (exportRecords) cursors.push(cursor);
-      const records = await page(cursor);
-      for (const record of records.items)
-        hash.update(JSON.stringify(record) + "\n");
-      cursor = records.next;
+      cursors.push(cursor);
+      cursor = (await page(cursor)).next;
     } while (cursor);
-    if (exportRecords) {
-      const output = Bun.file(resolve(directory, "records.json")).writer();
-      try {
-        output.write("[");
-        let separator = "\n";
-        for (const cursor of cursors.reverse()) {
-          for (const record of (await page(cursor)).items.toReversed()) {
-            output.write(
-              separator + JSON.stringify(record, null, 2).replace(/^/gm, "  "),
-            );
-            separator = ",\n";
-          }
-          await output.flush();
+    const output = Bun.file(resolve(directory, "records.json")).writer();
+    try {
+      output.write("[");
+      let separator = "\n";
+      for (const cursor of cursors.reverse()) {
+        for (const record of (await page(cursor)).items.toReversed()) {
+          output.write(
+            separator + JSON.stringify(record, null, 2).replace(/^/gm, "  "),
+          );
+          separator = ",\n";
         }
-        output.write(separator === "\n" ? "]\n" : "\n]\n");
-      } finally {
-        await output.end();
+        await output.flush();
       }
+      output.write(separator === "\n" ? "]\n" : "\n]\n");
+    } finally {
+      await output.end();
     }
-    return hash.digest("hex");
   };
   try {
     control = await serveControl(await realpath(database), engine);
@@ -241,33 +233,7 @@ if (import.meta.main) {
         campaign,
         notes: project(campaign),
       });
-      const recordsHash = await recordDigest(true);
-      await engine.close();
-      storage = await openXeanStorage(database);
-      engine = await Xean.open(storage, {
-        ...options,
-        roles: options.roles.map((role) => ({
-          ...role,
-          run() {
-            throw new Error("Unexpected work on reopen");
-          },
-        })),
-        coordinator: {
-          ...options.coordinator,
-          run() {
-            throw new Error("Unexpected planning on reopen");
-          },
-        },
-      });
-      assert.deepEqual(await engine.run(), campaign);
-      assert.equal(await recordDigest(), recordsHash);
-      await write("verified.json", {
-        rounds: rounds(),
-        calls: campaign.providerCalls,
-        unchangedOnReopen: true,
-        runtime: Bun.version,
-        offline,
-      });
+      await exportRecords();
       console.log(
         JSON.stringify({
           status: campaign.status,

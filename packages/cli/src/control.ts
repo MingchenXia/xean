@@ -3,7 +3,12 @@ import { constants } from "node:fs";
 import { access, chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Campaign, Xean } from "xean";
-import { project, submitCommand, type SolverCommand } from "xean/solve";
+import {
+  isSolverCampaign,
+  project,
+  submitCommand,
+  type SolverCommand,
+} from "xean/solve";
 
 export type OwnerCommand =
   | SolverCommand
@@ -38,9 +43,7 @@ export function campaignReport(snapshot: {
   const { campaign } = snapshot;
   return {
     ...snapshot,
-    ...((campaign.task as { kind?: string } | null)?.kind === "xean.solve"
-      ? { notes: project(campaign) }
-      : {}),
+    ...(isSolverCampaign(campaign) ? { notes: project(campaign) } : {}),
   };
 }
 

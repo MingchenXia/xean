@@ -35,7 +35,7 @@ function detailView(run: Run) {
       <span class="badge">${state(run)}</span>
     </div>
     <p class="muted">
-      ${run.kind === "database" ? "Live database snapshot" : run.kind === "snapshot" ? "Owner snapshot" : run.kind === "export" ? "Exported result" : "Run heartbeat"},
+      ${run.kind === "database" ? "Live database snapshot" : run.kind === "snapshot" ? "Published snapshot" : run.kind === "export" ? "Exported result" : "Run heartbeat"},
       ${age(run)}
     </p>
     ${run.error ? html`<p class="error">${run.error}</p>` : ""}

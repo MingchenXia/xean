@@ -1,11 +1,18 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import { declarationVersion } from "xean/solve";
 import { snapshot } from "../packages/observe/src/snapshot.ts";
-import { observe } from "../packages/observe/src/publish.ts";
+import { observe, publish } from "../packages/observe/src/publish.ts";
 import { readRun, type Run } from "../packages/observe/src/read.ts";
 import { api, readSources } from "../packages/observe/src/server.ts";
 
@@ -107,6 +114,10 @@ test("the external observer reads coherent live snapshots without changing a loc
     });
     await stop();
     await stop();
+    await Promise.all(Array.from({ length: 8 }, () => publish(directory)));
+    expect(
+      (await readdir(directory)).filter((name) => name.endsWith(".tmp")),
+    ).toEqual([]);
     expect(await engine.inspectWithRecords()).toEqual(committed);
     const after = await readRun({ id: "fixture", directory }, directory);
     const published = await Bun.file(
@@ -154,6 +165,37 @@ test("the external observer reads coherent live snapshots without changing a loc
     expect(readback.error).toBeUndefined();
     expect(readback.kind).toBe("snapshot");
     expect(readback.snapshot).toEqual(published);
+    const observationFile = join(exported, "observation.json");
+    const resultFile = join(exported, "result.json");
+    await writeFile(
+      resultFile,
+      JSON.stringify({
+        ...committed,
+        campaign: { ...committed.campaign, status: "completed" },
+      }),
+    );
+    await utimes(observationFile, 1, 1);
+    await utimes(resultFile, 2, 2);
+    const exportedRun = () =>
+      readRun({ id: "exported", directory: exported }, directory);
+    expect(await exportedRun()).toMatchObject({
+      kind: "export",
+      snapshot: { status: { status: "completed" } },
+    });
+    // Only the selected artifact is parsed; errors never fall back to old evidence.
+    await writeFile(observationFile, "{invalid JSON");
+    await utimes(observationFile, 1, 1);
+    expect((await exportedRun()).error).toBeUndefined();
+    await utimes(observationFile, 3, 3);
+    expect((await exportedRun()).error).toBeString();
+    await writeFile(observationFile, JSON.stringify(published));
+    for (const modified of [2, 3]) {
+      await utimes(observationFile, modified, modified);
+      expect(await exportedRun()).toMatchObject({
+        kind: "snapshot",
+        snapshot: published,
+      });
+    }
     expect(after.snapshot?.status.calls.byModel[0]?.reportedUsage).toEqual({
       input_tokens: 0,
       output_tokens: 9,
@@ -277,6 +319,29 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
         directory,
       ),
     ).toThrow();
+    let reads = 0;
+    const handle = api(
+      [
+        {
+          id: "known",
+          get directory() {
+            reads++;
+            return directory;
+          },
+        },
+      ],
+      directory,
+    );
+    for (const [path, status] of [
+      ["/api/unknown", 404],
+      ["/api/runs/unknown", 404],
+      ["/api/runs/", 404],
+      ["/api/runs/%", 400],
+    ] as const)
+      expect(
+        (await handle(new Request(`http://127.0.0.1${path}`))).status,
+      ).toBe(status);
+    expect(reads).toBe(0);
   } finally {
     await rm(directory, { recursive: true });
   }

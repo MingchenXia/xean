@@ -6,6 +6,7 @@ import { Xean, inspectCampaign, openXeanStorage } from "xean";
 import {
   campaignOptions,
   declarationVersion,
+  isSolverCampaign,
   loadDeclaration,
   piRuntime,
   readCommand,
@@ -202,7 +203,7 @@ program.command("export <campaign>").action(async (target: string) => {
   const { campaign } = await inspectCampaign(campaignPath(target), false);
   const result = campaign.result as { argument?: string } | null;
   if (
-    (campaign.task as Declaration).kind !== "xean.solve" ||
+    !isSolverCampaign(campaign) ||
     campaign.status !== "completed" ||
     !result?.argument
   )

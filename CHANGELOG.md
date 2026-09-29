@@ -26,8 +26,12 @@ campaigns and exports on their matching runtime. No migration is provided.
   extensions. Xean retains campaign admission and atomic result/signal policy.
   Shutdown drains call accounting before closing storage. Unfinished admissions
   roll back on pause, and interrupted invocations cannot publish late results.
-- Status and observer exports share solver-campaign recognition, so closed-book
-  and direct-library campaigns also report their notes.
+- CLI inspection, accepted-argument export, status, and observer reports share
+  solver-campaign recognition for online, closed-book, and direct-library campaigns.
+- Bounded experiments export results and the journal without reopening the
+  campaign for qualification. Explicit smokes and tests verify unchanged reopening.
+- Remote observation selects the newer published snapshot or result export.
+  Concurrent publishers use separate temporary files for atomic replacement.
 - Claude Code profiles now use the pinned local subscription transport, while
   Anthropic API profiles keep separate credentials and usage accounting. The
   Claude tool bridge and cancellation paths have deterministic coverage.

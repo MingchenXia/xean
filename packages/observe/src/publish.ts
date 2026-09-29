@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { rename, writeFile } from "node:fs/promises";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { inspectCampaign } from "xean";
@@ -13,8 +13,16 @@ export async function publish(directory: string): Promise<void> {
     await inspectCampaign(join(directory, "campaign.sqlite"), usageRecord),
   );
   const file = join(directory, "observation.json");
-  await writeFile(`${file}.tmp`, JSON.stringify(value) + "\n", { mode: 0o600 });
-  await rename(`${file}.tmp`, file);
+  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(value) + "\n", {
+      mode: 0o600,
+      flag: "wx",
+    });
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 export function observe(

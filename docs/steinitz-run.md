@@ -26,9 +26,10 @@ and verification artifacts before continuing.
 
 Use this script for this experiment, including any restart. The general CLI
 does not enforce the experiment's round allowance. Retain the round files beside
-the database. The script writes the result, projected notes, journal, and an
-unchanged-reopen verification record. It uses the public solver and kernel APIs
-without introducing a kernel round limit.
+the database. The script writes the result, projected notes, and journal. Reopen
+verification belongs to the [test and smoke procedure](kernel-smoke.md).
+The runner uses the public solver and kernel APIs without introducing a kernel
+round limit.
 
 The committed `nomad/bounded-solve.nomad.hcl` takes `run_id` and `source_commit`
 and runs on jupiter using an existing immutable

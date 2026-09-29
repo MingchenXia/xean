@@ -29,6 +29,9 @@ closes its own read-only snapshot while the solver retains ownership. Deploy
 the watcher as a separate supervised process with access to the run directory.
 The solver and experiment runner neither launch nor join it. Without a watcher,
 remote artifact readers retain completed exports and process logs.
+Artifact readers choose the newer snapshot or result export by file modification
+time, preferring the snapshot on ties. A stopped publisher cannot hide a later
+completed result.
 
 The workspace binaries are `xean-observe` for the dashboard and
 `xean-observe-publish` for snapshots. The commands above retain the selected Bun

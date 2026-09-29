@@ -110,66 +110,101 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
   }
 });
 
-test("CLI drains large inspection and argument output through a slow pipe", async () => {
+test("CLI inspects solver campaign kinds, drains large output, and restricts execution declarations", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-output-"));
-  const database = join(directory, "campaign.sqlite");
+  const entry = resolve(import.meta.dir, "../packages/cli/src/index.ts");
+  const kinds = ["xean.solve", "xean.solve.offline", "xean.solve.library"];
   const argument = "For every integer n, 2n is even.\n".repeat(65_536);
   try {
     // Isolate the large SQLite fixture from native handles retained by earlier tests.
-    const initialized = Bun.spawnSync(
+    const initializing = Bun.spawn(
       [
         process.execPath,
         "--no-install",
         "--no-env-file",
         "--eval",
         `import { Xean, openXeanStorage } from "xean";
-const { database, argument, version } = await Bun.stdin.json();
-const engine = await Xean.open(await openXeanStorage(database), {
-  task: { kind: "xean.solve", version }, roles: [],
+import { join } from "node:path";
+const { directory, kinds, argument, version } = await Bun.stdin.json();
+for (const kind of kinds) {
+const engine = await Xean.open(await openXeanStorage(join(directory, kind + ".sqlite")), {
+  task: { kind, version,
+    task: { problem: "Even integers", completionCriteria: "Prove 2n is even" },
+    settings: { profiles: { default: { provider: "openai", model: "unavailable" } } },
+  }, roles: [],
   coordinator: { name: "output-fixture", run: () => ({ state: null, completion: { argument } }) },
   accept: () => true,
 });
-try { await engine.run(); } finally { await engine.close(); }`,
+try {
+  await engine.input({ kind: "submit", id: "fixture", candidate: false,
+    notes: [{ id: "n1", text: "2n is even.", summary: "Even", detailedSummary: "Even integer", support: [] }],
+  });
+  await engine.run();
+} finally { await engine.close(); }
+}`,
       ],
       {
         cwd: resolve(import.meta.dir, ".."),
         stdin: Buffer.from(
           JSON.stringify({
-            database,
+            directory,
+            kinds,
             argument,
             version: declarationVersion,
           }),
         ),
+        stdout: "ignore",
+        stderr: "pipe",
       },
     );
-    expect(initialized.stderr.toString()).toBe("");
-    expect(initialized.exitCode).toBe(0);
-    for (const command of ["inspect", "export"]) {
-      const child = Bun.spawn(
-        [
+    const [initialError, initialCode] = await Promise.all([
+      new Response(initializing.stderr).text(),
+      initializing.exited,
+    ]);
+    expect(initialError).toBe("");
+    expect(initialCode).toBe(0);
+    for (const kind of kinds) {
+      const database = join(directory, `${kind}.sqlite`);
+      if (kind !== "xean.solve") {
+        const rejected = Bun.spawnSync([
           process.execPath,
           "--no-install",
           "--no-env-file",
-          resolve(import.meta.dir, "../packages/cli/src/index.ts"),
-          command,
+          entry,
+          "run",
           database,
-        ],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      // Let the producer fill its pipe before the consumer starts reading.
-      await Bun.sleep(100);
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-      ]);
-      expect(stderr).toBe("");
-      expect(code).toBe(0);
-      expect(
-        command === "inspect"
-          ? JSON.parse(stdout).campaign.result.argument
-          : stdout,
-      ).toBe(command === "inspect" ? argument : argument + "\n");
+        ]);
+        expect(rejected.exitCode).not.toBe(0);
+        expect(rejected.stderr.toString()).toContain("Invalid value");
+      }
+      for (const command of ["inspect", "export"]) {
+        const child = Bun.spawn(
+          [
+            process.execPath,
+            "--no-install",
+            "--no-env-file",
+            entry,
+            command,
+            database,
+          ],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        // Let the producer fill its pipe before the consumer starts reading.
+        await Bun.sleep(100);
+        const [stdout, stderr, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        expect(stderr).toBe("");
+        expect(code).toBe(0);
+        if (command === "inspect") {
+          const report = JSON.parse(stdout);
+          expect(report.campaign.providerCalls).toBe(0);
+          expect(report.notes[0].text).toBe("2n is even.");
+          expect(report.campaign.result.argument).toBe(argument);
+        } else expect(stdout).toBe(argument + "\n");
+      }
     }
   } finally {
     await rm(directory, { recursive: true });

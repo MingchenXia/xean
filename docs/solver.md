@@ -360,7 +360,8 @@ Mathematical roles have no browsing, shell, or filesystem tools. Model inference
 still uses the configured endpoint.
 
 These campaigns use `xean.solve.offline` and require the same runner and flag
-when reopening. The ordinary CLI rejects that declaration. The
+when reopening for execution. CLI inspection and accepted-argument export
+support online, closed-book, and direct-library campaigns. The
 [experiment protocol](steinitz-run.md) keeps round allowances private to the
 runner and operators, with no remaining-round information in role inputs.
 The bounded runner opts into the CLI's live owner control. Guidance, note

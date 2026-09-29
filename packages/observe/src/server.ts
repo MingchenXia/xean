@@ -65,18 +65,23 @@ export function api(sources: Source[], fleet: string) {
       return new Response("Forbidden", { status: 403 });
     if (request.method !== "GET")
       return new Response("Read-only", { status: 405 });
+    let id: string | undefined;
+    if (url.pathname !== "/api/runs") {
+      if (!url.pathname.startsWith("/api/runs/"))
+        return new Response("Not found", { status: 404 });
+      try {
+        id = decodeURIComponent(url.pathname.slice("/api/runs/".length));
+      } catch {
+        return new Response("Invalid run ID", { status: 400 });
+      }
+      if (!sources.some((source) => source.id === id))
+        return new Response("Not found", { status: 404 });
+    }
     const runs = await read();
-    const id = url.pathname.startsWith("/api/runs/")
-      ? decodeURIComponent(url.pathname.slice("/api/runs/".length))
-      : undefined;
-    const value = id
-      ? runs.find((run) => run.id === id)
-      : url.pathname === "/api/runs"
-        ? runs
-        : undefined;
-    return value
-      ? Response.json(value, { headers: { "cache-control": "no-store" } })
-      : new Response("Not found", { status: 404 });
+    return Response.json(
+      id === undefined ? runs : runs.find((run) => run.id === id),
+      { headers: { "cache-control": "no-store" } },
+    );
   };
 }
 
