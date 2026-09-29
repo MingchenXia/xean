@@ -1,5 +1,25 @@
+diff --git a/dist/session/transaction.js b/dist/session/transaction.js
+index 4650764..21e502d 100644
+--- a/dist/session/transaction.js
++++ b/dist/session/transaction.js
+@@ -153,7 +153,7 @@ export class Transaction {
+                 id,
+                 conversationId,
+                 head: head === "self" ? id : head,
+-                byTaskId: this.#scope.taskId,
++                byTaskId: this.#scope.taskId ?? value.byTaskId,
+             }, TABLE_JSON_COPY_OPTIONS);
+             this.#writes.push({ type: "entry", value: record });
+             return record;
+@@ -715,4 +715,4 @@ function planDocument(document) {
+ function publishes(plan) {
+     return plan.retire || plan.change?.loaded === undefined || plan.change.prepared.ops.length > 0;
+ }
+-//# sourceMappingURL=transaction.js.map
+\ No newline at end of file
++//# sourceMappingURL=transaction.js.map
 diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
-index b1ea42f..d3299fb 100644
+index 8e21589..7a381de 100644
 --- a/dist/storage/sqlite/storage.d.ts
 +++ b/dist/storage/sqlite/storage.d.ts
 @@ -7,9 +7,10 @@ export declare class SqliteStorage implements Storage {
@@ -15,7 +35,7 @@ index b1ea42f..d3299fb 100644
      mintId<I extends Id<string>>(): Promise<I>;
      conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;
 diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
-index 6a77a85..ee6e651 100644
+index dbdf0e9..1105f38 100644
 --- a/dist/storage/sqlite/storage.js
 +++ b/dist/storage/sqlite/storage.js
 @@ -1,7 +1,7 @@
@@ -76,7 +96,7 @@ index 6a77a85..ee6e651 100644
          if (!Number.isSafeInteger(this.nextId))
              throw new Error("ID space is exhausted");
          return idFromNumber(this.nextId++);
-@@ -604,9 +612,11 @@ export class SqliteStorage {
+@@ -620,9 +628,11 @@ export class SqliteStorage {
              }
          }
      }
@@ -90,3 +110,37 @@ index 6a77a85..ee6e651 100644
  }
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 15a13e1..611b4d3 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -236,7 +236,7 @@ export type EntryRecord = {
+     readonly byTaskId?: TaskId;
+ };
+ /** Entry content supplied before the Session assigns identity and task attribution. */
+-export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "byTaskId" | "head"> & {
++export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "head"> & {
+     /** `"self"` starts active context at the newly assigned entry ID. */
+     readonly head?: EntryId | "self";
+ };
+@@ -619,9 +619,10 @@ export interface Tx {
+     appendEntry(conversationId: ConversationId, value: EntryDraft): Promise<EntryRecord>;
+     /** The token supplies `kind` and types `data`. */
+     appendEntry<D extends JsonValue>(token: Entry<D>, conversationId: ConversationId, value: TypedEntryDraft<NoInfer<D>>): Promise<TypedEntry<D>>;
+-    createTask<I, S extends {
+-        phase: string;
+-    }, R, H extends object>(task: Task<I, S, R, H>, input: I, options?: TaskOptions): Promise<TaskId<R>>;
++    /** Record creation for an external scheduler; execution remains caller-owned. */
++    createTask<I, S extends { phase: string }, R, H extends object>(task: { readonly definition: Pick<TaskDefinition<I, S, R, H>, 'name' | 'version' | 'initial'> }, input: I, options?: TaskOptions): Promise<TaskId<R>>;
++    /** Stage a complete task replacement using the native validation and retirement path. */
++    setTask(record: TaskRecord<JsonValue, JsonValue, JsonValue>): void;
+     /**
+      * Settle a queued or placed submission; only a placed input can be answered, and a settled submission stays
+      * unchanged. Resolved against this transaction's latest record of the submission, so it works after table writes.
+@@ -756,4 +757,4 @@ export interface Storage {
+     close(context: Context): Promise<void>;
+ }
+ export {};
+-//# sourceMappingURL=types.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=types.d.ts.map

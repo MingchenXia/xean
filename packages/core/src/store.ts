@@ -3,7 +3,6 @@ import {
   createSession,
   defineDoc,
   ROOT_CONVERSATION_ID,
-  StorageRejected,
   type Cursor,
   type DocumentId,
   type EntryId,
@@ -80,7 +79,7 @@ export interface Transaction {
   entries(project?: RecordProjection): Promise<EntryRecord[]>;
 }
 
-/** Pi owns transactions; Xean keeps its scheduling cache and wakeup metadata. */
+/** Pi publishes adopted commits; Xean retains the scheduling projection. */
 export class Store {
   private readonly session: Session;
   failure: Error | undefined;
@@ -90,30 +89,13 @@ export class Store {
     readonly storage: Storage,
     private readonly tasks: Map<TaskId, PiTask>,
   ) {
-    const commit: Storage["commit"] = async (writes, context) => {
-      try {
-        const revision = await storage.commit(writes, context);
-        // The Session still holds its mutation line until document adoption.
-        for (const write of writes)
-          if (write.type === "task")
-            this.tasks.set(write.value.id, resident(write.value as PiTask));
-        return (this.revision = revision);
-      } catch (error) {
-        if (!(error instanceof StorageRejected))
-          this.failure =
-            error instanceof Error ? error : new Error(String(error));
-        throw error;
-      }
-    };
-    this.session = createSession(
-      new Proxy(storage, {
-        get(target, key) {
-          if (key === "commit") return commit;
-          const value = Reflect.get(target, key, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      }),
-    );
+    this.session = createSession(storage);
+    this.session.subscribeCommits(({ seq, changes }) => {
+      for (const change of changes)
+        if (change.type === "task")
+          this.tasks.set(change.value.id, resident(change.value as PiTask));
+      this.revision = seq;
+    });
   }
 
   static async open(storage: Storage, initial?: CampaignState): Promise<Store> {
@@ -161,10 +143,8 @@ export class Store {
 
   /** Kernel supplies normalized JSON; results must detach draft references. */
   mutate<T>(action: (tx: Transaction) => T | Promise<T>): Promise<T> {
-    let revision: Seq | 0 | undefined;
     return this.session
       .commit(async (tx) => {
-        revision = this.revision;
         return action({
           state: await tx.doc(campaign),
           tasks: [...this.tasks.values()],
@@ -198,17 +178,23 @@ export class Store {
           entries: (project) => this.scanEntries(tx, project),
         });
       }, context)
-      .catch((error) => {
-        // A failed native adoption is as uncertain as a failed Storage reply.
-        if (revision !== undefined && this.revision !== revision)
-          this.failure =
-            error instanceof Error ? error : new Error(String(error));
+      .catch(async (error) => {
+        // Pi distinguishes rejected callbacks/batches from poisoned sessions.
+        // A read-only commit checks that state without touching Storage.
+        try {
+          await this.session.commit(() => {}, context);
+        } catch (failure) {
+          const cause =
+            failure instanceof Error ? (failure.cause ?? failure) : failure;
+          this.failure ??=
+            cause instanceof Error ? cause : new Error(String(cause));
+        }
         throw error;
       });
   }
 
   entries(): Promise<EntryRecord[]> {
-    return this.session.commit((tx) => this.scanEntries(tx), context);
+    return this.mutate((tx) => tx.entries());
   }
 
   private async scanEntries(

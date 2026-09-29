@@ -307,8 +307,10 @@ Store uses Pi's native Session to serialize mutations, acquire the campaign
 document, prepare changes, commit record/document writes, and adopt them after
 storage succeeds. Drafts close at native callback settlement, before storage
 commits. Callback failures roll back private changes. Uncertain storage or
-post-storage adoption failures stop the open instance. Store retains its task
-cache and observes storage commits for wakeup revisions and fatal failures.
+post-storage adoption failures stop the open instance. Store updates its task
+projection and wakeup revision through Pi's public post-adoption commit
+subscription. After a failed operation, an empty Session commit detects native
+poisoning without a Storage write.
 Pi's `StorageRejected` guarantees that a rejected batch made no durable change.
 That error reaches the caller after rollback and leaves the instance usable;
 it does not automatically retry the operation. Other commit errors remain fatal.
@@ -318,11 +320,14 @@ The internal `PiTask` type represents those task records. Their native
 `checkpoint` field stores `AttemptState` for whole-attempt recovery. Private
 execution checkpoints remain deferred.
 
-Xean's campaign state and campaign document use format version 6. Earlier formats
+Xean's campaign state and campaign document use format version 7. Earlier formats
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 9.
+version 1. Solver declarations independently use version 9. The durable patch
+exposes native task-record mutation for Xean's external scheduler and retains
+entry attribution. The [alignment notes](pi-alignment.md#durable-integration)
+describe the remaining Harness gaps.
 
 Pi configures WAL journaling; Xean selects `synchronous = FULL`. Readers hold
 consistent SQLite snapshots while the owner continues committing work. A separate

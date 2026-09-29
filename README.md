@@ -24,7 +24,8 @@ Matching Pi packages are pinned to one tested main commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
 build, frozen model data, and hashes. Numbered releases are the stable
 distribution. The `main` branch targets 3.0.0 and requires new campaigns for
-its three-view note format. Version 2.0.0 remains the current stable release.
+its three-view note format and updated Pi storage schema. Version 2.0.0 remains
+the current stable release.
 
 ## Install and run
 

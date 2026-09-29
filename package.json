@@ -16,11 +16,11 @@
     "packages/*"
   ],
   "catalog": {
-    "@earendil-works/chord": "file:vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-chord-0.87.1.tgz",
-    "@earendil-works/pi-telemetry": "file:vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-telemetry-0.87.1.tgz",
-    "@earendil-works/pi-ai": "file:vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-ai-0.87.1.tgz",
-    "@earendil-works/pi-durable": "file:vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-durable-0.87.1.tgz",
-    "@earendil-works/pi-agent-core": "file:vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-agent-core-0.87.1.tgz",
+    "@earendil-works/chord": "file:vendor/pi/1ff5b6fddf69c322c6937781a720f97e87c93774/earendil-works-chord-0.87.1.tgz",
+    "@earendil-works/pi-telemetry": "file:vendor/pi/1ff5b6fddf69c322c6937781a720f97e87c93774/earendil-works-pi-telemetry-0.87.1.tgz",
+    "@earendil-works/pi-ai": "file:vendor/pi/1ff5b6fddf69c322c6937781a720f97e87c93774/earendil-works-pi-ai-0.87.1.tgz",
+    "@earendil-works/pi-durable": "file:vendor/pi/1ff5b6fddf69c322c6937781a720f97e87c93774/earendil-works-pi-durable-0.87.1.tgz",
+    "@earendil-works/pi-agent-core": "file:vendor/pi/1ff5b6fddf69c322c6937781a720f97e87c93774/earendil-works-pi-agent-core-0.87.1.tgz",
     "execa": "10.0.1"
   },
   "dependencies": {
@@ -39,8 +39,8 @@
     "typescript": "7.0.2"
   },
   "patchedDependencies": {
-    "@earendil-works/pi-ai@vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-ai-0.87.1.tgz": "patches/@earendil-works%2Fpi-ai@0.87.1.patch",
-    "@earendil-works/pi-durable@vendor/pi/2b0a123de98318c2ff8069661721ce0c3794c34e/earendil-works-pi-durable-0.87.1.tgz": "patches/@earendil-works%2Fpi-durable@0.87.1.patch",
+    "@earendil-works/pi-ai@vendor/pi/1ff5b6fddf69c322c6937781a720f97e87c93774/earendil-works-pi-ai-0.87.1.tgz": "patches/@earendil-works%2Fpi-ai@0.87.1.patch",
+    "@earendil-works/pi-durable@vendor/pi/1ff5b6fddf69c322c6937781a720f97e87c93774/earendil-works-pi-durable-0.87.1.tgz": "patches/@earendil-works%2Fpi-durable@0.87.1.patch",
     "pi-claude-code-provider@0.5.0": "patches/pi-claude-code-provider@0.5.0.patch"
   },
   "overrides": {

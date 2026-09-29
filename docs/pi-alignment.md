@@ -9,16 +9,18 @@ prevent further delegation.
 ## Sources and availability
 
 All five Pi/Chord packages are pinned to
-[`2b0a123de983`](https://github.com/earendil-works/pi/tree/2b0a123de98318c2ff8069661721ce0c3794c34e).
+[`1ff5b6fddf69`](https://github.com/earendil-works/pi/tree/1ff5b6fddf69c322c6937781a720f97e87c93774),
+the upstream main revision checked on 2026-09-29.
 Their upstream manifests say `0.87.1`. The
 [artifact record](../vendor/pi/provenance.json) identifies the source, frozen
 model catalog, reproducible builds, and retained patches.
 
 The [public durable types][types] and [Session implementation][session] supply
-transactions, documents, records, typed IDs, snapshots, and conversation forks.
-The [Pico5 specification][spec] describes a larger task runtime and Harness
-that remain unimplemented. The existing `pi-agent-core.AgentHarness` is a
-different API. Proposed interfaces become adoption opportunities when implemented.
+transactions, documents, records, typed IDs, snapshots, conversation forks, and
+public commit subscriptions. Pi now implements a [durable task scheduler][scheduler],
+Harness, document watches, and the first durable chat generation. Tool turns
+and live run controls remain later milestones in the [Pico5 specification][spec].
+The existing `pi-agent-core.AgentHarness` is a different API.
 
 ## API ownership
 
@@ -33,15 +35,17 @@ different API. Proposed interfaces become adoption opportunities when implemente
 | Record identities          | Native `TaskId`, `EntryId`, `DocumentId`, and `Seq` identify tasks, entries, documents, and commits. Task creation returns the native ID.                                |
 | Storage                    | Pi's Node SQLite adapter supplies WAL, statements, transactions, and records on locked Bun. Xean adds campaign ownership and read snapshots.                             |
 | Cancellation and telemetry | Chord `Context` and `withCancel` carry cancellation. Pi's telemetry context carries attempt spans. Xean joins admitted work before closing.                              |
-| Scheduling and publication | Xean admits workers, serializes Coordinator decisions, enforces limits, and publishes each whole result with its signal. Pi's durable executor is unavailable.           |
+| Scheduling and publication | Xean admits workers, serializes Coordinator decisions, enforces limits, and publishes each whole result with its signal. Native Harness lacks the controls listed below. |
 | Mathematical state         | Xean owns dependency closure, verification stages, corrections, evidence binding, and exact acceptance. Notes derive from immutable results and input receipts.          |
 | CLI and observation        | Separate packages use public library APIs. Read-only inspection uses Pi scans. Live mutations reach the active owner through a local socket.                             |
 
 A kernel role needs only its name and `run(input, execution, context)`. Tool
 descriptions belong to Pi's tools. Solver and standalone execution call the same
-functions, with lazy runtime construction. Research invokes Codex through Execa,
-whose argv, stdin, process cancellation, and separate-output contract remains
-necessary. Pi's shell surface does not supply that contract.
+functions, with lazy runtime construction. Built-in research invokes Codex
+through Execa. Codex's argv, stdin, process cancellation, and separate-output
+contract remain necessary for that path; Pi's shell surface does not supply
+that contract. Library callers can provide another `Research` implementation
+explicitly.
 
 ## Durable integration
 
@@ -51,14 +55,36 @@ membership and ownership. Xean detaches values at external boundaries because
 native records and drafts can be Session-owned. Coordinator copies its callable
 input once and derives its prompt and note reader from that frozen copy.
 
-Store retains a task cache and observes Storage commits for wakeup revisions and
-fatal failures. Public Session exposes neither commit subscriptions nor health
-state. Its internal listener is not a supported integration point. Removing the
-cache today would require repeated full task scans or another persisted index.
-Completed Coordinator payloads stay durable but leave the resident cache.
+Store uses public `Session.subscribeCommits()` to update its task projection and
+wakeup revision after document adoption. The Storage proxy is removed. Pi owns
+commit observation and poisoning. After a rejected operation, an empty Session
+commit checks whether the instance remains usable without a Storage write.
+The task projection avoids repeated full scans. Completed Coordinator payloads
+stay durable but leave the resident cache.
 `StorageRejected` guarantees a failed batch made no durable change and leaves
 the instance usable. Unknown commit outcomes and post-storage adoption failures
 stop the instance.
+
+The durable patch exposes the existing native task-record replacement method
+through `Tx`, permits record creation without executable phase handlers, and
+preserves caller-supplied entry attribution outside a native task invocation.
+Native validation, transaction assembly, retirement, and publication still own
+these operations. This extension supports Xean's external scheduler. Remove it
+when Harness can own the following contracts:
+
+- Admission must respect concurrency, sequential Coordinator invocations,
+  persistent pause, and call-cap draining. Harness currently reserves every
+  eligible task and exposes `resume()` without a public pause or admission hook.
+- Runtime-written `faulted` and `orphaned` outcomes must atomically publish
+  Xean's failure signal. Harness has internal settlement for its own generation
+  task, but no public domain settlement hook.
+- Close must join admitted call accounting before sealing storage writes.
+  Harness seals Session admission before joining invocations, so late accounting
+  cannot use the same Session during shutdown.
+
+Moving scheduling now would require additional admission and settlement
+machinery around Harness. Xean retains whole-worker recovery while these native
+controls are incomplete.
 
 The separate owner lock protects Pi's ID allocator and Xean's scheduler while
 allowing independent readers. Xean selects FULL synchronization. Read-only
@@ -126,24 +152,28 @@ the public API. Codex Responses currently uses local read enforcement without
 these payload additions. Pi exposes neither a provider-neutral tool allowlist
 nor per-message cache boundaries; native equivalents would remove these hooks.
 
-ChatGPT Web uses native `createProvider`, `lazyStream`, Responses transport, and
-transcript conversion. Pi owns asynchronous setup, event delivery, and stream
-completion. The adapter selects the unique final answer and validates its typed
-JSON envelope against the current Pi tool names and argument schemas. It emits
-native tool calls and optional text, with Pi owning execution and continuation.
-An empty call list permits final text. It retains response metadata on failure and marks browser
-usage unmeasured. Pi's setup-error helper has no partial-response or cancellation
-metadata, so response validation and cancellation still need the adapter's
-terminal event. The custom API identity excludes it from OpenAI reasoning
-replay. Both the underlying transport and the solver disable automatic request
-retries for this provider. Pi's retry policy is provider-agnostic and has no
-provider replay-safety flag, so the solver selects this exception explicitly.
-The adapter contains no role-specific tool names. Browser tool calls are
-structured proposals executed locally by Pi, including submission. This general
-translation has transport-fixture coverage for multiple tools, multiple calls,
-validation, result feedback, and cancellation. The prior single-output adapter
-was live-qualified on ChatGPT Pro. The generalized envelope still needs a live
-browser qualification.
+Role calls declare their complete tool catalog in the initial system message as
+well as retaining it in the agent context. This keeps the provider request's
+top-level `tools` array present when a structured submission is required,
+including after Pi retries a rejected submission; a later-only declaration can
+leave Codex with `tool_choice: required` but no tools and is rejected by the
+provider.
+
+ChatGPT Web uses native `createProvider`, `lazyStream`, the OpenAI-compatible
+Chat Completions transport, and transcript conversion. Pi owns asynchronous
+setup, event delivery, and stream completion. The bridge returns text only, so
+the adapter places a generic typed JSON envelope in the prompt, removes native
+tool fields before dispatch, validates the envelope against the current Pi tool
+names and argument schemas, and emits native tool calls and optional text. Pi
+owns execution and continuation. An empty call list permits final text. It
+retains response metadata on failure and marks browser usage unmeasured. The
+custom API identity excludes it from OpenAI reasoning replay. Both the
+underlying transport and the solver disable automatic request retries for this
+provider because an interrupted browser request may already have been
+submitted. The adapter contains no role-specific tool names. Browser tool calls
+are structured proposals executed locally by Pi, including submission. The
+transport fixtures cover multiple tools, multiple calls, validation, result
+feedback, and cancellation; they do not constitute live Pro qualification.
 
 Claude subscription transport uses `pi-claude-code-provider` pinned to `0.5.0`
 ([source](https://github.com/chem/pi-claude-code-provider/tree/a87b98539f57945b8a6df8c26db4cdcf3ed38a7a)).
@@ -163,10 +193,12 @@ Completed private submissions survive Pi's retries within a live invocation.
 Durable resumption also needs the validated tool outcome, role state, response
 allowance, frozen input and model identity, and original call accounting.
 `runAgentLoopContinue` accepts restored context but supplies none of that
-persistence. Native Session can store task checkpoints atomically. Its durable
-task executor and tool/generation settlement remain unimplemented. AgentHarness
-and experimental Pico3 provide resumption through different session and storage
-contracts. Adopting them requires a separate integration.
+persistence. Native Session can store task checkpoints atomically. Harness now
+executes checkpoint phases and persists generation attempts, retry delays, and
+partial-response presentation. Tool execution and validated submission recovery
+remain outside that implementation. Its scheduling and shutdown gaps above also
+prevent adopting it for Xean's private work. AgentHarness and experimental Pico3
+use different session and storage contracts.
 
 The archived Explorer `w110-1` retained its completed `n1` and `n2` submissions
 in both failed continuations, then terminated without publication. Provider
@@ -186,13 +218,12 @@ before its complete result and completion signal become shared state.
 
 ## Next adoption opportunities
 
-- **Durable execution:** adopt Pi's task runtime when execution, recovery, and
-  terminal settlement are implemented. Preserve atomic whole-worker publication
-  and durable failure delivery. Pause and cancellation APIs may change to fit
-  native lifecycle semantics.
-- **Session observation:** remove Store's observer and cache adapter when public
-  APIs supply ordered committed records and fatal-state notification. A
-  coalescing view alone is insufficient for durable delivery.
+- **Durable execution:** adopt Harness when public admission, domain terminal
+  settlement, and shutdown accounting satisfy the contracts above. Preserve
+  atomic whole-worker publication and durable failure delivery.
+- **Session health:** replace the empty-commit check when Session exposes fatal
+  state directly. Public commit observation is already adopted. Document watches
+  alone do not replace the scheduling projection or durable signals.
 - **Accounting and patches:** adopt native awaited admission and settlement
   when late accounting survives cancellation. Remove the read-only opener and
   provider patches as equivalent upstream guarantees become available.
@@ -206,6 +237,7 @@ Private-progress recovery, hot extension registries, alternate storage, and a
 second task framework remain deferred. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/durable/src/session/session.ts
-[spec]: https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/durable/docs/pico-v5.md
+[types]: https://github.com/earendil-works/pi/blob/1ff5b6fddf69c322c6937781a720f97e87c93774/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/1ff5b6fddf69c322c6937781a720f97e87c93774/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/1ff5b6fddf69c322c6937781a720f97e87c93774/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/1ff5b6fddf69c322c6937781a720f97e87c93774/packages/durable/docs/pico-v5.md

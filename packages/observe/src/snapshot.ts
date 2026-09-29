@@ -1,7 +1,7 @@
 import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Campaign, Xean } from "xean";
-import { project, type Task } from "xean/solve";
+import { isSolverCampaign, project, type Task } from "xean/solve";
 import { statusReport, usageRecord } from "xean-cli/report";
 
 export function snapshot(
@@ -10,9 +10,7 @@ export function snapshot(
 ) {
   const { campaign, records } = value;
   const declaration = campaign.task as { kind?: string; task?: Task } | null;
-  const notes = declaration?.kind?.startsWith("xean.solve")
-    ? project(campaign)
-    : [];
+  const notes = isSolverCampaign(campaign) ? project(campaign) : [];
   return {
     schema: "xean-observe/v2" as const,
     observedAt,

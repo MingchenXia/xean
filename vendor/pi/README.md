@@ -1,7 +1,7 @@
 # Pi artifacts
 
 Xean consumes the five packages listed in [provenance.json](provenance.json)
-from Pi commit `2b0a123de98318c2ff8069661721ce0c3794c34e`.
+from Pi commit `1ff5b6fddf69c322c6937781a720f97e87c93774`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
 Pi's internal dependencies. Their upstream package version remains `0.87.1`.
@@ -9,7 +9,7 @@ The commit and artifact hashes identify this build.
 
 Normal installation uses Xean's existing locked Bun command, documented in the
 [root README](../../README.md). Bun installs the artifacts selected by the
-lockfile and applies the retained Pi AI patch and the Pi durable read-only patch.
+lockfile and applies the retained Pi AI and durable patches.
 The install receipt also fingerprints
 the local tarball bytes, workspace manifests, lockfile, and patch bytes.
 
@@ -24,8 +24,9 @@ The Node/npm versions used for these artifacts are recorded in the provenance.
 
 Pi's model values are a second build input. They were hydrated once with the
 upstream `npm run hydrate:model-data` command and are frozen in the AI tarball
-under `package/dist/providers/data/`. This upgrade retains the previous frozen
-model snapshot. To rebuild, extract that directory,
+under `package/dist/providers/data/`. This upgrade refreshes the snapshot because
+the new provider factories require classifier catalogs absent from the previous
+data. To rebuild, extract that directory,
 including `.manifest.json`, into the checkout's `packages/ai/src/providers/data/`.
 Check the manifest SHA-256 against the provenance. Rehydrating queries live
 catalogs and creates a new snapshot.
@@ -79,4 +80,10 @@ The Pi durable patch adds `SqliteStorage.open(db, {readOnly: true})`. It checks
 the existing schema instead of running migrations, and rejects `commit` and
 `mintId`. All record decoding, document reconstruction, and scans remain native.
 Xean supplies the read-only SQLite connection and its snapshot transaction.
-Remove this patch when upstream supplies an equivalent read-only opener.
+It also exposes native `Tx.setTask()` and record-only task creation to Xean's
+external scheduler, and preserves explicit entry `byTaskId` outside a Harness
+invocation. These use the existing native validation and transaction paths.
+Remove each extension when upstream supplies the corresponding guarantee.
+The [alignment notes](../../docs/pi-alignment.md#durable-integration) record the
+Harness admission, terminal settlement, and shutdown gaps that require external
+scheduling.

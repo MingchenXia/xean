@@ -31,15 +31,35 @@ test("Store snapshots entries and keeps rejected commits separate from uncertain
   const persisted = async () =>
     (await storage.document(address!.id, "current", context))!.value.state;
   try {
-    await store.mutate(async (tx) => {
+    const taskId = await store.mutate(async (tx) => {
+      const taskId = await tx.newTask("xean.worker", {
+        id: "committed",
+        role: "fixture",
+        input: null,
+      });
       const data = { text: "original" };
-      const entry = tx.entry("snapshot", data);
+      const entry = tx.entry("snapshot", data, taskId);
       data.text = "changed while minting ID";
       await entry;
+      return taskId;
     });
-    expect((await store.entries())[0]?.data).toEqual({ text: "original" });
+    expect((await store.entries())[0]).toMatchObject({
+      byTaskId: taskId,
+      data: { text: "original" },
+    });
+    expect(await store.mutate((tx) => tx.tasks.map(({ id }) => id))).toEqual([
+      taskId,
+    ]);
 
     const revision = store.revision;
+    await expect(
+      store.mutate((tx) => {
+        tx.state.state = { count: 99 };
+        throw new Error("callback failed");
+      }),
+    ).rejects.toThrow("callback failed");
+    expect(store.failure).toBeUndefined();
+    expect(store.revision).toBe(revision);
     for (const failure of [
       new StorageRejected("nothing committed"),
       new Error("commit outcome is unknown"),
@@ -65,8 +85,10 @@ test("Store snapshots entries and keeps rejected commits separate from uncertain
       expect(store.revision).toBe(revision);
       expect(await persisted()).toEqual({ count: 1 });
       expect(
-        (await storage.scanTasks({}, 10, undefined, context)).items,
-      ).toEqual([]);
+        (await storage.scanTasks({}, 10, undefined, context)).items.map(
+          ({ id }) => id,
+        ),
+      ).toEqual([taskId]);
       if (failure instanceof StorageRejected) {
         expect(store.failure).toBeUndefined();
         expect(
