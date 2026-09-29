@@ -160,24 +160,29 @@ the public API. Codex Responses currently uses local read enforcement without
 these payload additions. Pi exposes neither a provider-neutral tool allowlist
 nor per-message cache boundaries; native equivalents would remove these hooks.
 
-ChatGPT Web uses native `createProvider`, `lazyStream`, Responses transport, and
-transcript conversion. Pi owns asynchronous setup, event delivery, and stream
-completion. The adapter selects the unique final answer and validates its typed
-JSON envelope against the current Pi tool names and argument schemas. It emits
-native tool calls and optional text, with Pi owning execution and continuation.
-An empty call list permits final text. It retains response metadata on failure and marks browser
-usage unmeasured. Pi's setup-error helper has no partial-response or cancellation
-metadata, so response validation and cancellation still need the adapter's
-terminal event. The custom API identity excludes it from OpenAI reasoning
-replay. Both the underlying transport and the solver disable automatic request
-retries for this provider. Pi's retry policy is provider-agnostic and has no
-provider replay-safety flag, so the solver selects this exception explicitly.
-The adapter contains no role-specific tool names. Browser tool calls are
-structured proposals executed locally by Pi, including submission. This general
-translation has transport-fixture coverage for multiple tools, multiple calls,
-validation, result feedback, and cancellation. The prior single-output adapter
-was live-qualified on ChatGPT Pro. The generalized envelope still needs a live
-browser qualification.
+Role calls declare their complete tool catalog in the initial system message as
+well as retaining it in the agent context. This keeps the provider request's
+top-level `tools` array present when a structured submission is required,
+including after Pi retries a rejected submission; a later-only declaration can
+leave Codex with `tool_choice: required` but no tools and is rejected by the
+provider.
+
+ChatGPT Web uses native `createProvider`, `lazyStream`, the OpenAI-compatible
+Chat Completions transport, and transcript conversion. Pi owns asynchronous
+setup, event delivery, and stream completion. The bridge returns text only, so
+the adapter places a generic typed JSON envelope in the prompt, removes native
+tool fields before dispatch, validates the envelope against the current Pi tool
+names and argument schemas, and emits native tool calls and optional text. Pi
+owns execution and continuation. An empty call list permits final text. It
+retains response metadata on failure and marks browser usage unmeasured. The
+custom API identity excludes it from OpenAI reasoning replay. Both the
+underlying transport and the solver disable automatic request retries for this
+provider because an interrupted browser request may already have been
+submitted. The solver also rejects recovered browser work before dispatch,
+using the kernel's persisted attempt ordinal. The adapter contains no role-specific tool names. Browser tool calls
+are structured proposals executed locally by Pi, including submission. The
+transport fixtures cover multiple tools, multiple calls, validation, result
+feedback, and cancellation; they do not constitute live Pro qualification.
 
 Claude subscription transport uses `pi-claude-code-provider` pinned to `0.5.0`
 ([source](https://github.com/chem/pi-claude-code-provider/tree/a87b98539f57945b8a6df8c26db4cdcf3ed38a7a)).

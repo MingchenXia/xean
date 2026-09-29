@@ -349,6 +349,7 @@ test("source batches preserve note identity and distinct evidence in one Codex c
         { task, notes: [notes[0]!, { ...notes[1]!, id: "a" }] },
         {
           attemptId: "duplicates",
+          attempt: 1,
           recorder: {
             begin() {
               throw new Error("Must not call");
@@ -364,6 +365,7 @@ test("source batches preserve note identity and distinct evidence in one Codex c
       { task, notes },
       {
         attemptId: "batch",
+        attempt: 1,
         recorder: {
           begin() {
             admitted++;

@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, Type } from "@earendil-works/pi-ai";
-import { Xean } from "../packages/core/src/index.ts";
+import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import {
   chatGptWebProvider,
   reportedPiUsage,
@@ -12,6 +15,7 @@ import {
   campaignOptions,
   declarationVersion,
 } from "../packages/core/src/solve/campaign.ts";
+import { createSolver } from "../packages/core/src/solve/solver.ts";
 import { project } from "../packages/core/src/solve/notes.ts";
 import { ask } from "../packages/core/src/solve/pi.ts";
 
@@ -19,30 +23,80 @@ const selection = (name: string, args: unknown) =>
   JSON.stringify({ text: "", calls: [{ name, arguments: args }] });
 
 function response(text: string) {
-  const item = (phase: string, text: string) => ({
-    type: "message",
-    role: "assistant",
-    phase,
-    content: [{ type: "output_text", text, annotations: [] }],
-  });
+  const id = "chatcmpl-response-fixture";
   return new Response(
-    `data: ${JSON.stringify({
-      type: "response.completed",
-      response: {
-        id: "response-fixture",
-        status: "completed",
-        output: [
-          item("commentary", "Local tools unavailable"),
-          item("final_answer", text),
+    [
+      `data: ${JSON.stringify({
+        id,
+        object: "chat.completion.chunk",
+        model: "chatgpt-web",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: text },
+            finish_reason: null,
+          },
         ],
-        usage: { input_tokens: 50, output_tokens: 25, total_tokens: 75 },
-      },
-    })}\n\n`,
+      })}`,
+      `data: ${JSON.stringify({
+        id,
+        object: "chat.completion.chunk",
+        model: "chatgpt-web",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      })}`,
+      "data: [DONE]",
+    ].join("\n\n") + "\n\n",
     { headers: { "content-type": "text/event-stream" } },
   );
 }
 
-test("browser provider runs the ordinary Explorer with private continuation and dependency repair", async () => {
+test("ChatGPT Web is explicit Explorer-only and one-shot", () => {
+  expect(() =>
+    readSettings({
+      profiles: {
+        default: {
+          provider: "codex-chatgpt-web",
+          model: "chatgpt-web/gpt-6-pro",
+        },
+      },
+    }),
+  ).toThrow("profiles.explorer");
+  expect(() =>
+    readSettings({
+      profiles: {
+        default: { provider: "openai", model: "gpt-6-astra" },
+        correctness: {
+          provider: "codex-chatgpt-web",
+          model: "chatgpt-web/gpt-6-pro",
+        },
+      },
+    }),
+  ).toThrow("profiles.correctness");
+  expect(() =>
+    readSettings({
+      profiles: {
+        default: { provider: "openai", model: "gpt-6-astra" },
+        explorer: {
+          provider: "codex-chatgpt-web",
+          model: "chatgpt-web/gpt-6-pro",
+        },
+      },
+      maxExplorerResponses: 2,
+    }),
+  ).toThrow("maxExplorerResponses=1");
+  const safe = readSettings({
+    profiles: {
+      default: { provider: "openai", model: "gpt-6-astra" },
+      explorer: {
+        provider: "codex-chatgpt-web",
+        model: "chatgpt-web/gpt-6-pro",
+      },
+    },
+  });
+  expect(safe.maxExplorerResponses).toBe(1);
+});
+
+test("browser provider runs a quota-safe one-shot Explorer", async () => {
   const settings = readSettings({
     profiles: {
       default: { provider: "openai", model: "gpt-6-astra" },
@@ -52,80 +106,45 @@ test("browser provider runs the ordinary Explorer with private continuation and 
         baseUrl: "https://bridge.invalid/v1",
       },
     },
-    maxExplorerResponses: 4,
     maxExplorerReads: 1,
-    limits: { concurrency: 1, attempts: 1, providerCalls: 4 },
+    limits: { concurrency: 1, attempts: 1, providerCalls: 1 },
   });
   const runtime = piRuntime(settings, "unrelated-gateway-key");
   expect(runtime.profiles.explorer.options?.apiKey).toBeUndefined();
   const requests: any[] = [];
-  const drafts = [
-    {
-      notes: [
-        {
-          id: "n1",
-          summary: "First",
-          detailedSummary: "Preserve the mathematical notation.",
-          text: "Preserve a_b and \\sum_i exactly.",
-          support: [],
-        },
-      ],
-      candidate: false,
-    },
-    {
-      notes: [
-        {
-          id: "n2",
-          summary: "Invalid",
-          detailedSummary: "This claim has unknown support.",
-          text: "Unknown support",
-          support: ["missing"],
-        },
-      ],
-      candidate: true,
-    },
-    {
-      notes: [
-        {
-          id: "n2",
-          summary: "Final",
-          detailedSummary: "The final claim uses the first note.",
-          text: "Use the first note.",
-          support: ["n1"],
-        },
-      ],
-      candidate: true,
-    },
-  ];
+  const draft = {
+    notes: [
+      {
+        id: "n1",
+        summary: "First",
+        detailedSummary: "Preserve the mathematical notation.",
+        text: "Preserve a_b and \\sum_i exactly.",
+        support: [],
+      },
+    ],
+    candidate: true,
+  };
   runtime.profiles.explorer.options!.fetch = Object.assign(
     async (_url: unknown, init?: RequestInit) => {
+      expect(String(_url)).toBe("https://bridge.invalid/v1/chat/completions");
       expect(new Headers(init?.headers).get("authorization")).not.toContain(
         "unrelated-gateway-key",
       );
       const body = await new Response(init?.body).json();
       requests.push(body);
       expect(body.tools).toBeUndefined();
+      expect(body.tool_choice).toBeUndefined();
       expect(body.max_output_tokens).toBeUndefined();
-      expect(body.reasoning.effort).toBe("max");
-      expect(body.text.format).toMatchObject({
-        type: "json_schema",
-        name: "tool_response",
-        strict: true,
-      });
-      if (requests.length > 2) {
-        expect(JSON.stringify(body.input)).toContain("n1");
-        expect(JSON.stringify(body.input)).toContain("function_call_output");
-      }
-      if (requests.length === 4)
-        expect(JSON.stringify(body.input)).toContain(
-          "Unknown, dead, or forward support",
-        );
-      if (requests.length === 1)
-        return response(
-          selection("read_notes", { ids: ["given"], level: "full" }),
-        );
-      expect(JSON.stringify(body.input)).toContain("FROZEN-NOTE");
-      return response(selection("submit_result", drafts[requests.length - 2]));
+      expect(body.reasoning_effort).toBeUndefined();
+      expect(
+        body.messages.findLast((message: any) => message.role === "system")
+          ?.content,
+      ).toContain("Return exactly one JSON object matching this schema");
+      expect(JSON.stringify(body.messages)).toContain(
+        "Return exactly one JSON object matching this schema",
+      );
+      expect(JSON.stringify(body.messages)).not.toContain("read_notes");
+      return response(selection("submit_result", draft));
     },
     { preconnect: fetch.preconnect },
   );
@@ -170,13 +189,9 @@ test("browser provider runs the ordinary Explorer with private continuation and 
     await engine.run();
     const snapshot = await engine.inspectWithRecords();
     expect(snapshot.campaign.status).toBe("completed");
-    expect(snapshot.campaign.providerCalls).toBe(4);
+    expect(snapshot.campaign.providerCalls).toBe(1);
     const notes = project(snapshot.campaign);
-    expect(notes.map((n) => n.text)).toEqual([
-      drafts[0]!.notes[0]!.text,
-      drafts[2]!.notes[0]!.text,
-    ]);
-    expect(notes[1]!.support).toEqual([notes[0]!.id]);
+    expect(notes.map((n) => n.text)).toEqual([draft.notes[0]!.text]);
     expect(
       notes.every((n) => !n.imported && !n.verified && !n.accepted),
     ).toBeTrue();
@@ -185,7 +200,7 @@ test("browser provider runs the ordinary Explorer with private continuation and 
       "xean.call.request",
       "xean.call.settled",
     ])
-      expect(snapshot.records.filter((r) => r.kind === kind)).toHaveLength(4);
+      expect(snapshot.records.filter((r) => r.kind === kind)).toHaveLength(1);
     const settled = snapshot.records
       .filter((r) => r.kind === "xean.call.settled")
       .map((r) => r.data as any);
@@ -198,10 +213,75 @@ test("browser provider runs the ordinary Explorer with private continuation and 
       JSON.parse(r.client_metadata["x-codex-turn-metadata"]),
     );
     expect(new Set(identities.map((i) => i.thread_id)).size).toBe(1);
-    expect(new Set(identities.map((i) => i.turn_id)).size).toBe(4);
+    expect(new Set(identities.map((i) => i.turn_id)).size).toBe(1);
   } finally {
     await engine.close();
   }
+});
+
+test("ChatGPT Explorer is not dispatched again after an existing attempt", async () => {
+  const task = {
+    problem: "Quota fixture task",
+    completionCriteria: "Quota fixture result",
+  };
+  const settings = readSettings({
+    profiles: {
+      default: { provider: "openai", model: "gpt-6-astra" },
+      explorer: {
+        provider: "codex-chatgpt-web",
+        model: "chatgpt-web/gpt-6-pro",
+      },
+    },
+  });
+  const solver = createSolver(task, piRuntime(settings), {
+    ...settings,
+    chatGptSingleShot: true,
+  });
+  solver.functions.coordinator = async () => ({
+    work: [{ kind: "explorer", guidance: "Continue" }],
+  });
+  const view = {
+    task: { version: declarationVersion, kind: "xean.solve" },
+    status: "running",
+    callLimitReached: false,
+    state: null,
+    work: [],
+    inputs: [],
+  } as any;
+  const execution = {
+    attemptId: "quota-dispatch",
+    attempt: 1,
+    recorder: {
+      begin: () => ({ recordRequest() {}, settle() {} }),
+    },
+  } as any;
+  const first = await solver.coordinator.run(
+    { id: 1 as any, kind: "start", value: null },
+    view,
+    execution,
+    BACKGROUND_CONTEXT,
+  );
+  expect(
+    first.dispatch?.filter(({ role }) => role === "xean.explorer"),
+  ).toHaveLength(1);
+  const second = await solver.coordinator.run(
+    { id: 2 as any, kind: "completed", value: null },
+    {
+      ...view,
+      work: [
+        {
+          id: "w1",
+          role: "xean.explorer",
+          status: "failed",
+        },
+      ],
+    },
+    execution,
+    BACKGROUND_CONTEXT,
+  );
+  expect(
+    second.dispatch?.filter(({ role }) => role === "xean.explorer"),
+  ).toHaveLength(0);
 });
 
 test("browser provider returns final text and validates a generic typed output without coercion", async () => {
@@ -385,11 +465,96 @@ test("browser provider rejects images and settles cancellation without replay", 
   expect(calls).toBe(1);
 });
 
+test("reopening an interrupted browser worker never submits a second request", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-browser-recovery-"));
+  const path = join(directory, "campaign.sqlite");
+  const started = Promise.withResolvers<void>();
+  let calls = 0;
+  const task = {
+    problem: "Fixture task",
+    completionCriteria: "Fixture result",
+  };
+  const settings = readSettings({
+    profiles: {
+      default: { provider: "openai", model: "gpt-6-astra" },
+      explorer: {
+        provider: "codex-chatgpt-web",
+        model: "chatgpt-web/gpt-6-pro",
+        baseUrl: "https://bridge.invalid/v1",
+      },
+    },
+    limits: { concurrency: 1, attempts: 3, providerCalls: 3 },
+  });
+  const options = () =>
+    campaignOptions(
+      {
+        version: declarationVersion,
+        kind: "xean.role",
+        role: "explorer",
+        task,
+        settings,
+        input: { task, notes: [], guidance: "Explore" },
+      },
+      () => {
+        const runtime = piRuntime(settings);
+        runtime.profiles.explorer.options!.fetch = Object.assign(
+          async (_url: unknown, init?: RequestInit) => {
+            calls++;
+            if (calls > 1)
+              return response(
+                selection("submit_result", { notes: [], candidate: false }),
+              );
+            const signal = init!.signal!;
+            signal.throwIfAborted();
+            return new Promise<Response>((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(signal.reason), {
+                once: true,
+              });
+              started.resolve();
+            });
+          },
+          { preconnect: fetch.preconnect },
+        );
+        return runtime;
+      },
+    );
+  let engine = await Xean.open(await openXeanStorage(path), options());
+  try {
+    const running = engine.run();
+    await started.promise;
+    await engine.close();
+    await running;
+    expect(calls).toBe(1);
+    engine = await Xean.open(await openXeanStorage(path), options());
+    const campaign = await engine.run();
+    expect(campaign.status).toBe("blocked");
+    expect(campaign.work[0]).toMatchObject({ status: "failed", attempts: 2 });
+    expect(campaign.work[0]!.error).toContain(
+      "ChatGPT Web cannot repeat an interrupted worker",
+    );
+    expect(calls).toBe(1);
+    expect(campaign.providerCalls).toBe(1);
+    const records = await engine.records();
+    for (const kind of ["xean.call.started", "xean.call.settled"])
+      expect(records.filter((record) => record.kind === kind)).toHaveLength(1);
+    expect(
+      records.filter((record) => record.kind === "xean.attempt.interrupted"),
+    ).toHaveLength(1);
+  } finally {
+    await engine.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("solver recovery never resubmits a disconnected browser request", async () => {
   const runtime = piRuntime(
     readSettings({
       profiles: {
         default: {
+          provider: "openai",
+          model: "gpt-6-astra",
+        },
+        explorer: {
           provider: "codex-chatgpt-web",
           model: "chatgpt-web/gpt-6-pro",
         },
@@ -417,6 +582,7 @@ test("solver recovery never resubmits a disconnected browser request", async () 
       Type.Object({ answer: Type.Boolean() }),
       {
         attemptId: "browser-disconnect",
+        attempt: 1,
         recorder: {
           begin: () => ({
             recordRequest() {},

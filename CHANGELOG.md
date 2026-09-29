@@ -21,17 +21,26 @@ campaigns and exports on their matching runtime. No migration is provided.
   roll back on pause, and interrupted invocations cannot publish late results.
 - Status and observer exports share solver-campaign recognition, so closed-book
   campaigns also report note counts.
+- Claude Code profiles now use the pinned local subscription transport, while
+  Anthropic API profiles keep separate credentials and usage accounting. The
+  Claude tool bridge and cancellation paths have deterministic coverage.
 - Explorer always starts with the task, all note IDs and summaries, and current
   feedback. Coordinator supplies only guidance. Explorer selects frozen detailed
   summaries or full notes through `read_notes`. `maxExplorerReads` defaults to four
-  batched calls per invocation and must be at least one. `maxExplorerResponses` defaults to that
-  allowance plus four. An explicit response limit overrides the default.
+  batched calls per invocation and must be at least one. Except for the one-response
+  ChatGPT profile, `maxExplorerResponses` defaults to that allowance plus four.
+  An explicit response limit overrides the default.
   Reading is disabled at its cap and on the final response, with tool definitions
   kept stable. The `explorer` mode setting and Explorer-input `support` selection
   are removed. Mathematical note dependencies remain unchanged.
-- ChatGPT Web derives its response schema from any tools supplied by Pi, maps
-  validated selections to native tool calls, and leaves execution and
-  continuation to Pi. Explorer can read notes and submit through this adapter.
+- ChatGPT Web is now an explicit Explorer-only, one-response profile. It cannot
+  be the default or a verifier profile, and built-in campaigns admit no additional
+  ChatGPT Explorer work. Recovered browser workers fail before another request,
+  using the new one-based `Execution.attempt` ordinal. Xean cannot account for usage
+  outside the campaign or enforce an account-wide subscription quota.
+- ChatGPT Web uses the bridge's text-only Chat Completions endpoint with a
+  validated generic tool envelope. Browser retries are disabled and usage stays
+  unknown; no live Pro request is part of this qualification.
 - Explicit antecedents in conditional claims remain part of the claim.
   Correctness checks the implication, source checks its external results, and
   requirements decides whether it solves the original task.

@@ -67,6 +67,7 @@ test("conditional hypotheses remain claims while external results require source
     const sources: { instructions: string; prompt: string }[] = [];
     const execution: Execution = {
       attemptId: "conditional-check",
+      attempt: 1,
       recorder: {
         begin: () => ({
           recordRequest(request) {

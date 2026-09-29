@@ -57,7 +57,10 @@ export type CoordinationInput = {
 };
 export type RoleOptions = Required<
   Pick<Settings, "maxExplorerResponses" | "maxExplorerReads" | "literature">
->;
+> & {
+  /** ChatGPT Web is a one-shot Explorer and cannot be scheduled again. */
+  chatGptSingleShot?: boolean;
+};
 
 /** Ordinary functions used by both campaigns and standalone role execution. */
 export function createRoles(
@@ -226,10 +229,13 @@ export function createRoles(
       input = structuredClone(input);
       const index = input.notes.map(noteInfo);
       const accumulated: Exploration["notes"] = [];
+      const explorerInstructions = options.chatGptSingleShot
+        ? "All note summaries are supplied in the initial context. Do not read notes or request continuation; submit the complete useful result in this one response."
+        : "Use read_notes to choose detailed summaries or full arguments from your frozen snapshot, batching independent IDs. Reading is disabled when its allowance is exhausted and on your final response; then work from available context and submit.";
       const result = await ask(
         runtime,
         "explorer",
-        "Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. The preceding messages contain the task and the complete index of note IDs and summaries. The final input supplies note states, feedback, guidance, and your read and response allowances. Guidance is fallible. Use read_notes to choose detailed summaries or full arguments from your frozen snapshot, batching independent IDs. Follow support IDs when needed. Reading is disabled when its allowance is exhausted and on your final response; then work from available context and submit. Every response counts, including reads, rejected submissions, and responses without a submission. Do mathematics without external search. Return self-contained notes with an index summary, detailed summary, and authoritative full text, including useful partial results and failed approaches with their gaps stated. Identify pivotal claims and their unproved assumptions in the notes so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it. Merely reading or discussing a note is not a dependency. Dead notes are diagnostic only; never use them as mathematical support. Existing verified support need not be reproved. Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. Empty notes end this invocation without a solution.",
+        `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. The preceding messages contain the task and the complete index of note IDs and summaries. The final input supplies note states, feedback, guidance, and your read and response allowances. Guidance is fallible. ${explorerInstructions} Follow support IDs when needed. Every response counts, including reads, rejected submissions, and responses without a submission. Do mathematics without external search. Return self-contained notes with an index summary, detailed summary, and authoritative full text, including useful partial results and failed approaches with their gaps stated. Identify pivotal claims and their unproved assumptions in the notes so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it. Merely reading or discussing a note is not a dependency. Dead notes are diagnostic only; never use them as mathematical support. Existing verified support need not be reproved. Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. Empty notes end this invocation without a solution.`,
         {
           notes: index.map(({ summary: _summary, ...state }) => state),
           guidance: input.guidance,
@@ -248,7 +254,7 @@ export function createRoles(
             { task: input.task },
             ...index.map(({ id, summary }) => ({ id, summary })),
           ],
-          tools: [noteReader(input.notes)],
+          tools: options.chatGptSingleShot ? [] : [noteReader(input.notes)],
           submit(value) {
             validateNotes([...accumulated, ...value.notes], input.notes);
             if (value.candidate && value.notes.length === 0)

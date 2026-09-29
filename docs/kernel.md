@@ -37,7 +37,8 @@ try {
 `options` supplies roles, Coordinator, and the exact task for a new campaign.
 The application can also supply limits, acceptance, and native Pi telemetry.
 A role supplies a `name` and `run(input, execution, context)`, which returns JSON.
-`execution` supplies the attempt ID and call recorder. `context` is Chord's
+`execution` supplies the attempt ID, one-based `attempt` ordinal, and call recorder.
+Roles can use the ordinal to reject unsafe whole-worker replay. `context` is Chord's
 native `Context`, with cancellation on `context.abortSignal`. Xean always
 supplies that signal. Pi's public `getTelemetryContext(context)` helper from
 `@earendil-works/pi-agent-core/harness/context` retrieves the attempt's telemetry

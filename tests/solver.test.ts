@@ -335,6 +335,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     });
     const noCalls = {
       attemptId: "reuse",
+      attempt: 1,
       recorder: {
         begin() {
           throw new Error("Reused checks must make no call");
@@ -455,6 +456,7 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
   );
   const execution = {
     attemptId: "source-once",
+    attempt: 1,
     recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
   };
   const input: VerifierInput = {
@@ -569,6 +571,7 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
     { task, notes, targets: [{ id: "n1", through: "reconstruction" }] },
     {
       attemptId: "prefix",
+      attempt: 1,
       recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
     },
     BACKGROUND_CONTEXT,
@@ -714,6 +717,7 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
   const solver = createSolver(task, runtime);
   const execution = {
     attemptId: "batch",
+    attempt: 1,
     recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
   };
   const result = await solver.functions.verifier(
@@ -796,6 +800,7 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
       { task, notes, targets: ["a", "b"] },
       {
         attemptId: "reuse",
+        attempt: 1,
         recorder: {
           begin() {
             throw new Error("Checks must be reused");

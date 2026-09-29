@@ -11,6 +11,7 @@ import { fixtureRuntime } from "./fixtures/pi.ts";
 const task = { problem: "Exact task", completionCriteria: "Complete proof" };
 const execution: Execution = {
   attemptId: "retrieval-fixture",
+  attempt: 1,
   recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
 };
 const note = (id: string, summary: string): Note => ({

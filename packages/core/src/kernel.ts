@@ -514,6 +514,7 @@ export class Xean {
   ): Promise<void> {
     if (task.state.status !== "running")
       throw new Error("Pi invoked a non-running task");
+    const attempt = task.state.checkpoint.attempts;
     const item: Reserved = {
       task,
       attemptId: task.state.checkpoint.attemptId!,
@@ -540,6 +541,7 @@ export class Xean {
           const context = withTelemetryContext(span, active.context);
           const execution: Execution = {
             attemptId: item.attemptId,
+            attempt,
             recorder: this.recorder(item, context, calls),
           };
           let result: JsonValue;

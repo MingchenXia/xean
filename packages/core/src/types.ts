@@ -28,6 +28,8 @@ export type XeanStatus =
 /** Attempt-owned operations, separate from Chord's invocation context. */
 export interface Execution {
   readonly attemptId: string;
+  /** One-based invocation ordinal, including attempts interrupted by close/crash. */
+  readonly attempt: number;
   /** Shared call accounting for the chosen execution backend. */
   readonly recorder: CallRecorder;
 }
