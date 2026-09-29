@@ -477,6 +477,85 @@ test("roles hand off valid private submissions and never continue a rejected one
   expect(state.calls[0]?.payload).toMatchObject({ parallel_tool_calls: false });
 });
 
+test("Codex keeps required submission tools on a rejected-submission retry", async () => {
+  const payloads: any[] = [];
+  const tool = {
+    type: "function_call",
+    id: "fc_submission",
+    call_id: "submission",
+    name: "submit_result",
+    arguments: '{"answer":1}',
+    status: "completed",
+  };
+  const runtime = fixtureRuntime(() => fauxAssistantMessage(""));
+  runtime.profiles.requirements.model = {
+    ...model,
+    compat: {
+      ...model.compat,
+      supportsAdditionalTools: true,
+      supportsMidConvoSystemMessages: true,
+    },
+  };
+  runtime.models.streamSimple = fixtureModels(async (init) => {
+    const payload = await requestBody(init);
+    payloads.push(payload);
+    const responseTool = {
+      ...tool,
+      arguments: payloads.length === 1 ? '{"answer":0}' : tool.arguments,
+    };
+    return eventResponse(
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: responseTool,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: responseTool,
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_submission",
+          status: "completed",
+          output: [responseTool],
+        },
+      },
+    );
+  }).streamSimple;
+  const result = await ask(
+    runtime,
+    "requirements",
+    "Judge the supplied notes",
+    {},
+    Type.Object({ answer: Type.Number() }),
+    { attemptId: "required-submission", recorder: recording().recorder },
+    BACKGROUND_CONTEXT,
+    {
+      maxResponses: 2,
+      submit(value) {
+        if (value.answer === 0) throw new Error("Missing coverage");
+        return { done: true, receipt: { recorded: true } };
+      },
+    },
+  );
+  expect(result).toEqual({ answer: 1 });
+  expect(payloads).toHaveLength(2);
+  for (const payload of payloads) {
+    expect(payload.tools.map((item: { name: string }) => item.name)).toEqual([
+      "submit_result",
+    ]);
+    expect(payload.tool_choice).toBe("required");
+    expect(payload.parallel_tool_calls).toBe(false);
+    expect(
+      payload.input.some(
+        (item: { type: string }) => item.type === "additional_tools",
+      ),
+    ).toBe(false);
+  }
+});
+
 test("cache routing follows identical prefixes while sessions and caller choices remain independent", async () => {
   const payloads: { prompt_cache_key?: string }[] = [];
   const sessions: (string | undefined)[] = [];
