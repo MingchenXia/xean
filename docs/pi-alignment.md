@@ -181,29 +181,33 @@ including after Pi retries a rejected submission; a later-only declaration can
 leave Codex with `tool_choice: required` but no tools and is rejected by the
 provider.
 
-ChatGPT Web uses native `createProvider`, `lazyStream`, the OpenAI-compatible
-Chat Completions transport, and transcript conversion. Pi owns asynchronous
-setup, event delivery, and stream completion. The bridge returns text only, so
-the adapter places a generic typed JSON envelope in the prompt, removes native
-tool fields before dispatch, validates the envelope against the current Pi tool
-names and argument schemas, and emits native tool calls and optional text. Pi
-owns execution and continuation. An empty call list permits final text. It
-retains response metadata on failure and marks browser usage unmeasured. The
-custom API identity excludes it from OpenAI reasoning replay. Both the
-underlying transport and the solver disable automatic request retries for this
-provider because an interrupted browser request may already have been
-submitted. The solver also rejects recovered browser work before dispatch,
-using the kernel's persisted attempt ordinal. The adapter contains no role-specific tool names. Browser tool calls
-are structured proposals executed locally by Pi, including submission. The
-transport fixtures cover multiple tools, multiple calls, validation, result
-feedback, and cancellation; they do not constitute live Pro qualification.
-The bridge consumes text content, so prior calls and tool results are serialized
-with their IDs, names, arguments, and error states before transport conversion.
-Each settlement retains the original reply in `chatGptWeb.text` even if envelope
-validation fails. Only explicit native `served_model` metadata establishes served
-identity. A mismatch remains recorded without rejecting a valid reply.
-Browser model selection and reasoning
-effort remain controlled by the bridge's browser session.
+ChatGPT Web uses Pi's `createProvider`, `lazyStream`, Responses transport, and
+transcript conversion over [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web)
+in browser-only mode. Xean supplies the generic tool envelope as a strict JSON
+output schema and attaches the bridge's matching thread/turn metadata. Native
+Responses items preserve tool-call IDs, arguments, and results. Error results
+include explicit failure text because Responses has no corresponding error flag.
+
+Only a unique completed `final_answer` can supply the envelope. Xean validates
+it against Pi's current tool names and schemas, then Pi executes the selected
+calls. An empty call list permits final text. The adapter has no role-specific
+tool names. Settlements retain response text received from the bridge, including
+invalid output. Upstream schema rejection may expose only an error. Only
+explicit `served_model` metadata establishes served identity. Browser usage
+remains unmeasured. The custom API identity excludes browser answers from OpenAI
+reasoning replay. Transport retries, solver response retries, and recovered
+browser-worker sends remain disabled.
+
+The old `chatgpt-cli` Chat Completions path is retired. No fallback is provided.
+The earlier live upstream smoke used a development adapter, not a deployed HTTP
+listener. Its local answer-source patch reads the original completed reply to
+preserve JSON escapes rather than reconstructing rendered Markdown. That patch
+must be qualified with matching daemon and browser-helper builds. A production
+launcher requires its own login and configuration. Upstream rejects an HTTP
+listener for a DEV profile, and its normal setup also installs Codex integration.
+Do not change the user's existing Codex route incidentally when configuring Xean.
+Fixtures establish Xean's Responses contract, not deployment readiness.
+
 The official [Workspace Agents API](https://developers.openai.com/workspace-agents/trigger-runs)
 can trigger a workspace agent and report its status, but cannot currently retrieve its
 answer. It therefore cannot supply Pi model responses. Its workspace-scoped

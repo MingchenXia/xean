@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createProvider,
   getDeclaredTools,
@@ -16,11 +16,7 @@ import { Value } from "typebox/value";
 export const chatGptWebProviderId = "codex-chatgpt-web";
 const api = "chatgpt-web";
 
-/**
- * Map the browser bridge's text-only Chat Completions reply to native Pi tool
- * calls. The bridge does not implement Responses or native tool calls, so the
- * schema and envelope are carried in the prompt and validated here.
- */
+/** Map the browser bridge's structured Responses answer to native Pi tool calls. */
 export function chatGptWebProvider(baseUrl = "http://127.0.0.1:17841/v1") {
   const model: Model<typeof api> = {
     id: "chatgpt-web/gpt-6-pro",
@@ -96,40 +92,20 @@ function stream(
       : undefined;
     const input: TranscriptContext = {
       ...normalized,
-      messages: normalized.messages.map((m) => {
-        if (m.role === "system")
-          return { ...m, toolsAdded: [], toolsRemoved: [] };
-        // The bridge reads only message.content and labels every non-user
-        // turn Assistant. Carry calls and results in text before Pi conversion.
-        if (m.role === "toolResult")
-          return {
-            role: "user" as const,
-            timestamp: m.timestamp,
-            content: `Tool result: ${JSON.stringify({
-              id: m.toolCallId,
-              name: m.toolName,
-              isError: m.isError,
-              content: m.content,
-            })}`,
-          };
-        if (m.role === "assistant")
-          return {
-            ...m,
-            content: m.content.map((part) =>
-              part.type === "toolCall"
-                ? {
-                    type: "text" as const,
-                    text: `Tool call: ${JSON.stringify({
-                      id: part.id,
-                      name: part.name,
-                      arguments: part.arguments,
-                    })}`,
-                  }
-                : part,
-            ),
-          };
-        return m;
-      }),
+      messages: normalized.messages.map((m) =>
+        m.role === "system"
+          ? { ...m, toolsAdded: [], toolsRemoved: [] }
+          : m.role === "toolResult" && m.isError
+            ? // Responses has no error flag; preserve it in the native result content.
+              {
+                ...m,
+                content: [
+                  { type: "text" as const, text: "Tool execution failed." },
+                  ...m.content,
+                ],
+              }
+            : m,
+      ),
     };
     if (output)
       input.messages = [
@@ -137,24 +113,23 @@ function stream(
         {
           role: "system",
           timestamp: Date.now(),
-          content: `Return exactly one JSON object matching this schema: ${JSON.stringify(output)}. Use calls for the caller-owned tools you need, with optional accompanying text. Use an empty calls array for a final text answer. The caller executes these tools and supplies their results before your next response. Do not substitute ChatGPT-native tools for these functions.`,
+          content:
+            'Return {"text":...,"calls":[{"name":...,"arguments":...}]} matching the supplied schema. Use calls for the caller-owned tools you need, with optional accompanying text. Use an empty calls array for a final text answer. The caller executes these tools and supplies their results before your next response. Do not substitute ChatGPT-native tools for these functions.',
         },
       ];
     let servedModel: string | undefined;
+    let finalAnswers: string[] | undefined;
+    const threadId = createHash("sha256")
+      .update(options.sessionId ?? randomUUID())
+      .digest("hex");
+    const turnId = randomUUID();
     const { streamSimple } =
-      await import("@earendil-works/pi-ai/api/openai-completions");
+      await import("@earendil-works/pi-ai/api/openai-responses");
     const source = streamSimple(
       {
         ...model,
-        api: "openai-completions",
-        compat: {
-          maxTokensField: "max_tokens",
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: false,
-          supportsStore: false,
-          supportsUsageInStreaming: false,
-          supportsMidConvoSystemMessages: true,
-        },
+        api: "openai-responses",
+        compat: { supportsMaxOutputTokens: false },
       },
       input,
       {
@@ -167,22 +142,54 @@ function stream(
         maxRetries: 0,
         onPayload: async (payload) => {
           const body = payload as Record<string, any>;
-          // The browser bridge only accepts ordinary Chat Completions fields.
-          // Native tool declarations would be ignored by the bridge and can
-          // mislead callers into believing the model produced a native call.
-          delete body.tools;
-          delete body.tool_choice;
-          delete body.stream_options;
+          body.client_metadata = {
+            "x-codex-turn-metadata": JSON.stringify({
+              thread_id: threadId,
+              turn_id: turnId,
+            }),
+          };
+          const user = body.input.findLast((item: any) => item.role === "user");
+          if (user)
+            Object.assign(user, {
+              type: "message",
+              id: `msg_${randomUUID()}`,
+              internal_chat_message_metadata_passthrough: { turn_id: turnId },
+            });
+          if (output)
+            body.text = {
+              format: {
+                type: "json_schema",
+                name: "tool_response",
+                strict: true,
+                schema: output,
+              },
+            };
           const replacement = await options.onPayload?.(body, model);
           return replacement === undefined ? body : replacement;
         },
         onResponse: (response) => options.onResponse?.(response, model),
         onProviderStreamEvent: async (event) => {
-          // Only the bridge's explicit served_model comes from native reply
-          // metadata; model may instead be a generic or requested alias.
-          const served = (event as { served_model?: unknown })?.served_model;
-          if (typeof served === "string" && served && served !== "chatgpt-web")
-            servedModel ??= served;
+          const raw = event as Record<string, any>;
+          if (
+            raw.type === "response.completed" ||
+            raw.type === "response.incomplete"
+          ) {
+            finalAnswers = (raw.response.output ?? [])
+              .filter(
+                (item: any) =>
+                  item.type === "message" &&
+                  item.role === "assistant" &&
+                  item.phase === "final_answer",
+              )
+              .map((item: any) =>
+                item.content
+                  .filter((part: any) => part.type === "output_text")
+                  .map((part: any) => part.text)
+                  .join(""),
+              );
+            const served = raw.response.served_model;
+            if (typeof served === "string" && served) servedModel = served;
+          }
           await options.onProviderStreamEvent?.(event, model);
         },
       },
@@ -193,15 +200,18 @@ function stream(
         /* Final native content is authoritative. */
       }
       const completed = await source.result();
-      const finalAnswer = completed.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("");
+      const finalAnswer =
+        finalAnswers?.join("\n\n") ??
+        completed.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("");
       const message = {
         ...completed,
         api: model.api,
         content: [] as typeof completed.content,
         usageReported: false,
+        responseModel: servedModel,
         // Preserve the original reply even when its envelope is malformed or
         // incomplete, without exposing it as executable agent-loop content.
         chatGptWeb: { text: finalAnswer, servedModel: servedModel ?? null },
@@ -213,8 +223,8 @@ function stream(
             completed.errorMessage ??
               `ChatGPT Web stopped with ${completed.stopReason}`,
           );
-        if (!finalAnswer)
-          throw new Error("ChatGPT Web returned no text answer");
+        if (finalAnswers?.length !== 1 || !finalAnswer)
+          throw new Error("ChatGPT Web returned no unique final answer");
         const selection = output ? JSON.parse(finalAnswer) : undefined;
         if (output && !Value.Check(output, selection))
           throw new Error("ChatGPT Web returned an invalid tool selection");

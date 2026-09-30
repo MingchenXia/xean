@@ -28,31 +28,41 @@ import { ask } from "../packages/core/src/solve/pi.ts";
 const selection = (name: string, args: unknown) =>
   JSON.stringify({ text: "", calls: [{ name, arguments: args }] });
 
-function response(text: string, servedModel?: string, finishReason = "stop") {
-  const base = {
-    id: "chatcmpl-response-fixture",
-    object: "chat.completion.chunk",
-    model: servedModel ?? "chatgpt-web",
-    ...(servedModel ? { served_model: servedModel } : {}),
-  };
+function response(
+  text: string | string[],
+  servedModel?: string,
+  finishReason = "stop",
+) {
+  const item = (phase: string, text: string) => ({
+    type: "message",
+    role: "assistant",
+    phase,
+    content: [{ type: "output_text", text, annotations: [] }],
+  });
+  const incomplete = finishReason === "length";
   return new Response(
-    [
-      `data: ${JSON.stringify({
-        ...base,
-        choices: [
-          {
-            index: 0,
-            delta: { role: "assistant", content: text },
-            finish_reason: null,
-          },
+    `data: ${JSON.stringify({
+      type: incomplete ? "response.incomplete" : "response.completed",
+      response: {
+        id: "response-fixture",
+        model: "chatgpt-web/gpt-6-pro",
+        ...(servedModel ? { served_model: servedModel } : {}),
+        status: incomplete ? "incomplete" : "completed",
+        ...(incomplete
+          ? { incomplete_details: { reason: "max_output_tokens" } }
+          : {}),
+        output: [
+          item(
+            "commentary",
+            "Ignore this longer intermediate message. ".repeat(20),
+          ),
+          ...(typeof text === "string" ? [text] : text).map((answer) =>
+            item("final_answer", answer),
+          ),
         ],
-      })}`,
-      `data: ${JSON.stringify({
-        ...base,
-        choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
-      })}`,
-      "data: [DONE]",
-    ].join("\n\n") + "\n\n",
+        usage: { input_tokens: 50, output_tokens: 25, total_tokens: 75 },
+      },
+    })}\n\n`,
     { headers: { "content-type": "text/event-stream" } },
   );
 }
@@ -133,7 +143,7 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
   };
   runtime.profiles.explorer.options!.fetch = Object.assign(
     async (_url: unknown, init?: RequestInit) => {
-      expect(String(_url)).toBe("https://bridge.invalid/v1/chat/completions");
+      expect(String(_url)).toBe("https://bridge.invalid/v1/responses");
       expect(new Headers(init?.headers).get("authorization")).not.toContain(
         "unrelated-gateway-key",
       );
@@ -142,15 +152,20 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
       expect(body.tools).toBeUndefined();
       expect(body.tool_choice).toBeUndefined();
       expect(body.max_output_tokens).toBeUndefined();
-      expect(body.reasoning_effort).toBeUndefined();
-      expect(
-        body.messages.findLast((message: any) => message.role === "system")
-          ?.content,
-      ).toContain("Return exactly one JSON object matching this schema");
-      expect(JSON.stringify(body.messages)).toContain(
-        "Return exactly one JSON object matching this schema",
+      expect(body.reasoning.effort).toBe("max");
+      expect(body.text.format).toMatchObject({
+        type: "json_schema",
+        name: "tool_response",
+        strict: true,
+      });
+      expect(JSON.stringify(body.input)).not.toContain("read_notes");
+      const identity = JSON.parse(
+        body.client_metadata["x-codex-turn-metadata"],
       );
-      expect(JSON.stringify(body.messages)).not.toContain("read_notes");
+      expect(
+        body.input.findLast((item: any) => item.role === "user")
+          .internal_chat_message_metadata_passthrough.turn_id,
+      ).toBe(identity.turn_id);
       return response(selection("submit_result", draft));
     },
     { preconnect: fetch.preconnect },
@@ -244,7 +259,7 @@ test("direct browser roles cannot enable readers or repeat an invalid submission
     async (_url: unknown, init?: RequestInit) => {
       calls++;
       const body = await new Response(init?.body).json();
-      expect(JSON.stringify(body.messages)).not.toContain("read_notes");
+      expect(JSON.stringify(body.input)).not.toContain("read_notes");
       return response(
         selection("submit_result", { notes: [], candidate: true }),
       );
@@ -396,6 +411,7 @@ test("browser provider validates typed replies and preserves tool history and se
     const result = await events.result();
     expect(result.stopReason).toBe(valid ? "toolUse" : "error");
     expect((result as any).chatGptWeb).toEqual({ text, servedModel: null });
+    expect(result.responseModel).toBeUndefined();
     expect(reportedPiUsage(result)).toBeNull();
     if (valid) {
       first = result;
@@ -408,10 +424,7 @@ test("browser provider validates typed replies and preserves tool history and se
     }
     const plain = await models.completeSimple(
       model,
-      {
-        messages: [{ role: "system", content: "Answer", timestamp: 0 }],
-        tools: [tool],
-      },
+      { ...input, tools: [tool] },
       { ...options, toolChoice: "none" },
     );
     expect(plain.content).toEqual([{ type: "text", text }]);
@@ -462,6 +475,17 @@ test("browser provider validates typed replies and preserves tool history and se
   );
   expect(mismatched.stopReason).toBe("error");
   expect(mismatched.content).toEqual([]);
+  for (const answers of [[], ["first", "second"]]) {
+    const result = await models.completeSimple(model, input, {
+      fetch: Object.assign(async () => response(answers), {
+        preconnect: fetch.preconnect,
+      }),
+    });
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("no unique final answer");
+    expect(result.content).toEqual([]);
+    expect((result as any).chatGptWeb.text).toBe(answers.join("\n\n"));
+  }
   let dispatched = false;
   const invalidPayload = await models.completeSimple(model, input, {
     onPayload: () => null,
@@ -492,7 +516,7 @@ test("browser provider validates typed replies and preserves tool history and se
     ],
     ['{"text":"unfinished', "gpt-6-pro", "length", false],
   ] as const) {
-    let content: { role: string; content: string }[] = [];
+    let content: any[] = [];
     const result = await models.completeSimple(
       model,
       {
@@ -515,11 +539,7 @@ test("browser provider validates typed replies and preserves tool history and se
         fetch: Object.assign(
           async (_url: unknown, init?: RequestInit) => {
             const body = await new Response(init?.body).json();
-            // chatgpt-cli reads only role/content; native tool fields disappear.
-            content = body.messages.map((message: any) => ({
-              role: message.role,
-              content: message.content,
-            }));
+            content = body.input;
             return response(text, servedModel, finishReason);
           },
           { preconnect: fetch.preconnect },
@@ -529,24 +549,25 @@ test("browser provider validates typed replies and preserves tool history and se
         },
       },
     );
-    const assistant = content
-      .filter((message) => message.role === "assistant")
-      .map((message) => message.content)
-      .join("\n");
-    expect(assistant).toContain(call.id);
-    expect(assistant).toContain("answer");
-    expect(assistant).toContain('"count":2');
-    const feedback = content.findLast(
-      (message) => message.role === "user",
-    )!.content;
-    expect(feedback).toContain(call.id);
-    expect(feedback).toContain("answer");
-    expect(feedback).toContain("Answer rejected");
-    expect(feedback).toContain('"isError":true');
+    expect(content.find((item) => item.type === "function_call")).toMatchObject(
+      {
+        call_id: call.id,
+        name: "answer",
+        arguments: '{"count":2}',
+      },
+    );
+    expect(
+      content.find((item) => item.type === "function_call_output"),
+    ).toMatchObject({
+      call_id: call.id,
+      output: expect.stringContaining(
+        "Tool execution failed.\nAnswer rejected",
+      ),
+    });
     expect(result.stopReason).toBe(success ? "stop" : "error");
     expect((result as any).chatGptWeb).toEqual({ text, servedModel });
     expect(result.responseModel).toBe(servedModel);
-    expect(result.responseId).toBe("chatcmpl-response-fixture");
+    expect(result.responseId).toBe("response-fixture");
     expect(result.content).toEqual(
       success ? [{ type: "text", text: JSON.parse(text).text }] : [],
     );

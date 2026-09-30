@@ -698,23 +698,27 @@ Direct `createRoles()` calls derive the browser restriction from the selected
 runtime and cap Explorer at one response without a note reader, even if the
 caller supplies a larger allowance.
 
-The bridge's `/v1/chat/completions` endpoint owns browser login, prompt
-submission, waiting, and reply retrieval. It starts a fresh browser
-conversation for each request and returns a complete answer as one SSE
-message; `stream: true` is compatibility framing, not token streaming. Xean
-adds the tool schema and envelope to the prompt, removes native tool fields
-before dispatch, and validates the returned JSON before emitting Pi tool calls.
-The bridge's model picker controls the served model; the requested model name
-is retained as provenance and does not switch that picker. The bridge also does
-not enforce the requested reasoning effort. Explicit `served_model` metadata is
-retained even when it differs from the requested model. Valid replies remain
-usable. When native model metadata is absent, served identity
-remains unknown. Settlements retain the original response text even for invalid
-or truncated envelopes. Prior tool calls and results carry their names, IDs,
-arguments, and error states as text so the bridge can preserve their relationship.
-Browser token counts
-remain unavailable and recorded measured usage is null. Automatic replay is
+The provider requires [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web)
+in browser-only mode, with its Responses listener available at the configured
+`baseUrl`. Pi sends `/v1/responses` requests containing native tool histories,
+matching thread/turn metadata, and the generic envelope as a strict JSON output
+schema. Xean accepts only a unique completed `final_answer`, validates its JSON,
+and emits Pi tool calls. Commentary and incomplete output cannot become submissions.
+
+The upstream bridge owns login, browser execution, and model/effort selection.
+Its named model routes check the selected browser family. A response's model
+alias alone is not backend identity: Xean records a served model only when the
+bridge explicitly supplies `served_model`. Xean retains response text received
+from the bridge. Upstream schema rejection may expose only an error.
+Browser usage remains unknown, and automatic replay is
 disabled because a disconnected request may already be running.
+
+The former `chatgpt-cli` Chat Completions service is retired and unsupported.
+There is no fallback to it. A running authenticated development launcher does
+not supply the production HTTP endpoint: upstream deliberately keeps DEV
+profiles separate. Configure and qualify the intended runtime before a campaign,
+including preservation of JSON escapes and mathematical notation. See
+[provider integration](pi-alignment.md#provider-integration) for that boundary.
 
 The provider follows Explorer's no-search instructions but cannot enforce
 disabling ChatGPT-native retrieval. It is not qualified for enforced
