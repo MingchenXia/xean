@@ -77,7 +77,8 @@ campaigns and exports on their matching runtime. No migration is provided.
 - ChatGPT Web uses `codex-chatgpt-web`'s Responses endpoint with a strict generic
   tool envelope and a unique completed final answer. The old `chatgpt-cli` Chat
   Completions path is retired. Browser retries remain disabled and usage unknown.
-  Current deployment qualification remains separate from offline fixtures.
+  A live three-request smoke qualified the generic Pi tool round trip, a
+  single-response Explorer submission, and unchanged campaign reopening.
 - Explicit antecedents in conditional claims remain part of the claim.
   Correctness checks the implication, source checks its external results, and
   requirements decides whether it solves the original task.

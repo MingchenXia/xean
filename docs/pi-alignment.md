@@ -199,14 +199,15 @@ reasoning replay. Transport retries, solver response retries, and recovered
 browser-worker sends remain disabled.
 
 The old `chatgpt-cli` Chat Completions path is retired. No fallback is provided.
-The earlier live upstream smoke used a development adapter, not a deployed HTTP
-listener. Its local answer-source patch reads the original completed reply to
-preserve JSON escapes rather than reconstructing rendered Markdown. That patch
-must be qualified with matching daemon and browser-helper builds. A production
-launcher requires its own login and configuration. Upstream rejects an HTTP
-listener for a DEV profile, and its normal setup also installs Codex integration.
-Do not change the user's existing Codex route incidentally when configuring Xean.
-Fixtures establish Xean's Responses contract, not deployment readiness.
+The local answer-source patch reads the original completed reply to preserve JSON
+escapes rather than reconstructing rendered Markdown. It requires matching
+daemon and browser-helper builds. A normal production launcher owns browser login.
+Xean's deployment uses upstream configuration helpers and a separate runtime home
+for the native daemon, leaving the launcher's Codex integration unconfigured.
+Upstream rejects an HTTP listener for a DEV profile. The normal setup command
+also installs Codex integration, so it is unsuitable for this separate deployment.
+The [live qualification](kernel-smoke.md#chatgpt-web) records the exercised paths
+and remaining limitations.
 
 The official [Workspace Agents API](https://developers.openai.com/workspace-agents/trigger-runs)
 can trigger a workspace agent and report its status, but cannot currently retrieve its
