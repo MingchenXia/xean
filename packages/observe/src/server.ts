@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-import { resolve, dirname, basename } from "node:path";
+import { resolve, dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { readRun, type Source, type Run } from "./read.ts";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
+import index from "../web/index.html";
 
 export function readSources(value: unknown, directory: string): Source[] {
   if (!Array.isArray(value) || value.length === 0)
@@ -104,38 +105,14 @@ if (import.meta.main) {
     );
   const config = resolve(positionals[0]!);
   const sources = readSources(await Bun.file(config).json(), dirname(config));
-  const built = await Bun.build({
-    entrypoints: [resolve(import.meta.dir, "../web/app.ts")],
-    target: "browser",
-    conditions: ["browser", "production"],
-    define: { "process.env.NODE_ENV": '"production"' },
-    publicPath: "/assets/",
-    naming: {
-      entry: "[name].[ext]",
-      chunk: "[name]-[hash].[ext]",
-      asset: "[name]-[hash].[ext]",
-    },
-    minify: true,
-  });
-  if (!built.success)
-    throw new AggregateError(built.logs, "Observer build failed");
-  const assets = new Map<string, Blob>(
-    built.outputs.map((file) => [`/assets/${basename(file.path)}`, file]),
-  );
-  for (const name of ["chao-ui.css", "site.css"])
-    assets.set(`/${name}`, Bun.file(resolve(import.meta.dir, "../web", name)));
-  assets.set("/", Bun.file(resolve(import.meta.dir, "../web/index.html")));
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: Number(values.port),
-    routes: { "/api/*": api(sources, values.fleet!) },
+    routes: { "/": index, "/api/*": api(sources, values.fleet!) },
     fetch(request) {
       if (request.method !== "GET")
         return new Response("Read-only", { status: 405 });
-      const file = assets.get(new URL(request.url).pathname);
-      return file
-        ? new Response(file)
-        : new Response("Not found", { status: 404 });
+      return new Response("Not found", { status: 404 });
     },
     development: false,
   });
