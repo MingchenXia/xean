@@ -68,34 +68,12 @@ export const settingsSchema = object({
 export type Settings = Static<typeof settingsSchema>;
 export function readSettings(value: unknown): Settings {
   const settings = decode(settingsSchema, value);
-  // ChatGPT Pro is a scarce, browser-backed subscription. It is an explicit
-  // one-shot Explorer backend, never a profile fallback or a verifier/oracle.
-  // Keeping this check at the settings boundary prevents an omitted role
-  // profile from silently assigning the scarce provider to every role.
-  if (settings.profiles.default.provider === chatGptWebProviderId)
-    throw new Error(
-      "ChatGPT Web may only be configured explicitly for profiles.explorer; use a non-ChatGPT profiles.default",
-    );
-  for (const name of profileNames) {
-    if (
-      name !== "explorer" &&
-      settings.profiles[name]?.provider === chatGptWebProviderId
-    )
+  // The scarce browser subscription must never become a fallback or verifier.
+  for (const [name, profile] of Object.entries(settings.profiles)) {
+    if (name !== "explorer" && profile?.provider === chatGptWebProviderId)
       throw new Error(
         `ChatGPT Web may only be configured explicitly for profiles.explorer, not profiles.${name}`,
       );
-  }
-  if (settings.profiles.explorer?.provider === chatGptWebProviderId) {
-    if (
-      settings.maxExplorerResponses !== undefined &&
-      settings.maxExplorerResponses !== 1
-    )
-      throw new Error(
-        "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
-      );
-    settings.maxExplorerResponses = 1;
-  }
-  for (const profile of Object.values(settings.profiles)) {
     const endpoint = profile?.baseUrl;
     if (!endpoint) continue;
     const url = new URL(endpoint);
@@ -109,6 +87,16 @@ export function readSettings(value: unknown): Settings {
       throw new Error(
         "baseUrl must be an HTTP(S) endpoint without credentials, query, or fragment",
       );
+  }
+  if (settings.profiles.explorer?.provider === chatGptWebProviderId) {
+    if (
+      settings.maxExplorerResponses !== undefined &&
+      settings.maxExplorerResponses !== 1
+    )
+      throw new Error(
+        "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
+      );
+    settings.maxExplorerResponses = 1;
   }
   return settings;
 }

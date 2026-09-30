@@ -24,6 +24,18 @@ import { offlineResearch } from "../scripts/bounded-solve.ts";
 import { project } from "../packages/core/src/solve/notes.ts";
 import { ask } from "../packages/core/src/solve/pi.ts";
 
+const profiles = {
+  default: { provider: "openai", model: "gpt-6-astra" },
+  explorer: {
+    provider: "codex-chatgpt-web",
+    model: "chatgpt-web/gpt-6-pro",
+    baseUrl: "https://bridge.invalid/v1",
+  },
+};
+const fixtureFetch = (
+  respond: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): typeof fetch => Object.assign(respond, { preconnect: fetch.preconnect });
+
 const selection = (name: string, args: unknown) =>
   JSON.stringify({ text: "", calls: [{ name, arguments: args }] });
 
@@ -69,59 +81,27 @@ function response(
 test("ChatGPT Web is explicit Explorer-only and one-shot", () => {
   expect(() =>
     readSettings({
-      profiles: {
-        default: {
-          provider: "codex-chatgpt-web",
-          model: "chatgpt-web/gpt-6-pro",
-        },
-      },
+      profiles: { default: profiles.explorer },
     }),
   ).toThrow("profiles.explorer");
   expect(() =>
     readSettings({
-      profiles: {
-        default: { provider: "openai", model: "gpt-6-astra" },
-        correctness: {
-          provider: "codex-chatgpt-web",
-          model: "chatgpt-web/gpt-6-pro",
-        },
-      },
+      profiles: { ...profiles, correctness: profiles.explorer },
     }),
   ).toThrow("profiles.correctness");
   expect(() =>
     readSettings({
-      profiles: {
-        default: { provider: "openai", model: "gpt-6-astra" },
-        explorer: {
-          provider: "codex-chatgpt-web",
-          model: "chatgpt-web/gpt-6-pro",
-        },
-      },
+      profiles,
       maxExplorerResponses: 2,
     }),
   ).toThrow("maxExplorerResponses=1");
-  const safe = readSettings({
-    profiles: {
-      default: { provider: "openai", model: "gpt-6-astra" },
-      explorer: {
-        provider: "codex-chatgpt-web",
-        model: "chatgpt-web/gpt-6-pro",
-      },
-    },
-  });
+  const safe = readSettings({ profiles });
   expect(safe.maxExplorerResponses).toBe(1);
 });
 
 test("browser provider runs a quota-safe one-shot Explorer", async () => {
   const settings = readSettings({
-    profiles: {
-      default: { provider: "openai", model: "gpt-6-astra" },
-      explorer: {
-        provider: "codex-chatgpt-web",
-        model: "chatgpt-web/gpt-6-pro",
-        baseUrl: "https://bridge.invalid/v1",
-      },
-    },
+    profiles,
     maxExplorerReads: 1,
     limits: { concurrency: 1, attempts: 1, providerCalls: 1 },
   });
@@ -140,7 +120,7 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
     ],
     candidate: true,
   };
-  runtime.profiles.explorer.options!.fetch = Object.assign(
+  runtime.profiles.explorer.options!.fetch = fixtureFetch(
     async (_url: unknown, init?: RequestInit) => {
       expect(String(_url)).toBe("https://bridge.invalid/v1/responses");
       expect(new Headers(init?.headers).get("authorization")).not.toContain(
@@ -167,7 +147,6 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
       ).toBe(identity.turn_id);
       return response(selection("submit_result", draft));
     },
-    { preconnect: fetch.preconnect },
   );
   const task = {
     problem: "Fixture task",
@@ -240,21 +219,10 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
 });
 
 test("direct browser roles cannot enable readers or repeat an invalid submission", async () => {
-  const runtime = piRuntime(
-    readSettings({
-      profiles: {
-        default: { provider: "openai", model: "gpt-6-astra" },
-        explorer: {
-          provider: "codex-chatgpt-web",
-          model: "chatgpt-web/gpt-6-pro",
-          baseUrl: "https://bridge.invalid/v1",
-        },
-      },
-    }),
-  );
+  const runtime = piRuntime(readSettings({ profiles }));
   let calls = 0;
   let settled = 0;
-  runtime.profiles.explorer.options!.fetch = Object.assign(
+  runtime.profiles.explorer.options!.fetch = fixtureFetch(
     async (_url: unknown, init?: RequestInit) => {
       calls++;
       const body = await new Response(init?.body).json();
@@ -263,7 +231,6 @@ test("direct browser roles cannot enable readers or repeat an invalid submission
         selection("submit_result", { notes: [], candidate: true }),
       );
     },
-    { preconnect: fetch.preconnect },
   );
   const roles = createRoles(runtime, offlineResearch, {
     maxExplorerReads: 4,
@@ -331,9 +298,7 @@ test("browser provider validates typed replies and preserves tool history and se
     ['{"count":\\[\\]}', false],
   ] as const) {
     const options = {
-      fetch: Object.assign(async () => response(text), {
-        preconnect: fetch.preconnect,
-      }),
+      fetch: fixtureFetch(async () => response(text)),
     };
     const events = models.streamSimple(
       model,
@@ -363,9 +328,7 @@ test("browser provider validates typed replies and preserves tool history and se
     { ...input, tools: [tool] },
     {
       toolChoice: "none",
-      fetch: Object.assign(async () => response(text), {
-        preconnect: fetch.preconnect,
-      }),
+      fetch: fixtureFetch(async () => response(text)),
     },
   );
   expect(plain.content).toEqual([{ type: "text", text }]);
@@ -391,9 +354,8 @@ test("browser provider validates typed replies and preserves tool history and se
       model,
       { ...input, tools: [tool, lookup] },
       {
-        fetch: Object.assign(
-          async () => response(JSON.stringify(envelope), "gpt-6-mini"),
-          { preconnect: fetch.preconnect },
+        fetch: fixtureFetch(async () =>
+          response(JSON.stringify(envelope), "gpt-6-mini"),
         ),
       },
     );
@@ -407,9 +369,8 @@ test("browser provider validates typed replies and preserves tool history and se
     model,
     { ...input, tools: [tool, lookup] },
     {
-      fetch: Object.assign(
-        async () => response(selection("answer", { key: "x" })),
-        { preconnect: fetch.preconnect },
+      fetch: fixtureFetch(async () =>
+        response(selection("answer", { key: "x" })),
       ),
     },
   );
@@ -417,9 +378,7 @@ test("browser provider validates typed replies and preserves tool history and se
   expect(mismatched.content).toEqual([]);
   for (const answers of [[], ["first", "second"]]) {
     const result = await models.completeSimple(model, input, {
-      fetch: Object.assign(async () => response(answers), {
-        preconnect: fetch.preconnect,
-      }),
+      fetch: fixtureFetch(async () => response(answers)),
     });
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("no unique final answer");
@@ -429,13 +388,10 @@ test("browser provider validates typed replies and preserves tool history and se
   let dispatched = false;
   const invalidPayload = await models.completeSimple(model, input, {
     onPayload: () => null,
-    fetch: Object.assign(
-      async () => {
-        dispatched = true;
-        return response("unexpected");
-      },
-      { preconnect: fetch.preconnect },
-    ),
+    fetch: fixtureFetch(async () => {
+      dispatched = true;
+      return response("unexpected");
+    }),
   });
   // Preserve a hook's replacement exactly, including an invalid null request.
   expect(invalidPayload.stopReason).toBe("error");
@@ -476,14 +432,11 @@ test("browser provider validates typed replies and preserves tool history and se
         ],
       },
       {
-        fetch: Object.assign(
-          async (_url: unknown, init?: RequestInit) => {
-            const body = await new Response(init?.body).json();
-            content = body.input;
-            return response(text, servedModel, finishReason);
-          },
-          { preconnect: fetch.preconnect },
-        ),
+        fetch: fixtureFetch(async (_url: unknown, init?: RequestInit) => {
+          const body = await new Response(init?.body).json();
+          content = body.input;
+          return response(text, servedModel, finishReason);
+        }),
         onProviderStreamEvent: (_event, requestModel) => {
           expect(requestModel.api).toBe("chatgpt-web");
         },
@@ -525,15 +478,12 @@ test("browser provider rejects images and settles cancellation without replay", 
   const controller = new AbortController();
   const options = {
     signal: controller.signal,
-    fetch: Object.assign(
-      async (_url: unknown, init?: RequestInit) => {
-        calls++;
-        controller.abort();
-        init?.signal?.throwIfAborted();
-        throw new Error("Cancellation did not reach fetch");
-      },
-      { preconnect: fetch.preconnect },
-    ),
+    fetch: fixtureFetch(async (_url: unknown, init?: RequestInit) => {
+      calls++;
+      controller.abort();
+      init?.signal?.throwIfAborted();
+      throw new Error("Cancellation did not reach fetch");
+    }),
   };
   const tool = {
     name: "one",
@@ -582,14 +532,7 @@ test("reopening an interrupted browser worker never submits a second request", a
     completionCriteria: "Fixture result",
   };
   const settings = readSettings({
-    profiles: {
-      default: { provider: "openai", model: "gpt-6-astra" },
-      explorer: {
-        provider: "codex-chatgpt-web",
-        model: "chatgpt-web/gpt-6-pro",
-        baseUrl: "https://bridge.invalid/v1",
-      },
-    },
+    profiles,
     limits: { concurrency: 1, attempts: 3, providerCalls: 3 },
   });
   const options = () =>
@@ -604,7 +547,7 @@ test("reopening an interrupted browser worker never submits a second request", a
       },
       () => {
         const runtime = piRuntime(settings);
-        runtime.profiles.explorer.options!.fetch = Object.assign(
+        runtime.profiles.explorer.options!.fetch = fixtureFetch(
           async (_url: unknown, init?: RequestInit) => {
             calls++;
             if (calls > 1)
@@ -620,7 +563,6 @@ test("reopening an interrupted browser worker never submits a second request", a
               started.resolve();
             });
           },
-          { preconnect: fetch.preconnect },
         );
         return runtime;
       },
@@ -654,32 +596,16 @@ test("reopening an interrupted browser worker never submits a second request", a
 });
 
 test("solver recovery never resubmits a disconnected browser request", async () => {
-  const runtime = piRuntime(
-    readSettings({
-      profiles: {
-        default: {
-          provider: "openai",
-          model: "gpt-6-astra",
-        },
-        explorer: {
-          provider: "codex-chatgpt-web",
-          model: "chatgpt-web/gpt-6-pro",
-        },
-      },
-    }),
-  );
+  const runtime = piRuntime(readSettings({ profiles }));
   let calls = 0;
   let settled = 0;
-  runtime.profiles.explorer.options!.fetch = Object.assign(
-    async () => {
-      calls++;
-      // A second request would hide the disconnect behind a successful result.
-      return calls === 1
-        ? new Response("upstream connection lost", { status: 502 })
-        : response(selection("submit_result", { answer: true }));
-    },
-    { preconnect: fetch.preconnect },
-  );
+  runtime.profiles.explorer.options!.fetch = fixtureFetch(async () => {
+    calls++;
+    // A second request would hide the disconnect behind a successful result.
+    return calls === 1
+      ? new Response("upstream connection lost", { status: 502 })
+      : response(selection("submit_result", { answer: true }));
+  });
   await expect(
     ask(
       runtime,

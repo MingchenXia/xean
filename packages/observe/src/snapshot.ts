@@ -1,6 +1,6 @@
 import type { Campaign, Xean } from "xean";
-import { isSolverCampaign, project, taskSchema, type Task } from "xean/solve";
-import { statusReport } from "xean/report";
+import { taskSchema, type Task } from "xean/solve";
+import { campaignReport, statusReport } from "xean/report";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -8,23 +8,22 @@ export function snapshot(
   value: { campaign: Campaign; records?: Awaited<ReturnType<Xean["records"]>> },
   observedAt = new Date().toISOString(),
 ) {
-  const { campaign, records } = value;
+  const report = campaignReport(value);
+  const { campaign, records, notes } = report;
   const declaration = campaign.task as { kind?: string; task?: Task } | null;
-  const solver = isSolverCampaign(campaign);
-  const notes = solver ? project(campaign) : [];
   return {
     schema: "xean-observe/v2" as const,
     observedAt,
     // A generic kernel task may contain an unrelated field named task.
     task:
-      solver ||
+      notes !== undefined ||
       declaration?.kind === "xean.role" ||
       declaration?.kind === "xean.review"
         ? (declaration?.task ?? null)
         : null,
-    status: statusReport({ campaign, records: records ?? [] }),
+    status: statusReport(report),
     usageAvailable: records !== undefined,
-    notes,
+    notes: notes ?? [],
     work: campaign.work.map(({ id, role, status, attempts, error }) => ({
       id,
       role,

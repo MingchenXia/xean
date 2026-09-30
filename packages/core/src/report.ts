@@ -1,11 +1,25 @@
 import type {
   CallIdentity,
+  Campaign,
   EntryId,
   JsonValue,
   RecordProjection,
   Xean,
 } from "./index.ts";
 import { isSolverCampaign, project } from "./solve/notes.ts";
+
+/** Project mathematical notes once for reports built from the same snapshot. */
+export function campaignReport(snapshot: {
+  campaign: Campaign;
+  records?: Awaited<ReturnType<Xean["records"]>>;
+}) {
+  return {
+    ...snapshot,
+    ...(isSolverCampaign(snapshot.campaign)
+      ? { notes: project(snapshot.campaign) }
+      : {}),
+  };
+}
 
 /** Status needs call metadata, without retaining prompts or response bodies. */
 export const usageRecord: RecordProjection = (
@@ -38,8 +52,9 @@ type UsageGroup = ReturnType<typeof usageGroup>;
 /** Summarize one coherent kernel snapshot without reconciling provider bills. */
 export function statusReport({
   campaign,
-  records,
-}: Awaited<ReturnType<Xean["inspectWithRecords"]>>) {
+  records = [],
+  notes = isSolverCampaign(campaign) ? project(campaign) : undefined,
+}: ReturnType<typeof campaignReport>) {
   const groups = new Map<string, UsageGroup>();
   const calls = new Map<EntryId, UsageGroup>();
   for (const entry of records) {
@@ -78,7 +93,6 @@ export function statusReport({
   const settled = byModel.reduce((total, group) => total + group.settled, 0);
   const work = { queued: 0, active: 0, completed: 0, failed: 0, cancelled: 0 };
   for (const item of campaign.work) work[item.status]++;
-  const notes = isSolverCampaign(campaign) ? project(campaign) : undefined;
   return {
     status: campaign.status,
     error: campaign.error,

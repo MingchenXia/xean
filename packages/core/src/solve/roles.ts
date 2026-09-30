@@ -47,14 +47,13 @@ import { noteReader } from "./reader.ts";
 
 const mathematicalCheck =
   "Check exact statements and hypotheses. Check both summaries against the authoritative full text: preserve hypotheses, quantitative guarantees, conditionality, negative conclusions, and unresolved gaps. A summary must not strengthen a claim or present an unresolved result as established. PASS requires an established argument. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. On PASS, you may supply correction with the complete text and consistent summary and detailedSummary, changing only harmless typos, formatting, or unambiguous notation. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. A substantial repair requires a new note. Treat established support results as given, but verify their applicability and all new reasoning. Do not infer mathematical truth from an earlier model's confidence.";
-const packet = (notes: VerifierInput["notes"]) =>
-  notes.map(({ id, text, summary, detailedSummary, support }) => ({
-    id,
-    text,
-    summary,
-    detailedSummary,
-    support,
-  }));
+const packet = ({ id, text, summary, detailedSummary, support }: Note) => ({
+  id,
+  text,
+  summary,
+  detailedSummary,
+  support,
+});
 /** Corrections share one policy for standalone reconstruction and verifier batches. */
 function recordCheck<Stage extends VerificationStage>(
   note: Note,
@@ -148,7 +147,7 @@ export function createRoles(
       chain,
     );
     const originals = notes.map((note) => ({
-      ...packet([note])[0]!,
+      ...packet(note),
       premises: verdict(note, "correctness")?.premises ?? [],
     }));
     const extract = notes.filter(
@@ -171,9 +170,10 @@ export function createRoles(
       context,
     );
     const statements = notes.map((note) => {
+      const checked = verdict(note, "reconstruction");
       const { statement, premises } =
-        verdict(note, "reconstruction")?.verdict === "PASS"
-          ? verdict(note, "reconstruction")!
+        checked?.verdict === "PASS"
+          ? checked
           : extracted[extract.indexOf(note)]!;
       return { id: note.id, statement, premises, support: note.support };
     });
@@ -195,8 +195,8 @@ export function createRoles(
       `${mathematicalCheck} Compare each original claim and proof with its extracted statement and independent proof. Check that extracted statements, definitions, and external premises faithfully match the originals, including every assumption used from support. Preserve explicit conditional claims: proving P implies Q may assume P, but does not by itself establish P or an unconditional Q. PASS requires the exact original claim and a correct independent proof, using only declared transitive support, source-checked external premises, and task-permitted background. Judge support proved in this batch conditionally: code separately requires the whole dependency chain. Reject circular or undeclared use of another batch claim. These notes may be supporting lemmas and need not solve the original task. FAIL requires a concrete defect in the original claim or argument. An extraction mismatch, leaked proof method, or a gap, error, or unapproved premise in the independent proof alone gives INCONCLUSIVE, even if it claims to be complete.`,
       {
         task: input.task,
-        support: packet(notes.filter((note) => !selectedIds.has(note.id))),
-        notes: packet(selected),
+        support: notes.filter((note) => !selectedIds.has(note.id)).map(packet),
+        notes: selected.map(packet),
         premises: originals.map(({ id, premises }) => ({
           noteId: id,
           premises,
@@ -401,8 +401,8 @@ export function createRoles(
           `${mathematicalCheck} Check all requested notes together. The verifiedSupport IDs identify established support notes. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
           {
             task: input.task,
-            support: packet(support),
-            notes: packet(selected),
+            support: support.map(packet),
+            notes: selected.map(packet),
             verifiedSupport: support
               .filter((note) => note.verified)
               .map((note) => note.id),

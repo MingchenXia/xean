@@ -14,6 +14,7 @@ const readSchema = object({
 
 /** Read from the caller's detached, frozen invocation snapshot. */
 export function noteReader(notes: Note[]): AgentTool<typeof readSchema> {
+  const byId = new Map(notes.map((note) => [note.id, note]));
   return {
     name: "read_notes",
     label: "Read notes",
@@ -22,7 +23,7 @@ export function noteReader(notes: Note[]): AgentTool<typeof readSchema> {
     parameters: readSchema,
     async execute(_id, { ids, level }) {
       const values = ids.map((id) => {
-        const note = notes.find((note) => note.id === id);
+        const note = byId.get(id);
         if (!note) throw new Error(`Unknown note: ${id}`);
         return {
           ...noteInfo(note),

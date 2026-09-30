@@ -189,7 +189,7 @@ export function project(view: CampaignView): Note[] {
   const declaration = view.task as { version?: number } | null;
   if (declaration?.version !== declarationVersion)
     throw new Error("Unsupported solver declaration; use its matching runtime");
-  const notes: Note[] = [];
+  const notes = new Map<string, Note>();
   const append = (
     prefix: string,
     drafts: Exploration["notes"],
@@ -197,10 +197,12 @@ export function project(view: CampaignView): Note[] {
     imported = false,
   ) => {
     const local = new Set(drafts.map((note) => note.id));
-    for (const [index, draft] of drafts.entries())
-      notes.push({
+    for (const [index, draft] of drafts.entries()) {
+      const id = `${prefix}/${draft.id}`;
+      if (notes.has(id)) throw new Error("Duplicate note IDs");
+      notes.set(id, {
         ...draft,
-        id: `${prefix}/${draft.id}`,
+        id,
         revision: 0,
         imported,
         support: draft.support.map((id) =>
@@ -212,6 +214,7 @@ export function project(view: CampaignView): Note[] {
         accepted: false,
         candidate: candidate && index === drafts.length - 1,
       });
+    }
   };
   // Dispatch order is not publication order. Replay worker commits and inputs
   // together so a late verifier cannot overwrite an intervening correction.
@@ -236,7 +239,7 @@ export function project(view: CampaignView): Note[] {
         append(work.id, result.notes, result.candidate);
       else if (result.kind === "verification") {
         for (const check of result.checks) {
-          const note = notes.find((note) => note.id === check.noteId);
+          const note = notes.get(check.noteId);
           if (!note)
             throw new Error(
               `Verification refers to unknown note: ${check.noteId}`,
@@ -260,7 +263,7 @@ export function project(view: CampaignView): Note[] {
     if (command.kind === "submit")
       append(`input/${command.id}`, command.notes, command.candidate, true);
     else if (command.kind === "correct") {
-      const note = notes.find((note) => note.id === command.note);
+      const note = notes.get(command.note);
       if (!note || note.revision !== command.revision)
         throw new Error(
           `Invalid correction history: ${command.note}@${command.revision}`,
@@ -272,7 +275,7 @@ export function project(view: CampaignView): Note[] {
     } else if (command.kind !== "guide")
       throw new Error("Invalid solver input");
   }
-  return refresh(notes);
+  return refresh([...notes.values()]);
 }
 
 export function noteInfo(note: Note): NoteInfo {

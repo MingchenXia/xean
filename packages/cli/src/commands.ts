@@ -16,14 +16,13 @@ import {
 import { verifyInstall } from "../../../scripts/dependencies.ts";
 import { version } from "../../../package.json";
 import {
-  campaignReport,
   ownerReport,
   controlCommand,
   requestOwner,
   serveControl,
   type OwnerCommand,
 } from "./control.ts";
-import { statusReport, usageRecord } from "xean/report";
+import { campaignReport, statusReport, usageRecord } from "xean/report";
 
 async function print(value: unknown): Promise<void> {
   await Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");

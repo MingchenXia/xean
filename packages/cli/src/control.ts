@@ -2,13 +2,9 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Campaign, Xean } from "xean";
-import {
-  isSolverCampaign,
-  project,
-  submitCommand,
-  type SolverCommand,
-} from "xean/solve";
+import type { Xean } from "xean";
+import { submitCommand, type SolverCommand } from "xean/solve";
+import { campaignReport } from "xean/report";
 
 export type OwnerCommand =
   | SolverCommand
@@ -34,17 +30,6 @@ export async function ownerReport(engine: Xean, records: boolean) {
     ? await engine.inspectWithRecords()
     : { campaign: await engine.inspect() };
   return campaignReport(snapshot);
-}
-
-export function campaignReport(snapshot: {
-  campaign: Campaign;
-  records?: Awaited<ReturnType<Xean["records"]>>;
-}) {
-  const { campaign } = snapshot;
-  return {
-    ...snapshot,
-    ...(isSolverCampaign(campaign) ? { notes: project(campaign) } : {}),
-  };
 }
 
 /** The caller resolves the database's real path before choosing its socket. */
