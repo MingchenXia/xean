@@ -613,48 +613,26 @@ a valid OAuth token through your environment or secret manager:
 }
 ```
 
-Use this profile for `explorer` to develop proofs, or for `correctness`,
-`requirements`, `statement`, `proof`, and `reconstruction` to select mathematical
-checks, and for `coordinator`. It also works as `profiles.default`. Research and independent source
-review retain their separately configured Codex backend; provider profiles do not
-silently replace the retrieval and evidence boundary.
-
-The explicit `apiKeyEnv` requires that token and prevents fallback to an API key
-or shared gateway credential. Pi sends subscription bearer authentication and
-owns native message conversion, reasoning, tool calls, cancellation, and usage.
-Xean adds no Claude-specific model adapter or subprocess. Tokens stay outside
-task/settings files and recorded request bodies.
+Use this profile in any Pi slot, including `profiles.default`. For API billing,
+set `apiKeyEnv` to `ANTHROPIC_API_KEY` instead. The explicit variable prevents
+fallback to another credential. Tokens stay outside task/settings files and
+recorded request bodies.
 
 The CLI uses Pi's in-memory credential store and does not load a saved Pi login.
-Environment tokens are operator-managed and must be renewed outside Xean.
-Library callers can supply a Pi `Models` collection with a credential store to
-use Pi's native OAuth login and automatic refresh. Xean does not manage login.
+Operators renew environment tokens outside Xean. Library callers can supply a
+Pi `Models` collection with a credential store for native OAuth login and refresh.
 
-To use the Anthropic API instead of a Claude subscription, select the same model
-through Pi's `anthropic` provider and name the API-key environment variable:
-
-```json
-{
-  "provider": "anthropic",
-  "model": "claude-opus-5-5",
-  "reasoning": "max",
-  "apiKeyEnv": "ANTHROPIC_API_KEY"
-}
-```
-
-Both configurations use Anthropic's Messages API through `@anthropic-ai/sdk`,
-not the Claude Agent SDK. The credential determines subscription versus API
-billing. Native token counts are measured when available. Pi's dollar figures
-are catalog API-rate estimates even for OAuth, not subscription charges.
-Xean's usage report omits these estimates. See the
+Pi owns bearer/API-key authentication, message conversion, tools, reasoning,
+cancellation, and usage through `@anthropic-ai/sdk`. Xean uses this model provider
+without a Claude-specific adapter or subprocess. Native token counts are retained
+when available. Xean omits Pi's catalog price estimates from usage reports because
+they do not measure subscription charges. See the
 [native subscription qualification](kernel-smoke.md#native-anthropic).
 
-External research has a separate contract. The built-in source checker,
-literature role, and independent review use the Codex CLI. It preserves exact
+Source checking, literature, and independent review use the separately configured
+Codex CLI, regardless of Pi model profiles. This research contract preserves exact
 premises, quotations, URLs, and PASS/FAIL/INCONCLUSIVE evidence rules. Library
-callers may supply a `Research` implementation to `createSolver` when they need
-another backend; Claude subscription profiles do not silently replace this
-Codex-backed research boundary.
+callers can supply a `Research` implementation to `createSolver` for another backend.
 
 ChatGPT Web connects to a user-managed browser service. Its logical contract is
 **one self-contained prompt plus model/settings → exact completed answer or error**.

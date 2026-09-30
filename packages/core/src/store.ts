@@ -242,10 +242,6 @@ export class Store {
     });
   }
 
-  entries(): Promise<EntryRecord[]> {
-    return this.mutate((tx) => tx.entries());
-  }
-
   private async scanEntries(
     tx: Tx,
     project: RecordProjection = (entry) => entry,

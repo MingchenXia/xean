@@ -67,7 +67,7 @@ test("Store snapshots entries and keeps rejected commits separate from uncertain
       await entry;
       return taskId;
     });
-    expect((await store.entries())[0]).toMatchObject({
+    expect((await store.mutate((tx) => tx.entries()))[0]).toMatchObject({
       byTaskId: taskId,
       data: { text: "original" },
     });
@@ -118,7 +118,7 @@ test("Store snapshots entries and keeps rejected commits separate from uncertain
             (tx) => (tx.state.state as { count: number }).count,
           ),
         ).toBe(1);
-        expect(await store.entries()).toHaveLength(1);
+        expect(await store.mutate((tx) => tx.entries())).toHaveLength(1);
       } else {
         expect(store.failure).toBe(failure);
         await expect(store.mutate(() => {})).rejects.toThrow();

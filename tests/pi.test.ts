@@ -109,11 +109,30 @@ test("configuration and library limits share safe integer boundaries", async () 
   );
 });
 
-function eventResponse(...events: unknown[]): Response {
+function eventResponse(
+  ...events: { type: string; [key: string]: unknown }[]
+): Response {
   return new Response(
-    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    events
+      .map(
+        (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      )
+      .join(""),
     {
       headers: { "content-type": "text/event-stream" },
+    },
+  );
+}
+
+function toolResponse(...output: object[]): Response {
+  return eventResponse(
+    ...output.flatMap((item, output_index) => [
+      { type: "response.output_item.added", output_index, item },
+      { type: "response.output_item.done", output_index, item },
+    ]),
+    {
+      type: "response.completed",
+      response: { id: "xean-tools", status: "completed", output },
     },
   );
 }
@@ -223,17 +242,23 @@ function fixtureModels(
         fetch: stubFetch,
       };
       const transcript = normalizeContext(requestContext);
-      return requestModel.api === "openai-responses"
-        ? responses(
-            requestModel as Model<"openai-responses">,
+      return requestModel.api === "anthropic-messages"
+        ? anthropic(
+            requestModel as Model<"anthropic-messages">,
             transcript,
             configured,
           )
-        : codex(
-            requestModel as Model<"openai-codex-responses">,
-            transcript,
-            configured,
-          );
+        : requestModel.api === "openai-responses"
+          ? responses(
+              requestModel as Model<"openai-responses">,
+              transcript,
+              configured,
+            )
+          : codex(
+              requestModel as Model<"openai-codex-responses">,
+              transcript,
+              configured,
+            );
     },
   };
 }
@@ -340,34 +365,8 @@ test("Anthropic distinguishes zero from unknown usage and preserves it across em
         error: { type: "api_error", message: "fixture interruption" },
       },
     ];
-    const stubFetch: typeof fetch = Object.assign(
-      async () =>
-        new Response(
-          events
-            .map(
-              (event) =>
-                `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
-            )
-            .join(""),
-          { headers: { "content-type": "text/event-stream" } },
-        ),
-      { preconnect: fetch.preconnect },
-    );
     const stream = auditedStream(
-      {
-        streamSimple(requestModel, requestContext, options) {
-          return anthropic(
-            requestModel as Model<"anthropic-messages">,
-            normalizeContext(requestContext),
-            {
-              ...options,
-              apiKey,
-              maxRetries: 0,
-              fetch: stubFetch,
-            },
-          );
-        },
-      },
+      fixtureModels(() => eventResponse(...events)),
       state.recorder,
     );
     const result = await stream(
@@ -537,26 +536,7 @@ test("Codex keeps required submission tools on a rejected-submission retry", asy
       ...tool,
       arguments: payloads.length === 1 ? '{"answer":0}' : tool.arguments,
     };
-    return eventResponse(
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: responseTool,
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: responseTool,
-      },
-      {
-        type: "response.completed",
-        response: {
-          id: "resp_submission",
-          status: "completed",
-          output: [responseTool],
-        },
-      },
-    );
+    return toolResponse(responseTool);
   }).streamSimple;
   const result = await ask(
     runtime,
@@ -607,14 +587,7 @@ test("cache routing follows identical prefixes while sessions and caller choices
   };
   const transport = fixtureModels(async (init) => {
     payloads.push(await requestBody(init));
-    return eventResponse(
-      { type: "response.output_item.added", output_index: 0, item: tool },
-      { type: "response.output_item.done", output_index: 0, item: tool },
-      {
-        type: "response.completed",
-        response: { id: "resp_cache", status: "completed", output: [tool] },
-      },
-    );
+    return toolResponse(tool);
   });
   const runtime = fixtureRuntime(() => fauxAssistantMessage(""));
   runtime.models.streamSimple = (model, input, options) => {
@@ -727,16 +700,7 @@ test("Responses preserves cache boundaries and tool definitions when reading end
             },
             tool,
           ];
-      return eventResponse(
-        ...output.flatMap((item, output_index) => [
-          { type: "response.output_item.added", output_index, item },
-          { type: "response.output_item.done", output_index, item },
-        ]),
-        {
-          type: "response.completed",
-          response: { id: "resp_reader", status: "completed", output },
-        },
-      );
+      return toolResponse(...output);
     }).streamSimple;
     expect(
       await ask(

@@ -60,9 +60,6 @@ campaigns and exports on their matching runtime. No migration is provided.
   campaign for qualification. Explicit smokes and tests verify unchanged reopening.
 - Remote observation selects the newer published snapshot or result export.
   Concurrent publishers use separate temporary files for atomic replacement.
-- Claude Code profiles now use the pinned local subscription transport, while
-  Anthropic API profiles keep separate credentials and usage accounting. The
-  Claude tool bridge and cancellation paths have deterministic coverage.
 - Explorer always starts with the task, all note IDs and summaries, and current
   feedback. Coordinator supplies only guidance. Explorer selects frozen detailed
   summaries or full notes through `read_notes`. `maxExplorerReads` defaults to four

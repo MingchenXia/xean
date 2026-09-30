@@ -335,7 +335,7 @@ export class Xean {
     }));
   }
   records(): Promise<EntryRecord[]> {
-    return this.store.entries();
+    return this.store.mutate((tx) => tx.entries());
   }
 
   /** Resolve an attempt-start entry to its exact historical callback input. */

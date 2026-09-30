@@ -55,6 +55,28 @@ const packet = (notes: VerifierInput["notes"]) =>
     detailedSummary,
     support,
   }));
+/** Corrections share one policy for standalone reconstruction and verifier batches. */
+function recordCheck<Stage extends VerificationStage>(
+  note: Note,
+  check: Check,
+  stage: Stage,
+  result: NonNullable<Check[Stage]>,
+): void {
+  check[stage] = result;
+  const correction = result.correction;
+  if (
+    result.verdict === "PASS" &&
+    correction !== undefined &&
+    (correction.text !== note.text ||
+      correction.summary !== note.summary ||
+      correction.detailedSummary !== note.detailedSummary)
+  ) {
+    Assert(noteContentSchema, correction);
+    Object.assign(note, correction);
+    check.correction = { revision: note.revision, ...correction };
+  }
+}
+
 export type CoordinationInput = {
   task: Task;
   notes: Note[];
@@ -197,7 +219,8 @@ export function createRoles(
         const { statement, premises } = statements.find(
           (other) => other.id === note.id,
         )!;
-        const reconstruction = {
+        const check: Check = { noteId: note.id };
+        recordCheck(note, check, "reconstruction", {
           ...judgment,
           statement,
           premises,
@@ -208,23 +231,8 @@ export function createRoles(
                 report: `Independent proof was incomplete. ${judgment.report}`,
               }
             : {}),
-        };
-        return {
-          noteId: note.id,
-          reconstruction,
-          ...(reconstruction.verdict === "PASS" &&
-          reconstruction.correction !== undefined &&
-          (reconstruction.correction.text !== note.text ||
-            reconstruction.correction.summary !== note.summary ||
-            reconstruction.correction.detailedSummary !== note.detailedSummary)
-            ? {
-                correction: {
-                  revision: note.revision,
-                  ...reconstruction.correction,
-                },
-              }
-            : {}),
-        };
+        });
+        return check;
       }),
     };
   };
@@ -376,18 +384,7 @@ export function createRoles(
           checks.set(note, check);
           note.checks.push(check);
         }
-        check[stage] = result;
-        if (
-          result.verdict === "PASS" &&
-          result.correction !== undefined &&
-          (result.correction.text !== note.text ||
-            result.correction.summary !== note.summary ||
-            result.correction.detailedSummary !== note.detailedSummary)
-        ) {
-          Assert(noteContentSchema, result.correction);
-          Object.assign(note, result.correction);
-          check.correction = { revision: note.revision, ...result.correction };
-        }
+        recordCheck(note, check, stage, result);
       };
       const assess = async <S extends TSchema>(
         profile: ProfileName,
