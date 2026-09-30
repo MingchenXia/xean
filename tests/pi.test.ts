@@ -1236,71 +1236,84 @@ test("native response recovery consumes new campaign admission before publicatio
   }
 });
 
-test("records the effective body before sending and awaits accounting before terminal success", async () => {
-  const requestRecorded = Promise.withResolvers<void>();
-  const settlement = Promise.withResolvers<void>();
-  const recordingReached = Promise.withResolvers<void>();
-  const settlementReached = Promise.withResolvers<void>();
-  const state = recording();
-  let sent = false;
-  let completed = false;
-  const models = fixtureModels((init) => {
-    sent = true;
-    expect(JSON.parse(String(init?.body))).toEqual(state.calls[0]?.payload);
-    return completedResponse();
-  });
-  const stream = auditedStream(models, {
-    async begin(identity) {
-      const call = await state.recorder.begin(identity);
-      return {
-        async recordRequest(payload) {
-          await call.recordRequest(payload);
-          recordingReached.resolve();
-          await requestRecorded.promise;
-        },
-        async settle(message, usage) {
-          await call.settle(message, usage);
-          settlementReached.resolve();
-          await settlement.promise;
-        },
-      };
-    },
-  });
-  const result = stream(
-    {
-      ...model,
-      api: "openai-responses",
-      baseUrl:
-        "https://user:private-url-value@xean.invalid/v1?key=private-query-value",
-      headers: { "x-fixture-auth": "private-header-value" },
-    },
-    context,
-    {
-      onPayload: (payload) => ({
-        ...(payload as object),
-        metadata: { changed: true },
-      }),
-    },
-  )
-    .result()
-    .then((value) => {
-      completed = true;
-      return value;
+test.each(["none", "settlement", "delivery"])(
+  "records requests and joins accounting before delivery (cancellation: %s)",
+  async (cancellation) => {
+    const controller = new AbortController();
+    const requestRecorded = Promise.withResolvers<void>();
+    const settlement = Promise.withResolvers<void>();
+    const recordingReached = Promise.withResolvers<void>();
+    const settlementReached = Promise.withResolvers<void>();
+    const state = recording();
+    let sent = false;
+    let completed = false;
+    const models = fixtureModels((init) => {
+      sent = true;
+      expect(JSON.parse(String(init?.body))).toEqual(state.calls[0]?.payload);
+      return completedResponse();
     });
-  await recordingReached.promise;
-  expect(sent).toBe(false);
-  expect(state.calls[0]?.payload).toMatchObject({
-    metadata: { changed: true },
-  });
-  expect(JSON.stringify(state.calls)).not.toContain("private-");
-  requestRecorded.resolve();
-  await settlementReached.promise;
-  expect(sent).toBe(true);
-  expect(completed).toBe(false);
-  settlement.resolve();
-  expect((await result).stopReason).toBe("stop");
-  expect(state.calls[0]?.usage?.totalTokens).toBe(5);
-});
+    const stream = auditedStream(models, {
+      async begin(identity) {
+        const call = await state.recorder.begin(identity);
+        return {
+          async recordRequest(payload) {
+            await call.recordRequest(payload);
+            recordingReached.resolve();
+            await requestRecorded.promise;
+          },
+          async settle(message, usage) {
+            await call.settle(message, usage);
+            settlementReached.resolve();
+            await settlement.promise;
+            if (cancellation === "delivery")
+              queueMicrotask(() => queueMicrotask(() => controller.abort()));
+          },
+        };
+      },
+    });
+    const result = stream(
+      {
+        ...model,
+        api: "openai-responses",
+        baseUrl:
+          "https://user:private-url-value@xean.invalid/v1?key=private-query-value",
+        headers: { "x-fixture-auth": "private-header-value" },
+      },
+      context,
+      {
+        signal: controller.signal,
+        onPayload: (payload) => ({
+          ...(payload as object),
+          metadata: { changed: true },
+        }),
+      },
+    )
+      .result()
+      .then((value) => {
+        completed = true;
+        return value;
+      });
+    await recordingReached.promise;
+    expect(sent).toBe(false);
+    expect(state.calls[0]?.payload).toMatchObject({
+      metadata: { changed: true },
+    });
+    expect(JSON.stringify(state.calls)).not.toContain("private-");
+    requestRecorded.resolve();
+    await settlementReached.promise;
+    expect(sent).toBe(true);
+    expect(completed).toBe(false);
+    if (cancellation === "settlement") controller.abort();
+    settlement.resolve();
+    const message = await result;
+    expect(message.stopReason).toBe(
+      cancellation === "none" ? "stop" : "aborted",
+    );
+    expect(reportedPiUsage(message)?.totalTokens).toBe(5);
+    expect(state.calls[0]?.message?.stopReason).toBe("stop");
+    expect(state.calls[0]?.usage?.totalTokens).toBe(5);
+  },
+);
 
 test("failed request recording prevents dispatch and preserves unknown usage", async () => {
   let sent = false;

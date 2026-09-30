@@ -35,7 +35,7 @@ The existing `pi-agent-core.AgentHarness` is a different API.
 | Provider recovery          | Pi `retryAssistantCall` owns classification, backoff, and bounds. Xean records each admitted call and selectively retains completed reasoning.                                                        |
 | Transactions               | Native Session owns serialization, document caching, draft preparation, rollback, atomic storage, and adoption.                                                                                       |
 | Record identities          | Native `TaskId`, `EntryId`, `DocumentId`, and `Seq` identify tasks, entries, documents, and commits. Task creation returns the native ID.                                                             |
-| Storage                    | Pi's Node SQLite adapter supplies WAL, statements, transactions, and records on locked Bun. Xean adds campaign ownership and read snapshots.                                                          |
+| Storage                    | Pi's SQLite adapter supplies statements, transactions, and records over Bun's native connection. Xean configures persistent WAL, ownership, and read snapshots.                                       |
 | Cancellation and telemetry | Harness owns invocation cancellation and joining; Chord contexts carry the signal. Pi's telemetry context carries attempt spans.                                                                      |
 | Scheduling and publication | Harness dispatches admitted tasks and recovers interrupted work. Xean admission policy enforces concurrency, Coordinator serialization, and limits. Xean publishes each whole result with its signal. |
 | Mathematical state         | Xean owns dependency closure, verification stages, corrections, evidence binding, and exact acceptance. Notes derive from immutable results and input receipts.                                       |
@@ -104,6 +104,15 @@ runs migrations, so the read-only patch skips writes, validates the schema, and
 rejects mutation and ID allocation. Reader cleanup avoids a writer checkpoint.
 SQL remains the backend direction.
 
+The adapter patch accepts a structural synchronous connection and normalizes
+Bun's missing-row `null` to Pi's `undefined`. Pi retains transaction rollback and
+rejection of asynchronous callbacks. Bun's public `fileControl` enables
+`SQLITE_FCNTL_PERSIST_WAL` on writers. Without retained WAL sidecars, the locked
+runtime can fail read-only reopening with `SQLITE_CANTOPEN` after writer close.
+The Node connection API does not expose this setting. Native `close(true)`
+finalizes prepared statements before ownership is released. Reassess this patch
+when Pi supports Bun connections or upstream provides the required WAL control.
+
 Native paging bounds each read, but consumers must also bound retained data.
 Status projects call metadata per page. Exports reverse Pi's newest-first scans
 to retain chronological order. Native scans lack entry-kind and field projection.
@@ -122,7 +131,9 @@ idempotency-comparison values consistent.
 ## Provider integration
 
 `auditedStream` uses Pi's awaited `onPayload` hook to record the effective request
-before dispatch, then settles accounting before terminal delivery. Admission and
+before dispatch, then settles accounting before terminal delivery. Cancellation
+during settlement preserves the recorded provider outcome and usage while
+returning an aborted stream. Admission and
 accounting failures remain terminal. `onResponse` runs at HTTP headers and does
 not cover Codex WebSockets. Telemetry cannot replace durable admission or
 settlement. Context capacity belongs in `prepareRequest`, since Pi's
@@ -186,6 +197,17 @@ using the kernel's persisted attempt ordinal. The adapter contains no role-speci
 are structured proposals executed locally by Pi, including submission. The
 transport fixtures cover multiple tools, multiple calls, validation, result
 feedback, and cancellation; they do not constitute live Pro qualification.
+The bridge consumes text content, so prior calls and tool results are serialized
+with their IDs, names, arguments, and error states before transport conversion.
+Each settlement retains the original reply in `chatGptWeb.text` even if envelope
+validation fails. Only explicit native `served_model` metadata establishes served
+identity. A mismatch remains recorded without rejecting a valid reply.
+Browser model selection and reasoning
+effort remain controlled by the bridge's browser session.
+The official [Workspace Agents API](https://developers.openai.com/workspace-agents/trigger-runs)
+can trigger a workspace agent and report its status, but cannot currently retrieve its
+answer. It therefore cannot supply Pi model responses. Its workspace-scoped
+authentication does not establish personal Pro availability.
 
 Claude subscription transport uses `pi-claude-code-provider` pinned to `0.5.0`
 ([source](https://github.com/chem/pi-claude-code-provider/tree/a87b98539f57945b8a6df8c26db4cdcf3ed38a7a)).

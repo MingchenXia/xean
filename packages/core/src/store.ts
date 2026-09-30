@@ -178,8 +178,6 @@ export class Store {
   }
 
   get harness(): Harness {
-    if (!("resume" in this.session))
-      throw new Error("Inspection has no task runtime");
     return this.session as Harness;
   }
 
@@ -189,8 +187,7 @@ export class Store {
       tasks: [...this.tasks.values()],
       writeTask: (task) => tx.setTask(task),
       newTask: (kind, input) => {
-        const task = this.registry?.snapshot().task(kind);
-        if (!task) throw new Error(`Unregistered task ${kind}`);
+        const task = this.registry!.snapshot().task(kind);
         return tx.createTask(task as Definition, json(input), {
           conversationId: ROOT_CONVERSATION_ID,
         });

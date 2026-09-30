@@ -652,13 +652,6 @@ export class Xean {
     task: PiTask,
     decision: Decision,
   ): Promise<void> {
-    if (
-      !decision ||
-      typeof decision !== "object" ||
-      !("state" in decision) ||
-      (decision.dispatch !== undefined && !Array.isArray(decision.dispatch))
-    )
-      throw new Error("Invalid Coordinator decision");
     const requests = decision.dispatch ?? [];
     const existing = new Map(
       tx.tasks
@@ -667,14 +660,6 @@ export class Xean {
     );
     const admitted: WorkRequest[] = [];
     for (const request of requests) {
-      if (
-        !request ||
-        typeof request.id !== "string" ||
-        !request.id ||
-        typeof request.role !== "string" ||
-        !("input" in request)
-      )
-        throw new Error("Invalid work request");
       const prior = existing.get(request.id);
       if (prior) {
         if (!isDeepStrictEqual(prior, request))

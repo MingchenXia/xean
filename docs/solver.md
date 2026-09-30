@@ -135,6 +135,9 @@ continue the task. Every ordinary note contains `summary` for the index,
 `detailedSummary` for its actual claims or findings, decisive conditions, bounds,
 and unresolved gaps, and authoritative full `text` with arguments and evidence.
 Both summaries preserve conditionality, negative conclusions, and limitations.
+Mathematical verification receives both summaries alongside the full text and
+checks their consistency. The independent prover still receives only extracted
+statements and permitted premises.
 Detailed summaries may explain proof methods. Roles produce all three in their
 normal submission, without a separate summarization call or fixed length ratio.
 Verification receives full notes and dependencies. Summary views change neither
@@ -512,6 +515,13 @@ that history when choosing work. The default Coordinator waits for active and
 queued work before planning another group, so guidance does not interrupt
 workers already running.
 
+For initial guidance, run `guide` after `init` and before `run`, or call
+`submitCommand` before the library's first `run`. Later guidance takes effect
+when Coordinator next plans work. Each dispatched Explorer retains its exact
+guidance in its frozen input, including on recovery. Guidance can change the
+approach or scheduling among available roles while the exact task and acceptance
+checks remain fixed.
+
 `CORRECTION.json` names a note and its current revision:
 
 ```json
@@ -583,7 +593,9 @@ with a complete `{provider, model, reasoning?}` profile. Omitted reasoning uses
 `ProfileName` and `profileNames` name these model-configuration slots. The
 Verifier uses several profiles within one role invocation.
 Optional fields are `baseUrl`, `apiKeyEnv`, and `transport`. Endpoint URLs cannot
-contain credentials, query parameters, or fragments. The CLI supports
+contain credentials, query parameters, or fragments. An explicit `apiKeyEnv`
+must name a present, nonblank variable when the runtime is constructed.
+The CLI supports
 Pi's OpenAI, Codex, Anthropic, ChatGPT Web, and Claude Code providers. Library callers supply their own
 native Pi `Models` collection and model objects for other providers.
 Explicit Codex endpoints on `chatgpt.com` and its subdomains retain native
@@ -693,7 +705,14 @@ message; `stream: true` is compatibility framing, not token streaming. Xean
 adds the tool schema and envelope to the prompt, removes native tool fields
 before dispatch, and validates the returned JSON before emitting Pi tool calls.
 The bridge's model picker controls the served model; the requested model name
-is retained as provenance and does not switch that picker. Browser token counts
+is retained as provenance and does not switch that picker. The bridge also does
+not enforce the requested reasoning effort. Explicit `served_model` metadata is
+retained even when it differs from the requested model. Valid replies remain
+usable. When native model metadata is absent, served identity
+remains unknown. Settlements retain the original response text even for invalid
+or truncated envelopes. Prior tool calls and results carry their names, IDs,
+arguments, and error states as text so the bridge can preserve their relationship.
+Browser token counts
 remain unavailable and recorded measured usage is null. Automatic replay is
 disabled because a disconnected request may already be running.
 

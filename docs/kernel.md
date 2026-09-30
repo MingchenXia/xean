@@ -19,6 +19,8 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
 Pi Harness executes tasks through the [local controls](pi-alignment.md#durable-integration)
 that let Xean supply admission and publication policy. The kernel introduces no workflow language or plugin sandbox.
 Roles and Coordinator are trusted implementations.
+Their return shapes follow the TypeScript contract. Xean checks durable JSON,
+work identity, registered roles, and acceptance when committing results.
 
 Core exposes the kernel, solver, provider integration, and shared reports through
 public library exports. The CLI and observer are optional applications with
@@ -305,8 +307,8 @@ After a process crash, a started call may have no settlement record.
 
 ## SQLite ownership and durability
 
-`openXeanStorage(path)` uses Pi's `NodeSqliteDatabase` over Bun's `node:sqlite`
-implementation and returns Pi's `SqliteStorage`. Pi owns the database
+`openXeanStorage(path)` uses Pi's SQLite adapter over Bun's native database
+connection and returns Pi's `SqliteStorage`. Pi owns the database
 schema and its migrations. Xean uses native task records for work and pending
 signals, a session document for campaign state, and entries for operational
 history.
@@ -337,13 +339,17 @@ adds Harness policy hooks, pause, and quiescence, exposes native task-record
 mutation for atomic domain transitions, and retains entry attribution. The
 [alignment notes](pi-alignment.md#durable-integration) describe these local extensions.
 
-Pi configures WAL journaling; Xean selects `synchronous = FULL`. Readers hold
+Xean configures WAL journaling, `synchronous = FULL`, and persistent WAL sidecars
+so read-only inspection works after the writer closes. Pi supplies statements,
+transactions, and writer checkpoints. Native close finalizes prepared statements
+before releasing the connection. Readers hold
 consistent SQLite snapshots while the owner continues committing work. A separate
 SQLite connection holds an exclusive transaction on `<canonical-database-path>.lock`
 before Pi storage opens, so another owner cannot allocate IDs or schedule work
 concurrently. That file contains no campaign state. Keep it in place: closing the
 owner or terminating its process releases the operating-system lock automatically.
-Symlinks resolve to the same ownership lock; hard-linked databases are rejected.
+Symlinks resolve to the same ownership lock. A database symlink must point to an
+existing target. Hard-linked databases are rejected.
 
 `await inspectCampaign(path, records = true)` opens a read-only connection and returns
 `{campaign, records}` from one SQLite read transaction. It uses the same campaign
@@ -369,8 +375,9 @@ Lifecycle and solver input commands use the running owner's local Unix socket;
 without an owner, those commands acquire ownership. Opening an interrupted
 campaign for execution or mutation can write recovery records; reading it cannot.
 `:memory:` is supported for isolated runs and tests without a sidecar lock.
-Live backups must include SQLite's committed WAL data; copying the main database
-file alone is insufficient.
+Keep the database and retained `-wal` and `-shm` files together for read-only
+inspection. Live backups must include SQLite's committed WAL data. Copying the
+main database file alone is insufficient.
 
 Pi retains complete Coordinator decisions. Xean drops their result payloads from
 its resident task map after commit and on reopen, keeping signal inputs, worker

@@ -74,12 +74,6 @@ export function validateNotes(
   );
   const local = new Set<string>();
   for (const note of drafts) {
-    if (
-      !note.text.trim() ||
-      !note.summary.trim() ||
-      !note.detailedSummary.trim()
-    )
-      throw new Error("Note text and summaries must not be blank");
     if (local.has(note.id)) throw new Error(`Duplicate new note: ${note.id}`);
     if (new Set(note.support).size !== note.support.length)
       throw new Error(`Duplicate support for note: ${note.id}`);
@@ -141,7 +135,7 @@ export function sourceEvidence(
     )
       continue;
     for (const { id, statement, url, quote } of source.passages)
-      if (id && statement) evidence.set(id, { id, statement, url, quote });
+      evidence.set(id, { id, statement, url, quote });
   }
   return [...evidence.values()];
 }

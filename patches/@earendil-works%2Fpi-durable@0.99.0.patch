@@ -503,3 +503,44 @@ index 15a13e1..a76ed7f 100644
 -//# sourceMappingURL=types.d.ts.map
 \ No newline at end of file
 +//# sourceMappingURL=types.d.ts.map
+diff --git a/dist/storage/sqlite/node.d.ts b/dist/storage/sqlite/node.d.ts
+--- a/dist/storage/sqlite/node.d.ts
++++ b/dist/storage/sqlite/node.d.ts
+@@ -1,6 +1,14 @@
+-import { DatabaseSync } from "node:sqlite";
+-import type { SqliteDatabase, SqliteStatement } from "./database.ts";
++import type { SqliteDatabase, SqliteStatement, SqliteValue } from "./database.ts";
+ import { SqliteStorage } from "./storage.ts";
++type SqliteConnection = {
++    exec(sql: string): unknown;
++    prepare(sql: string): {
++        run(...params: SqliteValue[]): unknown;
++        get(...params: SqliteValue[]): unknown;
++        all(...params: SqliteValue[]): unknown[];
++    };
++    close(): void;
++};
+ /** Node SQLite connection settings for a durable storage file. */
+ export type NodeSqliteStorageOptions = {
+     /** SQLite WAL auto-checkpoint threshold. SQLite and this adapter default to 1,000 pages; 0 disables it. */
+@@ -12,7 +20,7 @@
+ export declare class NodeSqliteDatabase implements SqliteDatabase {
+     private readonly database;
+     private closed;
+-    constructor(database: DatabaseSync);
++    constructor(database: SqliteConnection);
+     exec(sql: string): void;
+     prepare(sql: string): SqliteStatement;
+     transaction<T>(callback: () => T): T;
+diff --git a/dist/storage/sqlite/node.js b/dist/storage/sqlite/node.js
+--- a/dist/storage/sqlite/node.js
++++ b/dist/storage/sqlite/node.js
+@@ -13,7 +13,7 @@
+         this.statement.run(...params);
+     }
+     get(...params) {
+-        return this.statement.get(...params);
++        return this.statement.get(...params) ?? undefined;
+     }
+     all(...params) {
+         return this.statement.all(...params);

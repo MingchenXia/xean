@@ -1,8 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   createProvider,
   getDeclaredTools,
-  normalizeContext,
   resolveTranscript,
   Type,
   type AssistantMessageEvent,
@@ -95,11 +94,43 @@ function stream(
           { additionalProperties: false },
         )
       : undefined;
-    const input = normalizeContext({
-      messages: normalized.messages.map((m) =>
-        m.role === "system" ? { ...m, toolsAdded: [], toolsRemoved: [] } : m,
-      ),
-    });
+    const input: TranscriptContext = {
+      ...normalized,
+      messages: normalized.messages.map((m) => {
+        if (m.role === "system")
+          return { ...m, toolsAdded: [], toolsRemoved: [] };
+        // The bridge reads only message.content and labels every non-user
+        // turn Assistant. Carry calls and results in text before Pi conversion.
+        if (m.role === "toolResult")
+          return {
+            role: "user" as const,
+            timestamp: m.timestamp,
+            content: `Tool result: ${JSON.stringify({
+              id: m.toolCallId,
+              name: m.toolName,
+              isError: m.isError,
+              content: m.content,
+            })}`,
+          };
+        if (m.role === "assistant")
+          return {
+            ...m,
+            content: m.content.map((part) =>
+              part.type === "toolCall"
+                ? {
+                    type: "text" as const,
+                    text: `Tool call: ${JSON.stringify({
+                      id: part.id,
+                      name: part.name,
+                      arguments: part.arguments,
+                    })}`,
+                  }
+                : part,
+            ),
+          };
+        return m;
+      }),
+    };
     if (output)
       input.messages = [
         ...input.messages,
@@ -109,10 +140,7 @@ function stream(
           content: `Return exactly one JSON object matching this schema: ${JSON.stringify(output)}. Use calls for the caller-owned tools you need, with optional accompanying text. Use an empty calls array for a final text answer. The caller executes these tools and supplies their results before your next response. Do not substitute ChatGPT-native tools for these functions.`,
         },
       ];
-    const threadId = createHash("sha256")
-      .update(options.sessionId ?? randomUUID())
-      .digest("hex");
-    const turnId = randomUUID();
+    let servedModel: string | undefined;
     const { streamSimple } =
       await import("@earendil-works/pi-ai/api/openai-completions");
     const source = streamSimple(
@@ -139,16 +167,6 @@ function stream(
         maxRetries: 0,
         onPayload: async (payload) => {
           const body = payload as Record<string, any>;
-          body.client_metadata = {
-            "x-codex-turn-metadata": JSON.stringify({
-              thread_id: threadId,
-              turn_id: turnId,
-            }),
-          };
-          const user = body.messages.findLast(
-            (item: any) => item.role === "user",
-          );
-          if (!user) throw new Error("ChatGPT Web requires a user message");
           // The browser bridge only accepts ordinary Chat Completions fields.
           // Native tool declarations would be ignored by the bridge and can
           // mislead callers into believing the model produced a native call.
@@ -159,7 +177,14 @@ function stream(
           return replacement === undefined ? body : replacement;
         },
         onResponse: (response) => options.onResponse?.(response, model),
-        onProviderStreamEvent: options.onProviderStreamEvent,
+        onProviderStreamEvent: async (event) => {
+          // Only the bridge's explicit served_model comes from native reply
+          // metadata; model may instead be a generic or requested alias.
+          const served = (event as { served_model?: unknown })?.served_model;
+          if (typeof served === "string" && served && served !== "chatgpt-web")
+            servedModel ??= served;
+          await options.onProviderStreamEvent?.(event, model);
+        },
       },
     );
     return (async function* (): AsyncGenerator<AssistantMessageEvent> {
@@ -168,11 +193,18 @@ function stream(
         /* Final native content is authoritative. */
       }
       const completed = await source.result();
+      const finalAnswer = completed.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("");
       const message = {
         ...completed,
         api: model.api,
         content: [] as typeof completed.content,
         usageReported: false,
+        // Preserve the original reply even when its envelope is malformed or
+        // incomplete, without exposing it as executable agent-loop content.
+        chatGptWeb: { text: finalAnswer, servedModel: servedModel ?? null },
       };
       try {
         options.signal?.throwIfAborted();
@@ -181,10 +213,6 @@ function stream(
             completed.errorMessage ??
               `ChatGPT Web stopped with ${completed.stopReason}`,
           );
-        const finalAnswer = completed.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("");
         if (!finalAnswer)
           throw new Error("ChatGPT Web returned no text answer");
         const selection = output ? JSON.parse(finalAnswer) : undefined;

@@ -29,8 +29,9 @@ qualifying a new candidate.
 
 FULL SQLite synchronization is configured and process-crash recovery is tested.
 Power-loss durability has not been tested. Installation receipts fingerprint
-dependency inputs and Bun versions, but do not attest arbitrary manual edits
-inside `node_modules`. Use a clean setup for release qualification.
+dependency inputs, Bun version, operating system, and architecture, but do not
+attest arbitrary manual edits inside `node_modules`. Use a clean setup for
+distribution qualification.
 
 ## Live provider checks
 
@@ -56,7 +57,7 @@ in the [solver guide](solver.md#configuration-and-functions).
 
 Retain source revision, Bun version, frozen task/settings, campaign, result,
 and stderr under ignored `runs/`. A snapshot left by a failed assertion is not
-a successful smoke. Record provider limitations in the release notes.
+a successful smoke. Record provider limitations with the source revision.
 
 Historical provider, benchmark, and memory measurements remain in Git and their
 original local run artifacts. Those private artifacts are not part of the source

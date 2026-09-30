@@ -1,15 +1,13 @@
-import { realpathSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Database, constants } from "bun:sqlite";
 import type { Storage } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import {
-  NodeSqliteDatabase,
-  openNodeSqliteDatabase,
-} from "@earendil-works/pi-durable/storage/sqlite/node";
+import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 
-/** Pi supplies WAL, statements, transactions, and records; Xean owns the campaign. */
+/** Pi supplies statements, transactions, and records; Xean configures owned connections. */
 export async function openXeanStorage(
   path: string,
   options: Parameters<typeof SqliteStorage.open>[1] = {},
@@ -21,6 +19,10 @@ export async function openXeanStorage(
     if (!readOnly && path !== ":memory:") {
       await mkdir(dirname(path), { recursive: true });
       const file = statSync(path, { throwIfNoEntry: false });
+      if (!file && lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink())
+        throw new Error(
+          "Campaign database symlink must have an existing target",
+        );
       if (file && file.nlink !== 1)
         throw new Error("Campaign databases must not have hard links");
       path = file
@@ -32,15 +34,33 @@ export async function openXeanStorage(
       );
       owner.exec("BEGIN EXCLUSIVE");
     }
-    let database: NodeSqliteDatabase;
+    const native = new Database(path, {
+      readonly: readOnly,
+      create: !readOnly,
+      strict: true,
+    });
+    const database = new NodeSqliteDatabase({
+      exec: (sql) => native.exec(sql),
+      prepare: (sql) => native.prepare(sql),
+      close: () => native.close(true),
+    });
+    cleanup.defer(
+      readOnly ? () => native.close(true) : database.close.bind(database),
+    );
     if (readOnly) {
-      const native = cleanup.use(new DatabaseSync(path, { readOnly: true }));
-      database = new NodeSqliteDatabase(native);
       database.exec("BEGIN");
     } else {
-      database = await openNodeSqliteDatabase(path, { busyTimeoutMs: 0 });
-      cleanup.defer(database.close.bind(database));
-      database.exec("PRAGMA synchronous = FULL");
+      // Read-only WAL connections need these files after the owner closes.
+      if (
+        path !== ":memory:" &&
+        native.fileControl(constants.SQLITE_FCNTL_PERSIST_WAL, 1) !== 0
+      )
+        throw new Error(
+          "SQLite cannot preserve WAL files for read-only inspection",
+        );
+      database.exec(
+        "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 0",
+      );
     }
     // Readers close without a writer checkpoint; owners release their lock last.
     database.close = () => cleanup.dispose();

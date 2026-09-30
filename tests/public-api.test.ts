@@ -2,57 +2,98 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Xean, inspectCampaign, openXeanStorage } from "xean";
-import { createSolver, project, type Plan, type Task } from "xean/solve";
+import { Xean, openXeanStorage } from "xean";
+import {
+  createSolver,
+  piRuntime,
+  readSettings,
+  type Plan,
+  type Task,
+} from "xean/solve";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fixtureRuntime } from "./fixtures/pi.ts";
 
-test("direct library campaigns reject historical bare tasks without changing their records", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "xean-library-format-"));
+test("direct browser Explorer quota survives reopen with a replaced planner", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-browser-quota-"));
   const path = join(directory, "campaign.sqlite");
-  const task = { problem: "Prove P", completionCriteria: "Complete proof" };
+  let calls = 0;
+  const setup = () => {
+    const runtime = fixtureRuntime(() => {
+      calls++;
+      return fauxAssistantMessage(
+        [fauxToolCall("submit_result", { notes: [], candidate: false })],
+        { stopReason: "toolUse" },
+      );
+    });
+    runtime.profiles.explorer.model.provider = "codex-chatgpt-web";
+    const solver = createSolver(
+      { problem: "P", completionCriteria: "Prove P" },
+      () => runtime,
+    );
+    solver.functions.coordinator = async () => ({
+      work: [
+        { kind: "explorer", guidance: "Explore" },
+        { kind: "explorer", guidance: "Try another approach" },
+      ],
+    });
+    return solver;
+  };
+  let engine: Xean | undefined;
   try {
-    const historical = await Xean.open(await openXeanStorage(path), {
-      task,
-      roles: [],
-      coordinator: {
-        name: "xean.coordinator",
-        run: () => ({ state: null }),
-      },
-    });
-    try {
-      await historical.input({
-        kind: "submit",
-        id: "legacy",
-        candidate: false,
-        notes: [{ id: "n1", summary: "P", text: "Proof of P", support: [] }],
-      });
-    } finally {
-      await historical.close();
-    }
-    const before = await inspectCampaign(path);
-    let runtimeLoads = 0;
-    const solver = createSolver(task, () => {
-      runtimeLoads++;
-      throw new Error("Historical campaign must not initialize models");
-    });
-    const storage = await openXeanStorage(path);
-    const checks = await Promise.allSettled([
-      Promise.resolve().then(() => project(before.campaign)),
-      Xean.open(storage, solver).then((engine) => engine.close()),
-    ]);
-    expect(await inspectCampaign(path)).toEqual(before);
-    expect(runtimeLoads).toBe(0);
-    expect(checks).toMatchObject([
-      {
-        status: "rejected",
-        reason: { message: expect.stringContaining("Unsupported solver") },
-      },
-      {
-        status: "rejected",
-        reason: { message: expect.stringContaining("Task differs") },
-      },
-    ]);
+    engine = await Xean.open(await openXeanStorage(path), setup());
+    const first = await engine.run();
+    expect(first.work).toHaveLength(1);
+    await engine.close();
+    engine = await Xean.open(await openXeanStorage(path), setup());
+    await engine.input({ kind: "guide", id: "again", text: "Continue" });
+    const second = await engine.run();
+    expect(calls).toBe(1);
+    expect(second.work).toEqual(first.work);
   } finally {
+    await engine?.close();
     await rm(directory, { recursive: true });
+  }
+});
+
+test("runtime construction validates profiles and never falls back from an explicit credential environment", () => {
+  const browser = {
+    provider: "codex-chatgpt-web" as const,
+    model: "chatgpt-web/gpt-6-pro",
+  };
+  expect(() => piRuntime({ profiles: { default: browser } })).toThrow(
+    "profiles.explorer",
+  );
+  expect(() =>
+    piRuntime({
+      profiles: {
+        default: {
+          provider: "openai",
+          model: "gpt-6-astra",
+          baseUrl: "https://example.invalid/v1?credential=fixture",
+        },
+      },
+    }),
+  ).toThrow("baseUrl");
+  const apiKeyEnv = "XEAN_TEST_MISSING_PROFILE_CREDENTIAL";
+  const previous = process.env[apiKeyEnv];
+  try {
+    const settings = readSettings({
+      profiles: {
+        default: { provider: "openai", model: "gpt-6-astra", apiKeyEnv },
+      },
+    });
+    for (const value of [undefined, "", "   "]) {
+      if (value === undefined) delete process.env[apiKeyEnv];
+      else process.env[apiKeyEnv] = value;
+      expect(() => piRuntime(settings, "unrelated-key")).toThrow(apiKeyEnv);
+    }
+    process.env[apiKeyEnv] = "selected-key";
+    expect(
+      piRuntime(settings, "unrelated-key").profiles.explorer.options?.apiKey,
+    ).toBe("selected-key");
+  } finally {
+    if (previous === undefined) delete process.env[apiKeyEnv];
+    else process.env[apiKeyEnv] = previous;
   }
 });
 

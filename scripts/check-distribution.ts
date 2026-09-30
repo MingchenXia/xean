@@ -23,7 +23,7 @@ for await (const file of new Bun.Glob("packages/*/package.json").scan(root)) {
   assert.equal(
     workspace.version,
     manifest.version,
-    `${file}: release version drift`,
+    `${file}: workspace version drift`,
   );
   workspaces.set(workspace.name, {
     ...workspace,
@@ -70,6 +70,11 @@ for (const [name, workspace] of workspaces) {
     }
   }
 }
+assert.deepEqual(
+  Object.values(manifest.patchedDependencies).sort(),
+  provenance.patches.map(({ path }) => path).sort(),
+  "Enabled patches must match the recorded dependency provenance",
+);
 for (const record of [...provenance.artifacts, ...provenance.patches]) {
   const bytes = await readFile(resolve(root, record.path));
   assert.equal(

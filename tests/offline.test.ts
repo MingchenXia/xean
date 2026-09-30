@@ -64,8 +64,8 @@ test("closed-book runner honors omitted literature defaults and reopens without 
         profiles: { default: { provider: "openai", model: "unavailable" } },
       }),
     );
-    const run = async () => {
-      const result = Bun.spawnSync(
+    const invoke = () =>
+      Bun.spawnSync(
         [
           process.execPath,
           "--no-install",
@@ -78,6 +78,8 @@ test("closed-book runner honors omitted literature defaults and reopens without 
         ],
         { timeout: 5000, env: { ...process.env, OPENAI_API_KEY: "" } },
       );
+    const run = async () => {
+      const result = invoke();
       expect(result.stderr.toString()).toBe("");
       expect(result.exitCode).toBe(0);
       return {
@@ -99,6 +101,24 @@ test("closed-book runner honors omitted literature defaults and reopens without 
     expect(reopened.records).toEqual(first.records);
     expect(await Bun.file(join(directory, "observation.json")).exists()).toBe(
       false,
+    );
+    // Browser-native retrieval cannot be disabled by the offline role tools.
+    await writeFile(
+      join(directory, "settings.json"),
+      JSON.stringify({
+        profiles: {
+          default: { provider: "openai", model: "unavailable" },
+          explorer: {
+            provider: "codex-chatgpt-web",
+            model: "chatgpt-web/gpt-6-pro",
+          },
+        },
+      }),
+    );
+    const rejected = invoke();
+    expect(rejected.exitCode).not.toBe(0);
+    expect(rejected.stderr.toString()).toContain(
+      "ChatGPT Web cannot enforce closed-book execution",
     );
   } finally {
     await rm(directory, { recursive: true });

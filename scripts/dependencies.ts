@@ -22,7 +22,9 @@ async function fingerprint(root: string): Promise<string> {
     }
     if (!found) throw new Error(`Missing workspace manifest: ${pattern}`);
   }
-  const hash = createHash("sha256").update(Bun.version);
+  const hash = createHash("sha256").update(
+    `${Bun.version}\0${process.platform}\0${process.arch}\0`,
+  );
   for (const file of [
     "package.json",
     "bun.lock",

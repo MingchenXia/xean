@@ -126,6 +126,7 @@ export function readSettings(value: unknown): Settings {
 }
 
 export function piRuntime(settings: Settings, key?: string): PiRuntime {
+  settings = readSettings(settings);
   const models = createModels();
   models.setProvider(openaiProvider());
   models.setProvider(anthropicProvider());
@@ -138,6 +139,13 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
   const profiles = Object.fromEntries(
     profileNames.map((name) => {
       const configured = settings.profiles[name] ?? settings.profiles.default;
+      const configuredKey = configured.apiKeyEnv
+        ? process.env[configured.apiKeyEnv]
+        : undefined;
+      if (configured.apiKeyEnv && !configuredKey?.trim())
+        throw new Error(
+          `Missing provider credential environment variable: ${configured.apiKeyEnv}`,
+        );
       const base = models.getModel(configured.provider, configured.model);
       if (!base)
         throw new Error(
@@ -156,7 +164,7 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
         reasoning: configured.reasoning ?? defaultReasoning,
         transport: configured.transport,
         apiKey: configured.apiKeyEnv
-          ? process.env[configured.apiKeyEnv]
+          ? configuredKey
           : configured.provider === chatGptWebProviderId ||
               configured.provider === claudeCodeProviderId
             ? undefined

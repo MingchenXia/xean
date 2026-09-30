@@ -81,6 +81,7 @@ export function createSolver(
     literature: async (...args) => load().literature(...args),
     review: async (...args) => load().review(...args),
   };
+  const builtInExplorer = functions.explorer;
   const roles: Role[] = (["explorer", "verifier", "literature"] as const).map(
     (name) => ({
       name: `xean.${name}`,
@@ -116,10 +117,17 @@ export function createSolver(
           .map(({ id, role, error }) => ({ id, role, error })),
       };
       const plan = await functions.coordinator(input, execution, context);
+      // A replaced planner need not initialize Pi. Resolve the built-in
+      // Explorer's quota policy before dispatch, including after reopening.
+      if (
+        functions.explorer === builtInExplorer &&
+        plan.work.some((request) => request.kind === "explorer")
+      )
+        load();
       const common = { task, notes: notes.map(noteInfo) };
       // Explorer workers may run alongside the single verification batch.
       const targets = verificationTargets(plan);
-      const explorerUsed =
+      let explorerUsed =
         options.chatGptSingleShot === true &&
         view.work.some((work) => work.role === "xean.explorer");
       const dispatch: WorkRequest[] = [];
@@ -127,6 +135,7 @@ export function createSolver(
         if (request.kind === "verifier") continue;
         if (request.kind === "explorer") {
           if (explorerUsed) continue;
+          explorerUsed = options.chatGptSingleShot === true;
           dispatch.push({
             id: `w${signal.id}-${dispatch.length + 1}`,
             role: "xean.explorer",

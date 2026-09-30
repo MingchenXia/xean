@@ -28,15 +28,16 @@ canonical terminology. Reuse an existing term before defining and justifying a n
 - Pin matching Pi packages to one tested commit with verified artifact hashes
   and frozen model data. Never use floating dependencies. Every patch needs a
   concrete reason and reassessment when upgrading.
-- Choose the simplest correct design. Stable releases follow semantic versioning:
-  breaking public APIs, CLI contracts, or persisted campaign formats require a
-  major release. Keep historical campaigns on their matching release. Add no
-  legacy readers, aliases, or migrations unless explicitly requested.
+- Xean is experimental software. Choose the simplest correct design as if
+  writing it from scratch, even when APIs, schemas, or persisted formats break.
+  Previous runs need not open in new code. Keep their artifacts as provenance,
+  without legacy readers, aliases, migrations, or compatibility scaffolding
+  unless the user explicitly requests them.
 - Use TypeScript on Fleet's locked Bun runtime. Follow
   `~/.config/fleet/agent-reference.md` for runtime and fleet operations.
-- Numbered releases are the stable distribution, and main is development.
-  Follow the release procedure in README. Keep release tags immutable and package
-  versions aligned. Preserve active campaigns and their source-frozen runtimes.
+- The main branch is the current distribution. Preserve existing releases and
+  tags as historical archives. Do not create numbered releases or release tags.
+  Preserve active campaigns and their source-frozen runtimes.
   Historical artifacts retain the original Yean and Xean names and formats.
 
 ## Tests

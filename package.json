@@ -21,7 +21,8 @@
     "@earendil-works/pi-ai": "file:vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-ai-0.99.0.tgz",
     "@earendil-works/pi-durable": "file:vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-durable-0.99.0.tgz",
     "@earendil-works/pi-agent-core": "file:vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-agent-core-0.99.0.tgz",
-    "execa": "10.0.1"
+    "execa": "10.0.1",
+    "typebox": "1.3.27"
   },
   "dependencies": {
     "@earendil-works/chord": "catalog:",

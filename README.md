@@ -25,7 +25,7 @@ The CLI runs only when invoked. The [observer](packages/observe/README.md) runs
 as a separate process and reads local campaigns or exported snapshots. Its
 dashboard, publisher, HTML, CSS, and shared theme form one app. Solver execution
 does not start or wait for it. The source archive and development setup include
-all three packages, with one dependency lock and aligned release versions.
+all three packages, with one dependency lock and aligned package versions.
 
 - [Philosophy](docs/philosophy.md): mathematical autonomy, shared memory, trust, and evaluation.
 - [Kernel contract](docs/kernel.md): execution, publication, limits, and storage.
@@ -33,39 +33,35 @@ all three packages, with one dependency lock and aligned release versions.
 - [Glossary](docs/glossary.md): canonical terminology.
 - [Pi alignment](docs/pi-alignment.md): native APIs and deferred adoption.
 - [Verification](docs/kernel-smoke.md): checks and provider smoke procedures.
-- [Changelog](CHANGELOG.md): release changes and compatibility.
+- [Changelog](CHANGELOG.md): changes and compatibility.
 - [Contributor rules](AGENTS.md): design priorities and repository boundaries.
 
 Matching Pi packages are pinned to one tested main commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
-build, frozen model data, and hashes. Numbered releases are the stable
-distribution. The `main` branch targets 3.0.0 and requires new campaigns for
-its three-view note format, updated Pi storage schema, and Harness checkpoints. Version 2.0.0 remains
-the current stable release.
+build, frozen model data, and hashes. The `main` branch is the current
+distribution. Its three-view note format, updated Pi storage schema, and Harness
+checkpoints require new campaigns. Historical campaigns require their original
+source revision and runtime. Existing releases and tags remain historical archives.
 
 ## Install and run
 
-Use Bun 1.4.2 on Linux or macOS. Stable users should download and unpack a
-source archive from [Releases](https://github.com/chaoxu/xean/releases), then run
-`bun run setup` in that directory. The archive includes the library, CLI,
-observer, pinned Pi packages, and patches. Individual workspace packages are
-private and are not installed from npm.
-
-For a development checkout:
+Use Bun 1.4.2 on Linux or macOS. Clone `main` and install its locked dependencies.
+The checkout includes the library, CLI, observer, pinned Pi packages, and patches.
+Individual workspace packages are private and are not installed from npm.
 
 ```sh
-git clone https://github.com/chaoxu/xean.git
+git clone --branch main https://github.com/chaoxu/xean.git
 cd xean
 bun run setup
 bun run xean --help
 ```
 
 `setup` installs the frozen dependency lockfile without lifecycle scripts and
-records the exact installation. Run it again after changing the checkout or Bun
-runtime. `bun run xean --version` reports the distribution version.
-Keep the release or source commit, lockfile, and runtime version with each
-campaign. Historical campaigns require their original runtime, including 2.0.0
-campaigns opened after the development note-format change.
+records the installation's dependency inputs, Bun version, operating system,
+and architecture. Run it again after changing those inputs or copying a checkout
+to another platform. `bun run xean --version` reports the package version.
+Keep the exact source commit, lockfile, and runtime version with each campaign.
+Package versions alone do not identify a `main` revision.
 
 Check the installation without credentials or model calls:
 
@@ -105,27 +101,26 @@ deciding whether a supervisor should restart it.
 The [MIT license](LICENSE) covers Xean. Bundled dependencies retain their own
 licenses.
 
-## Releases
+## Distribution
 
-Stable releases use semantic versions and immutable `vMAJOR.MINOR.PATCH` tags.
-Patch releases fix defects. Minor releases add compatible behavior. Breaking
-public APIs, CLI contracts, or persisted campaign formats require a major release.
-Run ongoing campaigns with their original release and frozen settings.
+Distribute checked source commits from `main`. APIs, CLI contracts, and campaign
+formats may change. Run ongoing campaigns with their original source revision
+and frozen settings. Preserve existing releases and tags, and do not create
+new numbered releases or release tags.
 
-To prepare a release:
+Before distributing a source revision:
 
-1. Set the root and workspace package versions, update `bun.lock` with a clean
-   install, and describe changes and compatibility in [CHANGELOG.md](CHANGELOG.md).
+1. Describe changes and compatibility in [CHANGELOG.md](CHANGELOG.md). Keep root
+   and workspace package versions aligned and install the frozen lockfile cleanly.
 2. Run the development check below. It checks types, formatting, tests, matching
    versions, bundled dependency hashes, and local documentation links.
 3. Verify a clean source archive on Linux and macOS: run setup, check, CLI help
    and version, the deterministic example twice, and the README's initialization
    and status commands. Check the observer in a browser. Exercise affected model
    providers using the [smoke procedure](docs/kernel-smoke.md#live-provider-checks).
-4. Commit the verified source, create the version tag, and publish its source
-   archive, SHA-256 checksum, and release notes on GitHub. Record the tested Bun
-   version, platforms, smoke results, and any provider limitations. Tagging and
-   publication are separate from preparing the candidate.
+4. Record the exact source commit, tested Bun version, platforms, smoke results,
+   and any provider limitations. When sharing a source archive, include its
+   SHA-256 checksum.
 
 The [historical comparison](docs/xean-comparison.md) describes the implementation
 replaced by 2.0.0. Earlier tags and campaign artifacts retain their original names

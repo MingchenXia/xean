@@ -76,8 +76,10 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
         ],
       }),
     );
+    await writeFile(join(directory, "guidance.txt"), "Try induction.\n");
     for (const args of [
       ["submit", "example", "notes.json", "--id", "import"],
+      ["guide", "example", "guidance.txt", "--id", "initial"],
       ["extend", "example", "1", "--id", "grant"],
     ])
       expect(run(...args).code).toBe(0);
@@ -87,6 +89,11 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
       callAllowance: 1,
     });
     expect(report.notes[0].text).toBe("Note");
+    expect(report.campaign.inputs.at(-1).value).toEqual({
+      kind: "guide",
+      id: "initial",
+      text: "Try induction.\n",
+    });
 
     const rejected = run("export", "example");
     expect(rejected.code).not.toBe(0);

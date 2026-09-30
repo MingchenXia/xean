@@ -11,12 +11,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import { declarationVersion } from "xean/solve";
-import { snapshot } from "../packages/observe/src/snapshot.ts";
+import { readSnapshot, snapshot } from "../packages/observe/src/snapshot.ts";
 import { observe, publish } from "../packages/observe/src/publish.ts";
 import { readRun, type Run } from "../packages/observe/src/read.ts";
 import { api, readSources } from "../packages/observe/src/server.ts";
 
-async function fakeNomad(directory: string, failLogs?: "stdout" | "stderr") {
+async function fakeNomad(
+  directory: string,
+  failLogs?: "stdout" | "stderr",
+  active: unknown = [],
+) {
   await mkdir(join(directory, "bin"), { recursive: true });
   await writeFile(
     join(directory, "bin/fleet-nomad"),
@@ -25,7 +29,7 @@ const args = process.argv.slice(2);
 if (args[0] === "job") console.log(JSON.stringify([{ ID: "allocation", CreateIndex: 1, ClientStatus: "failed" }]));
 else if ((args.includes("-stderr") ? "stderr" : "stdout") === ${JSON.stringify(failLogs)}) throw new Error("logs unavailable");
 else if (args.includes("-stderr")) console.log("worker stopped");
-else console.log(JSON.stringify({ calls: 3, rounds: 2, active: [] }) + "\\nnull");
+else console.log(JSON.stringify({ calls: 3, rounds: 2, active: ${JSON.stringify(active)} }) + "\\nnull");
 `,
     { mode: 0o700 },
   );
@@ -139,6 +143,14 @@ test("the external observer reads coherent live snapshots without changing a loc
     });
     expect(library.notes).toEqual(after.snapshot!.notes);
     expect(library.status.notes).toEqual(after.snapshot?.status.notes);
+    for (const kind of ["xean.role", "xean.review"])
+      expect(
+        readSnapshot(
+          snapshot({
+            campaign: { ...history, task: { kind, task: published.task } },
+          }),
+        ).task,
+      ).toEqual(published.task);
     for (const kind of [
       "xean.solve",
       "xean.solve.offline",
@@ -166,6 +178,26 @@ test("the external observer reads coherent live snapshots without changing a loc
     expect(readback.kind).toBe("snapshot");
     expect(readback.snapshot).toEqual(published);
     const observationFile = join(exported, "observation.json");
+    const exportedRun = () =>
+      readRun({ id: "exported", directory: exported }, directory);
+    for (const invalid of [
+      { ...published, task: { label: "Invalid snapshot" } },
+      { ...published, notes: [{ ...published.notes[0], support: undefined }] },
+      { ...published, notes: [{ ...published.notes[0], text: undefined }] },
+      {
+        ...published,
+        status: {
+          ...published.status,
+          calls: { ...published.status.calls, byModel: [null] },
+        },
+      },
+    ]) {
+      await writeFile(observationFile, JSON.stringify(invalid));
+      const unavailable = await exportedRun();
+      expect(unavailable.error).toBeString();
+      expect(unavailable.snapshot).toBeUndefined();
+    }
+    await writeFile(observationFile, JSON.stringify(published));
     const resultFile = join(exported, "result.json");
     await writeFile(
       resultFile,
@@ -176,8 +208,6 @@ test("the external observer reads coherent live snapshots without changing a loc
     );
     await utimes(observationFile, 1, 1);
     await utimes(resultFile, 2, 2);
-    const exportedRun = () =>
-      readRun({ id: "exported", directory: exported }, directory);
     expect(await exportedRun()).toMatchObject({
       kind: "export",
       snapshot: { status: { status: "completed" } },
@@ -256,9 +286,43 @@ test("the external observer reads coherent live snapshots without changing a loc
   }
 });
 
+test("observer accepts generic campaign databases and exports", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-observe-generic-"));
+  const engine = await Xean.open(
+    await openXeanStorage(join(directory, "campaign.sqlite")),
+    {
+      task: { task: { label: "Opaque kernel payload" } },
+      roles: [],
+      coordinator: { name: "fixture", run: () => ({ state: null }) },
+    },
+  );
+  try {
+    const value = await engine.inspectWithRecords();
+    const exported = join(directory, "exported");
+    await mkdir(exported);
+    await writeFile(join(exported, "result.json"), JSON.stringify(value));
+    for (const path of [directory, exported]) {
+      const observed = await readRun(
+        { id: "generic", directory: path },
+        directory,
+      );
+      expect(observed.error).toBeUndefined();
+      expect(observed.snapshot?.task).toBeNull();
+      expect(observed.snapshot?.status.status).toBe(value.campaign.status);
+    }
+  } finally {
+    await engine.close();
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("observer sources preserve unavailable evidence and reject unsupported snapshots and unsafe remote commands", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-observe-artifacts-"));
   try {
+    await writeFile(join(directory, "task.json"), "null");
+    const malformed = await readRun({ id: "bad-task", directory }, directory);
+    expect(malformed.error).toBeString();
+    expect(malformed.heartbeat).toBeUndefined();
     await writeFile(
       join(directory, "task.json"),
       JSON.stringify({
@@ -304,6 +368,15 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
             }),
       });
     }
+    await fakeNomad(directory, undefined, [null]);
+    const badProcess = await readRun(
+      { id: "old", directory, job: "fixture-job" },
+      directory,
+    );
+    expect(badProcess.error).toContain("Malformed process heartbeat");
+    expect(badProcess.process?.active).toBeUndefined();
+    expect(badProcess.process?.log).toContain('"active":[null]');
+    expect(badProcess.process?.status).toBe("failed");
     expect(() =>
       readSources(
         [

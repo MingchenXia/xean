@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  Type,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import {
   chatGptWebProvider,
@@ -24,14 +28,17 @@ import { ask } from "../packages/core/src/solve/pi.ts";
 const selection = (name: string, args: unknown) =>
   JSON.stringify({ text: "", calls: [{ name, arguments: args }] });
 
-function response(text: string) {
-  const id = "chatcmpl-response-fixture";
+function response(text: string, servedModel?: string, finishReason = "stop") {
+  const base = {
+    id: "chatcmpl-response-fixture",
+    object: "chat.completion.chunk",
+    model: servedModel ?? "chatgpt-web",
+    ...(servedModel ? { served_model: servedModel } : {}),
+  };
   return new Response(
     [
       `data: ${JSON.stringify({
-        id,
-        object: "chat.completion.chunk",
-        model: "chatgpt-web",
+        ...base,
         choices: [
           {
             index: 0,
@@ -41,10 +48,8 @@ function response(text: string) {
         ],
       })}`,
       `data: ${JSON.stringify({
-        id,
-        object: "chat.completion.chunk",
-        model: "chatgpt-web",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        ...base,
+        choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
       })}`,
       "data: [DONE]",
     ].join("\n\n") + "\n\n",
@@ -211,11 +216,10 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
         (r) => r.usage === null && r.message.usageReported === false,
       ),
     ).toBeTrue();
-    const identities = requests.map((r) =>
-      JSON.parse(r.client_metadata["x-codex-turn-metadata"]),
-    );
-    expect(new Set(identities.map((i) => i.thread_id)).size).toBe(1);
-    expect(new Set(identities.map((i) => i.turn_id)).size).toBe(1);
+    expect(settled[0].message.chatGptWeb).toEqual({
+      text: selection("submit_result", draft),
+      servedModel: null,
+    });
   } finally {
     await engine.close();
   }
@@ -344,7 +348,7 @@ test("ChatGPT Explorer is not dispatched again after an existing attempt", async
   ).toHaveLength(0);
 });
 
-test("browser provider returns final text and validates a generic typed output without coercion", async () => {
+test("browser provider validates typed replies and preserves tool history and served identity", async () => {
   const models = createModels();
   models.setProvider(chatGptWebProvider("https://bridge.invalid/v1"));
   const model = models.getModel("codex-chatgpt-web", "chatgpt-web/gpt-6-pro")!;
@@ -359,6 +363,7 @@ test("browser provider returns final text and validates a generic typed output w
   const input = {
     messages: [{ role: "user" as const, content: "Answer", timestamp: 0 }],
   };
+  let first: AssistantMessage | undefined;
   for (const [text, valid] of [
     [selection("answer", { count: 2 }), true],
     [selection("answer", { count: "2" }), false],
@@ -390,18 +395,23 @@ test("browser provider returns final text and validates a generic typed output w
     for await (const event of events) types.push(event.type);
     const result = await events.result();
     expect(result.stopReason).toBe(valid ? "toolUse" : "error");
+    expect((result as any).chatGptWeb).toEqual({ text, servedModel: null });
     expect(reportedPiUsage(result)).toBeNull();
-    if (valid)
+    if (valid) {
+      first = result;
       expect(result.content).toMatchObject([
         { type: "toolCall", name: "answer", arguments: { count: 2 } },
       ]);
-    else {
+    } else {
       expect(result.content).toEqual([]);
       expect(types).not.toContain("done");
     }
     const plain = await models.completeSimple(
       model,
-      { ...input, tools: [tool] },
+      {
+        messages: [{ role: "system", content: "Answer", timestamp: 0 }],
+        tools: [tool],
+      },
       { ...options, toolChoice: "none" },
     );
     expect(plain.content).toEqual([{ type: "text", text }]);
@@ -428,9 +438,10 @@ test("browser provider returns final text and validates a generic typed output w
       model,
       { ...input, tools: [tool, lookup] },
       {
-        fetch: Object.assign(async () => response(JSON.stringify(envelope)), {
-          preconnect: fetch.preconnect,
-        }),
+        fetch: Object.assign(
+          async () => response(JSON.stringify(envelope), "gpt-6-mini"),
+          { preconnect: fetch.preconnect },
+        ),
       },
     );
     expect(result.stopReason).toBe(envelope.calls.length ? "toolUse" : "stop");
@@ -465,6 +476,81 @@ test("browser provider returns final text and validates a generic typed output w
   // Preserve a hook's replacement exactly, including an invalid null request.
   expect(invalidPayload.stopReason).toBe("error");
   expect(dispatched).toBeFalse();
+  const call = first!.content.find((part) => part.type === "toolCall")!;
+  for (const [text, servedModel, finishReason, success] of [
+    [
+      JSON.stringify({ text: "Finished", calls: [] }),
+      "gpt-6-pro",
+      "stop",
+      true,
+    ],
+    [
+      JSON.stringify({ text: "Different served model", calls: [] }),
+      "gpt-6-mini",
+      "stop",
+      true,
+    ],
+    ['{"text":"unfinished', "gpt-6-pro", "length", false],
+  ] as const) {
+    let content: { role: string; content: string }[] = [];
+    const result = await models.completeSimple(
+      model,
+      {
+        ...input,
+        tools: [tool, lookup],
+        messages: [
+          ...input.messages,
+          first!,
+          {
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: [{ type: "text", text: "Answer rejected" }],
+            isError: true,
+            timestamp: 1,
+          },
+        ],
+      },
+      {
+        fetch: Object.assign(
+          async (_url: unknown, init?: RequestInit) => {
+            const body = await new Response(init?.body).json();
+            // chatgpt-cli reads only role/content; native tool fields disappear.
+            content = body.messages.map((message: any) => ({
+              role: message.role,
+              content: message.content,
+            }));
+            return response(text, servedModel, finishReason);
+          },
+          { preconnect: fetch.preconnect },
+        ),
+        onProviderStreamEvent: (_event, requestModel) => {
+          expect(requestModel.api).toBe("chatgpt-web");
+        },
+      },
+    );
+    const assistant = content
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.content)
+      .join("\n");
+    expect(assistant).toContain(call.id);
+    expect(assistant).toContain("answer");
+    expect(assistant).toContain('"count":2');
+    const feedback = content.findLast(
+      (message) => message.role === "user",
+    )!.content;
+    expect(feedback).toContain(call.id);
+    expect(feedback).toContain("answer");
+    expect(feedback).toContain("Answer rejected");
+    expect(feedback).toContain('"isError":true');
+    expect(result.stopReason).toBe(success ? "stop" : "error");
+    expect((result as any).chatGptWeb).toEqual({ text, servedModel });
+    expect(result.responseModel).toBe(servedModel);
+    expect(result.responseId).toBe("chatcmpl-response-fixture");
+    expect(result.content).toEqual(
+      success ? [{ type: "text", text: JSON.parse(text).text }] : [],
+    );
+  }
 });
 
 test("browser provider rejects images and settles cancellation without replay", async () => {

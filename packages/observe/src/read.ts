@@ -1,10 +1,18 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { execa } from "execa";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { campaignVersion, inspectCampaign } from "xean";
+import { decode, taskSchema } from "xean/solve";
 import { usageRecord } from "xean/report";
 import { readArtifacts } from "./artifacts.ts";
-import { snapshot, type Snapshot } from "./snapshot.ts";
+import { readSnapshot, snapshot, type Snapshot } from "./snapshot.ts";
+
+const processHeartbeat = Type.Script(
+  { Count: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }) },
+  "{ calls: Count, rounds?: Count, active?: { id: string, role: string }[] }",
+);
 
 export type Source = {
   id: string;
@@ -82,20 +90,16 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
         : await readArtifacts(source.directory);
       run.kind = artifacts.kind;
       if (artifacts.kind === "snapshot") {
-        if (
-          artifacts.value?.schema !== "xean-observe/v2" ||
-          typeof artifacts.value.observedAt !== "string" ||
-          !artifacts.value.status?.calls ||
-          !Array.isArray(artifacts.value.notes) ||
-          !Array.isArray(artifacts.value.work)
-        )
-          throw new Error("Unsupported observation schema");
-        run.snapshot = artifacts.value;
+        run.snapshot = readSnapshot(artifacts.value);
       } else if (artifacts.kind === "export") {
         if (artifacts.value.campaign?.version !== campaignVersion)
           throw new Error("Unsupported campaign export");
-        run.snapshot = snapshot(artifacts.value, artifacts.at);
-      } else run.heartbeat = artifacts.value;
+        run.snapshot = readSnapshot(snapshot(artifacts.value, artifacts.at));
+      } else
+        run.heartbeat = {
+          ...artifacts.value,
+          task: decode(taskSchema, artifacts.value.task),
+        };
       run.observedAt = artifacts.at;
     }
   } catch (error) {
@@ -152,13 +156,16 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
         const latest = heartbeats.findLast(
           (row) => typeof row?.calls === "number",
         );
-        Object.assign(run.process, {
-          rounds: latest?.rounds,
-          calls: latest?.calls,
-          active: latest?.active,
-          log,
-          errorLog,
-        });
+        Object.assign(run.process, { log, errorLog });
+        if (latest) {
+          if (!Value.Check(processHeartbeat, latest))
+            throw new Error("Malformed process heartbeat");
+          Object.assign(run.process, {
+            rounds: latest.rounds,
+            calls: latest.calls,
+            active: latest.active,
+          });
+        }
       }
     }
   } catch (error) {

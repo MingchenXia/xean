@@ -100,7 +100,13 @@ test("conditional hypotheses remain claims while external results require source
             "An unstated assumption in an unconditional claim remains a gap",
           );
           expect(input.notes).toEqual(
-            notes.map(({ id, text, support }) => ({ id, text, support })),
+            notes.map(({ id, text, summary, detailedSummary, support }) => ({
+              id,
+              text,
+              summary,
+              detailedSummary,
+              support,
+            })),
           );
           results = input.notes.map(({ id }: Note) => ({
             noteId: id,

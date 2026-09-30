@@ -129,7 +129,6 @@ export function auditedStream(
       let final: AssistantMessage | undefined;
       let failed = false;
       let requestRecorded = false;
-      let hookCalls = 0;
       const completed = new Map<string, ThinkingContent>();
       const controller = new AbortController();
       const signal = options?.signal
@@ -155,9 +154,6 @@ export function auditedStream(
           ...options,
           signal,
           onPayload: async (payload, requestModel) => {
-            if (++hookCalls !== 1) {
-              throw new Error("Pi invoked the request hook more than once");
-            }
             const replacement = await options?.onPayload?.(
               payload,
               requestModel,
@@ -212,9 +208,6 @@ export function auditedStream(
             "Pi completed without recording its effective request",
           );
         }
-        if (final.stopReason === "pending") {
-          throw new Error("Pi stream ended without a terminal response");
-        }
       } catch (error) {
         failed = true;
         controller.abort();
@@ -239,9 +232,6 @@ export function auditedStream(
       if (
         completed.size &&
         final!.stopReason === "error" &&
-        final!.api === model.api &&
-        final!.provider === model.provider &&
-        final!.model === model.id &&
         (final!.responseModel === undefined ||
           final!.responseModel === model.id)
       ) {
@@ -258,6 +248,10 @@ export function auditedStream(
       return final!;
     }
     const finish = (message: AssistantMessage) => {
+      // Settlement and retry completion both yield before terminal delivery.
+      // Preserve the provider record, but never deliver success after abort.
+      if (options?.signal?.aborted && message.stopReason !== "error")
+        message = failure(model, options.signal.reason, true, message);
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         output.push({
           type: "error",

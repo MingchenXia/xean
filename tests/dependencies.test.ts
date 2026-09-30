@@ -34,6 +34,26 @@ test("install receipts reject missing evidence and changed dependency inputs", a
     );
     await recordInstall(root);
     await expect(verifyInstall(root)).resolves.toBeUndefined();
+    for (const field of ["platform", "arch"]) {
+      const foreign = Bun.spawnSync(
+        [
+          process.execPath,
+          "--no-install",
+          "--no-env-file",
+          "--eval",
+          `import { verifyInstall } from ${JSON.stringify(
+            new URL("../scripts/dependencies.ts", import.meta.url).href,
+          )};
+           Object.defineProperty(process, ${JSON.stringify(field)}, { value: "different" });
+           await verifyInstall(${JSON.stringify(root)});`,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(foreign.exitCode).not.toBe(0);
+      expect(foreign.stderr.toString()).toContain(
+        "Dependencies or patches changed",
+      );
+    }
     for (const [path, original] of Object.entries(inputs)) {
       const changed =
         path === "package.json"

@@ -1,6 +1,30 @@
 # Changelog
 
-## 3.0.0 — Unreleased
+## Main
+
+The main branch is the current distribution. Existing numbered releases and
+tags remain historical archives. Pin the source commit and runtime for each
+campaign.
+
+- Reject dangling database symlinks before acquiring campaign ownership.
+- Retain SQLite WAL sidecars after writer close so independent read-only
+  inspection remains available. Finalize native statements before releasing
+  ownership while preserving Pi's transaction and rollback handling.
+- Honor cancellation through final stream delivery while retaining provider
+  outcomes and measured usage in the journal.
+- Enforce ChatGPT Explorer's single attempt with replaced planners and after
+  reopening. Validate direct runtime profiles and require explicitly selected
+  credential variables. Closed-book runs reject browser-backed retrieval.
+- Preserve ChatGPT tool-call and feedback identities through text-only bridges,
+  retain malformed replies for diagnosis, and record reported served identities
+  without discarding valid replies when they differ from the requested model.
+- Verify note summaries against their authoritative mathematics while keeping
+  the independent prover blind to original proofs and summaries.
+- Reject malformed observer snapshots and heartbeat data without breaking the
+  dashboard or discarding available process logs.
+- Trust typed role outputs and internal projections, validate model and external
+  inputs at their boundaries, and keep current-format rejection without legacy
+  readers or fixtures. Recovery scheduling uses Pi's candidate order.
 
 CLI and observer are optional sibling applications over the core library.
 Shared inspection reports move from `xean-cli/report` to `xean/report`.
@@ -60,6 +84,9 @@ campaigns and exports on their matching runtime. No migration is provided.
 - Direct `createSolver` campaigns record the solver format version and reject
   reopening historical unversioned campaigns. Note projection requires a current
   solver declaration.
+- Installation receipts include the operating system and architecture, so a
+  checkout copied across platforms requires a clean setup. Distribution checks
+  require enabled dependency patches to match their recorded provenance.
 - Completed private-work recovery was investigated against Pi and the predecessor.
   Whole-worker recovery remains in place. The missing durable integration is
   documented in Pi alignment.

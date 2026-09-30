@@ -13,6 +13,7 @@
   "dependencies": {
     "xean": "workspace:*",
     "execa": "catalog:",
+    "typebox": "catalog:",
     "lit-html": "3.3.3",
     "katex": "0.18.9"
   }

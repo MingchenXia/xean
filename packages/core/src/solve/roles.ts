@@ -46,9 +46,15 @@ import type { Settings } from "./config.ts";
 import { noteReader } from "./reader.ts";
 
 const mathematicalCheck =
-  "Check exact statements and hypotheses. PASS requires an established argument. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. On PASS, you may supply correction with the complete text and consistent summary and detailedSummary, changing only harmless typos, formatting, or unambiguous notation. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. A substantial repair requires a new note. Treat established support results as given, but verify their applicability and all new reasoning. Do not infer mathematical truth from an earlier model's confidence.";
+  "Check exact statements and hypotheses. Check both summaries against the authoritative full text: preserve hypotheses, quantitative guarantees, conditionality, negative conclusions, and unresolved gaps. A summary must not strengthen a claim or present an unresolved result as established. PASS requires an established argument. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. On PASS, you may supply correction with the complete text and consistent summary and detailedSummary, changing only harmless typos, formatting, or unambiguous notation. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. A substantial repair requires a new note. Treat established support results as given, but verify their applicability and all new reasoning. Do not infer mathematical truth from an earlier model's confidence.";
 const packet = (notes: VerifierInput["notes"]) =>
-  notes.map(({ id, text, support }) => ({ id, text, support }));
+  notes.map(({ id, text, summary, detailedSummary, support }) => ({
+    id,
+    text,
+    summary,
+    detailedSummary,
+    support,
+  }));
 export type CoordinationInput = {
   task: Task;
   notes: Note[];

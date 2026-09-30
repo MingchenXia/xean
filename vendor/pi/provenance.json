@@ -61,7 +61,7 @@
     },
     {
       "path": "patches/@earendil-works%2Fpi-durable@0.99.0.patch",
-      "sha256": "df809952348609b1fc953c34349c51ea2f44bdebe71523ce210fa3eff296f31e",
+      "sha256": "4f4c415d504774a391766be4e8fe243c1cbd0d59bafeb8bc5a26a1fe9ae32451",
       "appliedBy": "Bun patchedDependencies at installation"
     },
     {

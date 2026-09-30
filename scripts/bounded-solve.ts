@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ROOT_CONVERSATION_ID, type Cursor } from "@earendil-works/pi-durable";
 import { Xean, openXeanStorage, type XeanOptions } from "xean";
+import { chatGptWebProviderId } from "xean/pi";
 import { serveControl } from "xean-cli/control";
 import { verifyInstall } from "./dependencies.ts";
 import {
@@ -119,7 +120,14 @@ if (import.meta.main) {
   const settings = readSettings(
     await Bun.file(resolve(directory, "settings.json")).json(),
   );
-  if (offline) assert.notEqual(settings.literature, true);
+  if (offline) {
+    assert.notEqual(settings.literature, true);
+    assert.notEqual(
+      settings.profiles.explorer?.provider,
+      chatGptWebProviderId,
+      "ChatGPT Web cannot enforce closed-book execution",
+    );
+  }
   const solver = createSolver(
     task,
     () => piRuntime(settings),
