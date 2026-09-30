@@ -74,11 +74,13 @@ campaigns and exports on their matching runtime. No migration is provided.
   using the new one-based `Execution.attempt` ordinal. Xean cannot account for usage
   outside the campaign or enforce an account-wide subscription quota.
   Direct role construction also enforces one response and disables note reads.
-- ChatGPT Web uses `codex-chatgpt-web`'s Responses endpoint with a strict generic
+- ChatGPT Web uses a user-managed `codex-chatgpt-web` Responses endpoint with a strict generic
   tool envelope and a unique completed final answer. The old `chatgpt-cli` Chat
   Completions path is retired. Browser retries remain disabled and usage unknown.
   A live three-request smoke qualified the generic Pi tool round trip, a
   single-response Explorer submission, and unchanged campaign reopening.
+  The documented boundary is one self-contained request returning exact completed
+  text or an error. Installation and browser operations stay outside Xean.
 - Explicit antecedents in conditional claims remain part of the claim.
   Correctness checks the implication, source checks its external results, and
   requirements decides whether it solves the original task.

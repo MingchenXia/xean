@@ -181,33 +181,35 @@ including after Pi retries a rejected submission; a later-only declaration can
 leave Codex with `tool_choice: required` but no tools and is rejected by the
 provider.
 
-ChatGPT Web uses Pi's `createProvider`, `lazyStream`, Responses transport, and
-transcript conversion over [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web)
-in browser-only mode. Xean supplies the generic tool envelope as a strict JSON
-output schema and attaches the bridge's matching thread/turn metadata. Native
-Responses items preserve tool-call IDs, arguments, and results. Error results
-include explicit failure text because Responses has no corresponding error flag.
+ChatGPT Web's [service boundary and role policy](solver.md#configuration-and-functions)
+live in the solver guide. The adapter uses Pi's `createProvider`, `lazyStream`,
+Responses transport, and transcript conversion. The tested wire contract is:
 
-Only a unique completed `final_answer` can supply the envelope. Xean validates
-it against Pi's current tool names and schemas, then Pi executes the selected
-calls. An empty call list permits final text. The adapter has no role-specific
-tool names. Settlements retain response text received from the bridge, including
-invalid output. Upstream schema rejection may expose only an error. Only
-explicit `served_model` metadata establishes served identity. Browser usage
-remains unmeasured. The custom API identity excludes browser answers from OpenAI
-reasoning replay. Transport retries, solver response retries, and recovered
-browser-worker sends remain disabled.
+- `POST {baseUrl}/responses` accepts the complete Responses input, including
+  native function-call/result items, the model and reasoning setting, and
+  `stream: true`. When tools are declared, `text.format` with `type: "json_schema"`
+  carries the strict schema for the `text` and `calls` envelope. Native tool declarations
+  are omitted.
+  Error results include failure text because Responses has no error flag.
+- The adapter supplies thread/turn identity in
+  `client_metadata["x-codex-turn-metadata"]` and the matching current-user
+  `internal_chat_message_metadata_passthrough.turn_id`. These are transport
+  fields, not a requirement for Xean to manage browser sessions.
+- Responses SSE's terminal `response.completed` must contain exactly one
+  assistant message with `phase: "final_answer"` and the original `output_text`.
+  Commentary, incomplete output, and ambiguous final answers cannot become
+  submissions. Token-by-token streaming is unnecessary.
 
-The old `chatgpt-cli` Chat Completions path is retired. No fallback is provided.
-The local answer-source patch reads the original completed reply to preserve JSON
-escapes rather than reconstructing rendered Markdown. It requires matching
-daemon and browser-helper builds. A normal production launcher owns browser login.
-Xean's deployment uses upstream configuration helpers and a separate runtime home
-for the native daemon, leaving the launcher's Codex integration unconfigured.
-Upstream rejects an HTTP listener for a DEV profile. The normal setup command
-also installs Codex integration, so it is unsuitable for this separate deployment.
-The [live qualification](kernel-smoke.md#chatgpt-web) records the exercised paths
-and remaining limitations.
+The provider's custom API identity excludes browser answers from OpenAI reasoning
+replay. Transport retries, solver response retries, and recovered browser-worker
+sends remain disabled. Client cancellation prevents late publication but does not
+establish that remote generation stopped. `/healthz`, `/v1/models`, and setup or
+browser-control APIs are outside Xean's required interface. The old `chatgpt-cli`
+Chat Completions path is retired, with no fallback.
+
+The [live qualification](kernel-smoke.md#chatgpt-web) records the tested external
+runtime, its answer-preservation patch, and the exercised paths. That deployment
+is evidence for the contract, not a required installation layout.
 
 The official [Workspace Agents API](https://developers.openai.com/workspace-agents/trigger-runs)
 can trigger a workspace agent and report its status, but cannot currently retrieve its

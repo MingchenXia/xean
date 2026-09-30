@@ -657,9 +657,28 @@ callers may supply a `Research` implementation to `createSolver` when they need
 another backend; Claude subscription profiles do not silently replace this
 Codex-backed research boundary.
 
-ChatGPT Web is a scarce browser subscription and is an explicit, one-shot
-Explorer backend. It cannot be a default profile or a Coordinator/Verifier
-profile. Select it only under `profiles.explorer`, with a non-ChatGPT default:
+ChatGPT Web connects to a user-managed browser service. Its logical contract is
+**one self-contained prompt plus model/settings → exact completed answer or error**.
+The service owns browser login, model selection, submission, waiting, and answer
+extraction. Xean/Pi owns the supplied history, tool schemas, answer validation,
+tool execution, and research workflow.
+
+A conforming service preserves original answer text, including JSON escapes and
+mathematical notation, distinguishes completion from partial output, and avoids
+resubmitting after uncertain acknowledgement. Unsupported model/settings or
+oversized input must fail rather than silently substitute or truncate. Each
+request carries the full supplied context, including earlier tool results, so
+correctness must not depend on a retained browser conversation.
+
+The built-in adapter uses the [Responses transport contract](pi-alignment.md#provider-integration)
+tested with [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web).
+The operator supplies a conforming endpoint and owns installation, any required
+patches, browser authentication, and process management. Set `baseUrl` and, when
+the service requires a bearer credential, `apiKeyEnv` naming its environment
+variable. Browser credentials remain outside Xean.
+
+This scarce subscription is an explicit, one-response Explorer backend.
+Select it only under `profiles.explorer`, with a non-ChatGPT default:
 
 ```json
 {
@@ -670,55 +689,30 @@ profile. Select it only under `profiles.explorer`, with a non-ChatGPT default:
 }
 ```
 
-Put this in `profiles.explorer`. The adapter derives a structured response
-schema from every tool declared by Pi, including each name, description, and
-argument schema. ChatGPT returns text and a list of selected calls. The adapter
-validates the whole response without coercion and emits native Pi tool calls.
-Pi executes the tools, applies limits, and supplies results on the next turn.
-The provider supports arbitrary caller tools without role-specific behavior in
-the adapter, but Xean's ChatGPT profile deliberately supplies only
-`submit_result`: the Explorer receives the summaries once and must return in a
-single response. This avoids spending another Pro allowance on a read or
-continuation. An empty call list permits a final text answer. Images remain
-unsupported.
-`toolChoice: "none"` requests ordinary text. Each request carries the complete
-transcript, including earlier results and validation feedback.
+The adapter derives the JSON answer schema from Pi's current tool names,
+descriptions, and argument schemas. It validates the entire answer without
+coercion before emitting native Pi calls. Pi executes those calls and supplies
+their results on the next turn. The service only returns text and needs no
+knowledge of notes or roles. An empty call list permits a final text answer.
+`toolChoice: "none"` requests ordinary text. Images remain unsupported.
+The [live smoke](kernel-smoke.md#chatgpt-web) qualifies structured answers only.
 
-Each outer tool round sends another browser request and can consume another
-ChatGPT Pro allowance. General tool support does not make these round trips
-quota-free. Xean rejects a response budget other than one for this profile and
-admits no additional ChatGPT Explorer work in a built-in campaign. A recovered
-browser worker fails before sending another request, using the kernel's durable
-attempt ordinal. This also applies when interruption happened before the first
-request was sent. Xean cannot see other applications or campaigns using the same
-subscription, so it cannot enforce an account-wide daily or monthly quota;
-track that allowance outside Xean as well.
+Xean's ChatGPT profile supplies only `submit_result`: Explorer receives the
+summaries once and returns in a single response. It has no note-reading or
+continuation calls and cannot be a default, Coordinator, or Verifier profile.
+Settings reject response budgets other than one. Direct `createRoles()` calls
+also cap Explorer at one response without a note reader, overriding a larger
+caller allowance. Built-in campaigns admit no additional ChatGPT Explorer work.
 
-Direct `createRoles()` calls derive the browser restriction from the selected
-runtime and cap Explorer at one response without a note reader, even if the
-caller supplies a larger allowance.
+Each outer tool round can consume another Pro allowance. Recovered browser
+workers fail before sending, using the durable attempt ordinal, even if the
+original interruption preceded submission. Xean cannot observe other applications
+or campaigns using the subscription. Account-wide quota tracking stays external.
 
-The provider requires [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web)
-in browser-only mode, with its Responses listener available at the configured
-`baseUrl`. Pi sends `/v1/responses` requests containing native tool histories,
-matching thread/turn metadata, and the generic envelope as a strict JSON output
-schema. Xean accepts only a unique completed `final_answer`, validates its JSON,
-and emits Pi tool calls. Commentary and incomplete output cannot become submissions.
-
-The upstream bridge owns login, browser execution, and model/effort selection.
-Its named model routes check the selected browser family. A response's model
-alias alone is not backend identity: Xean records a served model only when the
-bridge explicitly supplies `served_model`. Xean retains response text received
-from the bridge. Upstream schema rejection may expose only an error.
-Browser usage remains unknown, and automatic replay is
-disabled because a disconnected request may already be running.
-
-The former `chatgpt-cli` Chat Completions service is retired and unsupported.
-There is no fallback to it. A running authenticated development launcher does
-not supply the production HTTP endpoint: upstream deliberately keeps DEV
-profiles separate. Configure and qualify the intended runtime before a campaign,
-including preservation of JSON escapes and mathematical notation. See
-[provider integration](pi-alignment.md#provider-integration) for that boundary.
+Xean retains answer text received from the service. Upstream schema rejection
+may expose only an error. Browser usage remains unknown, and a requested model
+alias alone does not establish served identity. The adapter records a served
+model only when the service explicitly supplies `served_model`.
 
 The provider follows Explorer's no-search instructions but cannot enforce
 disabling ChatGPT-native retrieval. It is not qualified for enforced

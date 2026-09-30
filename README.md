@@ -79,6 +79,11 @@ or secret manager. Source checking and independent review use the separately
 installed Codex CLI, authenticated with `codex login` or its native provider
 configuration. Provider credentials stay outside task and settings files.
 
+ChatGPT Web uses a separately managed browser service. Supply its endpoint and
+optional service credential through the [solver settings](docs/solver.md#configuration-and-functions).
+Xean owns the Pi adapter and research workflow. The service operator owns browser
+login, installation, patches, and process management.
+
 ```sh
 bun run xean init examples/tree-task.json tree examples/solver-settings.json
 bun run xean run tree
