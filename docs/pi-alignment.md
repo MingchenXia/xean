@@ -9,17 +9,17 @@ prevent further delegation.
 ## Sources and availability
 
 All five Pi/Chord packages are pinned to
-[`312184edb68c`](https://github.com/earendil-works/pi/tree/312184edb68c38248e1acfc3eec68500ba49d9cb),
-the upstream main revision checked on 2026-09-29.
-Their upstream manifests say `0.99.0`. The
+[`d4d74eb19be9`](https://github.com/earendil-works/pi/tree/d4d74eb19be92c559f629a7f9707c5503a840edc),
+the upstream main revision checked on 2026-09-30.
+Their upstream manifests say `0.99.2`. The
 [artifact record](../vendor/pi/provenance.json) identifies the source, frozen
 model catalog, reproducible builds, and retained patches.
 
 The [public durable types][types] and [Session implementation][session] supply
 transactions, documents, records, typed IDs, snapshots, conversation forks, and
-public commit subscriptions. Pi now implements a [durable task scheduler][scheduler],
-Harness, document watches, and the first durable chat generation. Tool turns
-and live run controls remain later milestones in the [Pico5 specification][spec].
+public commit subscriptions. Pi implements a [durable task scheduler][scheduler],
+Harness, persistent model/tool turns, task ownership, structured concurrency,
+conversation views, and compaction. Their contracts are in the [Pico5 specification][spec].
 Xean adopts Harness with local admission, pause, recovery, and failure-settlement
 extensions described below. These extensions are not upstream APIs.
 The existing `pi-agent-core.AgentHarness` is a different API.
@@ -87,14 +87,17 @@ Session writes before joining on close.
 
 Harness owns the invocation map, dispatch, cancellation, joining, and recovery.
 Its pause state also gates execution between explicit Xean `run()` calls.
-Worker publication uses the current task supplied by Pi's invocation-gated
-transaction, avoiding a second lookup through campaign history.
+Invocations return terminal outcomes through native `runtime.commit()`, alongside
+the result and Coordinator signal. Pi owns transition validation and retirement.
+Xean uses conversation-owned tasks because workers are opaque functions and
+Coordinator schedules their work independently.
 Its scheduler yields between passes so synchronous work cannot starve external
 cancellation. A pending checkpoint yields a logical retry back to admission.
 Xean registers executable task definitions and uses native task creation.
-The patch exposes existing `Tx.setTask()` for atomic domain transitions and
+The patch exposes existing `Tx.setTask()` for external campaign transitions,
+such as cancellation, blocked-signal resumption, and admission failure. It
 preserves explicit entry attribution outside an invocation. Native validation,
-transaction assembly, retirement, and publication still own these operations.
+transaction assembly, retirement, and publication own these operations.
 Reassess these local extensions when equivalent upstream controls become available.
 
 The separate owner lock protects Pi's ID allocator and Harness execution while
@@ -104,9 +107,12 @@ runs migrations, so the read-only patch skips writes, validates the schema, and
 rejects mutation and ID allocation. Reader cleanup avoids a writer checkpoint.
 SQL remains the backend direction.
 
-The adapter patch accepts a structural synchronous connection and normalizes
-Bun's missing-row `null` to Pi's `undefined`. Pi retains transaction rollback and
-rejection of asynchronous callbacks. Bun's public `fileControl` enables
+Pi owns asynchronous SQL execution, operation ordering, statement caching,
+transaction handles, rollback, read draining, and close. The adapter patch
+accepts Bun's structural connection and normalizes missing-row `null` to Pi's
+`undefined`. Read-only document loading uses the already pinned snapshot,
+avoiding a nested write transaction, and reader close skips the writer checkpoint.
+Bun's public `fileControl` enables
 `SQLITE_FCNTL_PERSIST_WAL` on writers. Without retained WAL sidecars, the locked
 runtime can fail read-only reopening with `SQLITE_CANTOPEN` after writer close.
 The Node connection API does not expose this setting. Native `close(true)`
@@ -226,32 +232,26 @@ The separate Claude Code provider, subprocess bridge, and provider patch are rem
 
 ## Completed private work
 
-Completed private submissions survive Pi's retries within a live invocation.
-Durable resumption also needs the validated tool outcome, role state, response
-allowance, frozen input and model identity, and original call accounting.
-`runAgentLoopContinue` accepts restored context but supplies none of that
-persistence. Native Session can store task checkpoints atomically. Harness now
-executes checkpoint phases and persists generation attempts, retry delays, and
-partial-response presentation. Tool execution and validated submission recovery
-remain outside that implementation. Adopting Harness for whole-worker execution
-does not provide private-progress recovery. AgentHarness and experimental Pico3
-use different session and storage contracts.
+Pi's durable tool task now persists validated arguments and replay intent before
+execution, then commits the result and terminal task state together. An
+interrupted tool reruns only when both its recorded and current replay policies
+are `safe`. Native ownership waits for child tasks and aborts them from the
+leaves upward. These mechanisms can support private resumption.
 
-The archived Explorer `w110-1` retained its completed `n1` and `n2` submissions
-in both failed continuations, then terminated without publication. Provider
-settlement alone does not prove that the submission tool was accepted. The next
-requests in this case contain the successful tool receipt. Exhausted Pi recovery
-throws an ordinary error and terminalizes the worker, so checkpoint-only reopening
-would not repair this failure path. The predecessor reused completed calls, but
-its incremental publication model differs from current whole-worker publication.
+Xean still executes model roles through `runAgentLoop`. Its valid submissions
+survive retries inside a live invocation, while interruption recovers the whole
+worker. Moving roles to durable generation would also need persisted response
+and read allowances, accepted mathematical submissions, frozen inputs and model
+identity, and the original call ledger. Shared notes must still publish only
+when the whole worker succeeds.
 
-Private-progress recovery remains deferred. Future support needs accepted
-submissions or completed verifier stages in the existing Session, guarded by
-attempt identity and cancellation. It also needs explicitly classified retries
-before terminalization, within existing attempt and call limits and provider
-replay-safety rules. Reuse must preserve completed-response counts, frozen inputs,
-model identity, and original usage records. The resumed worker must succeed
-before its complete result and completion signal become shared state.
+Native generation hooks do not yet replace Xean's guards: hook failures are
+reported, cancellation can bypass `afterResponse`, and there is no durable
+effective-request admission/settlement contract. Native usage totals and event
+watches cannot replace call admission or durable Coordinator signals. A role
+migration must also disable automatic compaction and preserve full mathematical
+tool results. Private-progress recovery remains deferred until these boundaries
+can be preserved with a smaller implementation.
 
 ## Next adoption opportunities
 
@@ -274,7 +274,7 @@ Private-progress recovery, hot extension registries, alternate storage, and a
 second task framework remain deferred. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/src/session/session.ts
-[scheduler]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/src/harness/scheduler.ts
-[spec]: https://github.com/earendil-works/pi/blob/312184edb68c38248e1acfc3eec68500ba49d9cb/packages/durable/docs/pico-v5.md
+[types]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/docs/pico-v5.md

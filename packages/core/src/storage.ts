@@ -14,7 +14,7 @@ export async function openXeanStorage(
 ): Promise<Storage> {
   const { readOnly = false } = options;
   if (!path) throw new Error("Xean storage requires a database path.");
-  const cleanup = new DisposableStack();
+  const cleanup = new AsyncDisposableStack();
   try {
     if (!readOnly && path !== ":memory:") {
       await mkdir(dirname(path), { recursive: true });
@@ -39,16 +39,17 @@ export async function openXeanStorage(
       create: !readOnly,
       strict: true,
     });
-    const database = new NodeSqliteDatabase({
-      exec: (sql) => native.exec(sql),
-      prepare: (sql) => native.prepare(sql),
-      close: () => native.close(true),
-    });
-    cleanup.defer(
-      readOnly ? () => native.close(true) : database.close.bind(database),
+    const database = new NodeSqliteDatabase(
+      {
+        exec: (sql) => native.exec(sql),
+        prepare: (sql) => native.prepare(sql),
+        close: () => native.close(true),
+      },
+      { readOnly },
     );
+    cleanup.defer(database.close.bind(database));
     if (readOnly) {
-      database.exec("BEGIN");
+      await database.exec("BEGIN");
     } else {
       // Read-only WAL connections need these files after the owner closes.
       if (
@@ -58,15 +59,15 @@ export async function openXeanStorage(
         throw new Error(
           "SQLite cannot preserve WAL files for read-only inspection",
         );
-      database.exec(
+      await database.exec(
         "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 0",
       );
     }
     // Readers close without a writer checkpoint; owners release their lock last.
-    database.close = () => cleanup.dispose();
+    database.close = () => cleanup.disposeAsync();
     return await SqliteStorage.open(database, { readOnly });
   } catch (error) {
-    cleanup.dispose();
+    await cleanup.disposeAsync();
     throw error;
   }
 }

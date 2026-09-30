@@ -66,7 +66,11 @@ test("Harness pause rolls back an unfinished admission and resumes it once", asy
   );
   try {
     const root = await harness.root(context);
-    const id = await root.commit((tx) => tx.createTask(task, null), context);
+    const id = await root.commit(
+      (tx) =>
+        tx.createTask(task, null, { ownership: { kind: "conversation" } }),
+      context,
+    );
     harness.resume();
     await entered.promise;
     harness.pause({ interrupt: true });
@@ -160,7 +164,11 @@ test("Harness interruption rejects late publication while keeping accounting wri
   );
   try {
     const root = await harness.root(context);
-    const id = await root.commit((tx) => tx.createTask(task, null), context);
+    const id = await root.commit(
+      (tx) =>
+        tx.createTask(task, null, { ownership: { kind: "conversation" } }),
+      context,
+    );
     harness.resume();
     await entered.promise;
     harness.pause({ interrupt: true });
@@ -224,7 +232,11 @@ test("Harness quiescence waits for atomic runtime failure publication", async ()
   );
   try {
     const root = await harness.root(context);
-    const id = await root.commit((tx) => tx.createTask(task, null), context);
+    const id = await root.commit(
+      (tx) =>
+        tx.createTask(task, null, { ownership: { kind: "conversation" } }),
+      context,
+    );
     harness.subscribeCommits(({ changes }) => {
       publications.push(changes.map((change) => change.type));
     });

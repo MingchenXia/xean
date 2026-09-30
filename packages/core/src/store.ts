@@ -16,6 +16,7 @@ import {
   type TaskId,
   type TaskRecord,
   type TaskRuntime,
+  type TaskState,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { json } from "./json.ts";
@@ -44,7 +45,14 @@ export const initialAttempt = (): AttemptState => ({
   error: null,
 });
 export type Input = WorkRequest | Omit<Signal, "id">;
-export type PiTask = TaskRecord<Input, AttemptState, JsonValue>;
+// Opaque Xean roles do not spawn native child tasks or enter waiting/completing states.
+export type PiTask = TaskRecord<Input, AttemptState, JsonValue> & {
+  readonly state: Exclude<
+    TaskState<AttemptState, JsonValue>,
+    { status: "waiting" | "completing" }
+  >;
+};
+export type TerminalState = Extract<PiTask["state"], { status: "terminal" }>;
 type Definition = Task<Input, AttemptState, JsonValue, object>;
 export type Runtime = TaskRuntime<Input, AttemptState, JsonValue, object>;
 export const WORKER = "xean.worker";
@@ -190,6 +198,7 @@ export class Store {
         const task = this.registry!.snapshot().task(kind);
         return tx.createTask(task as Definition, json(input), {
           conversationId: ROOT_CONVERSATION_ID,
+          ownership: { kind: "conversation" },
         });
       },
       entry: async (kind, data, taskId) => {
@@ -217,11 +226,14 @@ export class Store {
 
   async mutateTask(
     runtime: Runtime,
-    action: (tx: Transaction, current: PiTask) => void | Promise<void>,
+    action: (
+      tx: Transaction,
+      current: PiTask,
+    ) => TerminalState | void | Promise<TerminalState | void>,
   ): Promise<void> {
     await this.checked(
       runtime.commit(async (tx, current) => {
-        await action(await this.transaction(tx), current);
+        return (await action(await this.transaction(tx), current)) ?? undefined;
       }, context),
     );
   }

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import { withTelemetryContext } from "@earendil-works/pi-agent-core/harness/context";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai/models";
 import {
   createRegistry,
   defineTask,
@@ -37,6 +37,7 @@ import {
   type AttemptState,
   type PiTask,
   type Transaction,
+  type TerminalState,
 } from "./store.ts";
 import type {
   Campaign,
@@ -156,7 +157,7 @@ function terminal(
     { status: "completed" | "failed" | "aborted" }
   >,
   publicationId: TaskId<JsonValue> | null = null,
-): PiTask {
+): PiTask & { state: TerminalState } {
   if (task.kind === WORKER && task.state.status !== "terminal") {
     outcome = {
       ...outcome,
@@ -229,10 +230,11 @@ export class Xean {
                 xean.execute(task, runtime, context),
             },
             abort: async (task, runtime) => {
-              await xean.store.mutateTask(runtime, (tx) =>
-                tx.writeTask(
-                  terminal(task, { status: "aborted", reason: "cancelled" }),
-                ),
+              await xean.store.mutateTask(
+                runtime,
+                () =>
+                  terminal(task, { status: "aborted", reason: "cancelled" })
+                    .state,
               );
             },
           }),
@@ -560,17 +562,19 @@ export class Xean {
           if (calls.pending.size > 0)
             throw new Error("Role returned with unsettled provider calls");
           await this.store.mutateTask(runtime, async (tx, current) => {
-            if (item.task.kind === WORKER) {
-              await this.finishWorker(tx, current, {
-                status: "completed",
-                result,
-              });
-            } else await this.commitDecision(tx, current, result as Decision);
+            const next =
+              item.task.kind === WORKER
+                ? await this.finishWorker(tx, current, {
+                    status: "completed",
+                    result,
+                  })
+                : await this.commitDecision(tx, current, result as Decision);
             await tx.entry(
               "xean.attempt.completed",
               { attemptId: item.attemptId },
               current.id,
             );
+            return next;
           });
         },
       );
@@ -597,7 +601,8 @@ export class Xean {
           checkpoint.attempts < tx.state.limits.attempts
         ) {
           tx.writeTask({ ...task, state: { status: "pending", checkpoint } });
-        } else await this.failTask(tx, task, message);
+        } else return this.failureState(tx, task, message);
+        return undefined;
       });
     } finally {
       active.cancel();
@@ -611,13 +616,22 @@ export class Xean {
     task: PiTask,
     message: string,
   ): Promise<void> {
+    const state = await this.failureState(tx, task, message);
+    if (state) tx.writeTask({ ...task, memos: undefined, state });
+  }
+
+  private async failureState(
+    tx: Transaction,
+    task: PiTask,
+    message: string,
+  ): Promise<TerminalState | undefined> {
     if (task.state.status === "terminal") return;
     const outcome = { status: "failed" as const, error: { message } };
     if (task.kind === WORKER) {
-      await this.finishWorker(tx, task, outcome);
+      return this.finishWorker(tx, task, outcome);
     } else if (tx.state.callLimitReached || task.state.checkpoint.callDenied) {
       // End failed Coordinator signals during draining so siblings can finish.
-      tx.writeTask(terminal(task, outcome));
+      return terminal(task, outcome).state;
     } else {
       tx.writeTask({
         ...task,
@@ -629,6 +643,7 @@ export class Xean {
       tx.state.status = "blocked";
       tx.state.error = message;
     }
+    return undefined;
   }
 
   private async finishWorker(
@@ -637,21 +652,23 @@ export class Xean {
     outcome:
       | { status: "completed"; result: JsonValue }
       | { status: "failed"; error: { message: string } },
-  ): Promise<void> {
+  ): Promise<TerminalState> {
     const signalId = await tx.newTask(COORDINATOR, {
       kind: outcome.status,
       value: { workId: (task.input as WorkRequest).id, taskId: task.id },
     });
-    tx.writeTask(
-      terminal(task, outcome, outcome.status === "completed" ? signalId : null),
-    );
+    return terminal(
+      task,
+      outcome,
+      outcome.status === "completed" ? signalId : null,
+    ).state;
   }
 
   private async commitDecision(
     tx: Transaction,
     task: PiTask,
     decision: Decision,
-  ): Promise<void> {
+  ): Promise<TerminalState> {
     const requests = decision.dispatch ?? [];
     const existing = new Map(
       tx.tasks
@@ -695,7 +712,7 @@ export class Xean {
     }
     tx.state.state = decision.state;
     for (const request of admitted) await tx.newTask(WORKER, request);
-    tx.writeTask(terminal(task, { status: "completed", result: decision }));
+    return terminal(task, { status: "completed", result: decision }).state;
   }
 
   private recorder(

@@ -21,38 +21,45 @@ import {
 import { openXeanStorage } from "../packages/core/src/storage.ts";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 
-test("Pi adapter normalizes Bun rows, rejects asynchronous transactions, and finalizes statements", () => {
+test("Pi adapter normalizes Bun rows, isolates asynchronous transactions, and closes cached statements", async () => {
   const native = new Database(":memory:", { strict: true });
   const database = new NodeSqliteDatabase({
     exec: (sql) => native.exec(sql),
     prepare: (sql) => native.prepare(sql),
     close: () => native.close(true),
   });
-  database.exec("CREATE TABLE test(value INTEGER)");
-  const rows = database.prepare("SELECT value FROM test");
+  await database.exec("CREATE TABLE test(value INTEGER)");
+  const rows = () => database.get("SELECT value FROM test");
   try {
-    expect(rows.get()).toBeUndefined();
-    expect(() =>
-      database.transaction(() => {
-        database.prepare("INSERT INTO test VALUES (?)").run(1);
-        return Promise.resolve();
-      }),
-    ).toThrow("must be synchronous");
-    expect(rows.all()).toEqual([]);
-    database.transaction(() =>
-      database.prepare("INSERT INTO test VALUES (?)").run(2),
+    expect(await rows()).toBeUndefined();
+    const inserted = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const write = database.transaction(async (transaction) => {
+      await transaction.run("INSERT INTO test VALUES (?)", 1);
+      inserted.resolve();
+      await release.promise;
+      throw new Error("rollback");
+    });
+    await inserted.promise;
+    const duringWrite = rows();
+    release.resolve();
+    await expect(write).rejects.toThrow("rollback");
+    expect(await duringWrite).toBeUndefined();
+    await database.transaction((transaction) =>
+      transaction.run("INSERT INTO test VALUES (?)", 2),
     );
-    expect(rows.get()).toEqual({ value: 2 });
+    expect(await rows()).toEqual({ value: 2 });
   } finally {
-    database.close();
+    await database.close();
   }
-  expect(() => rows.get()).toThrow("closed");
+  await expect(rows()).rejects.toThrow("closed");
 });
 
 test("SQLite ownership and reader snapshots survive aliases and native cleanup", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-readers-"));
   const path = join(directory, "campaign.sqlite");
   const storage = await openXeanStorage(path);
+  const documentId = await storage.mintId<DocumentId>();
   let snapshot = await openXeanStorage(path, { readOnly: true });
   const readers: Database[] = [];
   const read = () => {
@@ -71,11 +78,21 @@ test("SQLite ownership and reader snapshots survive aliases and native cleanup",
     first.exec("BEGIN");
     expect(count(first)).toBe(0);
     await storage.commit(
-      [{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }],
+      [
+        { type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
+        {
+          type: "document.create",
+          record: { id: documentId, kind: "test", scope: { kind: "session" } },
+          content: { kind: "base", version: 1, value: { text: "committed" } },
+        },
+      ],
       context,
     );
     expect(
       await snapshot.conversation(ROOT_CONVERSATION_ID, context),
+    ).toBeUndefined();
+    expect(
+      await snapshot.document(documentId, "current", context),
     ).toBeUndefined();
     await expect(snapshot.commit([], context)).rejects.toThrow("read-only");
     await expect(snapshot.mintId()).rejects.toThrow("read-only");
@@ -115,7 +132,9 @@ test("SQLite ownership and reader snapshots survive aliases and native cleanup",
       id: ROOT_CONVERSATION_ID,
     });
     expect(await snapshot.task(999999 as TaskId, context)).toBeUndefined();
+    const document = snapshot.document(documentId, "current", context);
     await snapshot.close(context);
+    expect((await document)?.value).toEqual({ text: "committed" });
     expect(await readFile(path)).toEqual(bytes);
   } finally {
     await snapshot.close(context);
@@ -133,7 +152,6 @@ test("Pi rolls back a task and document batch when its final SQLite write fails"
     kind: "xean.worker",
     version: 1,
     input: null,
-    after: [],
     background: false,
     abortRequested: false,
     state: { status: "pending", checkpoint: null },

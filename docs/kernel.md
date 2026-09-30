@@ -330,7 +330,7 @@ The internal `PiTask` type represents those task records. Their native
 `checkpoint` field stores `AttemptState` for whole-attempt recovery. Private
 execution checkpoints remain deferred.
 
-Xean's campaign state and campaign document use format version 8. Earlier formats
+Xean's campaign state and campaign document use format version 9. Earlier formats
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
@@ -340,8 +340,9 @@ mutation for atomic domain transitions, and retains entry attribution. The
 [alignment notes](pi-alignment.md#durable-integration) describe these local extensions.
 
 Xean configures WAL journaling, `synchronous = FULL`, and persistent WAL sidecars
-so read-only inspection works after the writer closes. Pi supplies statements,
-transactions, and writer checkpoints. Native close finalizes prepared statements
+so read-only inspection works after the writer closes. Pi queues asynchronous SQL
+operations, caches statements, owns transaction handles and rollback, drains reads,
+and performs writer checkpoints. Native close finalizes prepared statements
 before releasing the connection. Readers hold
 consistent SQLite snapshots while the owner continues committing work. A separate
 SQLite connection holds an exclusive transaction on `<canonical-database-path>.lock`

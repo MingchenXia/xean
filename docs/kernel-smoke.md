@@ -64,6 +64,21 @@ original local run artifacts. Those private artifacts are not part of the source
 distribution. Model execution, internal acceptance, independent mathematical
 review, and catalog closure remain distinct evidence.
 
+### Pi upgrade qualification
+
+Pi revision `d4d74eb19be9` passed the locked Bun 1.4.2 checks on 2026-09-30:
+108 tests and 1,494 assertions. All five artifacts matched across two clean
+builds, and all 16 patched installed files matched fresh patch application.
+
+The gateway smoke completed four Luna/max calls across two concurrent workers,
+including cached WebSocket continuation, then reopened without another call.
+Native Anthropic completed two Opus 5.5/max subscription requests, preserving
+the exact tool result, measured usage, records, and database bytes across reopens.
+These checks qualify transport and lifecycle behavior, not a full mathematical
+solver campaign. Source hashes and receipts are under
+`runs/pi-upgrade-20260930-d4d74eb/` and
+`runs/codex-lb-2026-09-30T21-11-45-790Z/`.
+
 ### ChatGPT Web
 
 Source `994dc7f` passed the production Responses smoke on 2026-09-30 using
