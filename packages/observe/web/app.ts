@@ -259,9 +259,8 @@ function indexView() {
 function draw() {
   let selected: Run | undefined;
   try {
-    selected = runs.find(
-      (run) => run.id === decodeURIComponent(location.hash.slice(1)),
-    );
+    const id = decodeURIComponent(location.hash.slice(1));
+    selected = runs.find((run) => run.id === id);
   } catch {
     /* Unmatched URL stays on the index. */
   }

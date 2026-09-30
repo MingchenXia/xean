@@ -13,47 +13,52 @@ import {
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { fixtureRuntime } from "./fixtures/pi.ts";
 
-test("direct browser Explorer quota survives reopen with a replaced planner", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "xean-browser-quota-"));
-  const path = join(directory, "campaign.sqlite");
-  let calls = 0;
-  const setup = () => {
-    const runtime = fixtureRuntime(() => {
-      calls++;
-      return fauxAssistantMessage(
-        [fauxToolCall("submit_result", { notes: [], candidate: false })],
-        { stopReason: "toolUse" },
+test.each(["completed", "failed"] as const)(
+  "browser Explorer quota survives a %s attempt and reopen",
+  async (status) => {
+    const directory = await mkdtemp(join(tmpdir(), "xean-browser-quota-"));
+    const path = join(directory, "campaign.sqlite");
+    let calls = 0;
+    const setup = () => {
+      const runtime = fixtureRuntime(() => {
+        calls++;
+        if (status === "failed") throw new Error("Browser request failed");
+        return fauxAssistantMessage(
+          [fauxToolCall("submit_result", { notes: [], candidate: false })],
+          { stopReason: "toolUse" },
+        );
+      });
+      runtime.profiles.explorer.model.provider = "codex-chatgpt-web";
+      const solver = createSolver(
+        { problem: "P", completionCriteria: "Prove P" },
+        () => runtime,
       );
-    });
-    runtime.profiles.explorer.model.provider = "codex-chatgpt-web";
-    const solver = createSolver(
-      { problem: "P", completionCriteria: "Prove P" },
-      () => runtime,
-    );
-    solver.functions.coordinator = async () => ({
-      work: [
-        { kind: "explorer", guidance: "Explore" },
-        { kind: "explorer", guidance: "Try another approach" },
-      ],
-    });
-    return solver;
-  };
-  let engine: Xean | undefined;
-  try {
-    engine = await Xean.open(await openXeanStorage(path), setup());
-    const first = await engine.run();
-    expect(first.work).toHaveLength(1);
-    await engine.close();
-    engine = await Xean.open(await openXeanStorage(path), setup());
-    await engine.input({ kind: "guide", id: "again", text: "Continue" });
-    const second = await engine.run();
-    expect(calls).toBe(1);
-    expect(second.work).toEqual(first.work);
-  } finally {
-    await engine?.close();
-    await rm(directory, { recursive: true });
-  }
-});
+      solver.functions.coordinator = async () => ({
+        work: [
+          { kind: "explorer", guidance: "Explore" },
+          { kind: "explorer", guidance: "Try another approach" },
+        ],
+      });
+      return solver;
+    };
+    let engine: Xean | undefined;
+    try {
+      engine = await Xean.open(await openXeanStorage(path), setup());
+      const first = await engine.run();
+      expect(first.work).toHaveLength(1);
+      expect(first.work[0]!.status).toBe(status);
+      await engine.close();
+      engine = await Xean.open(await openXeanStorage(path), setup());
+      await engine.input({ kind: "guide", id: "again", text: "Continue" });
+      const second = await engine.run();
+      expect(calls).toBe(1);
+      expect(second.work).toEqual(first.work);
+    } finally {
+      await engine?.close();
+      await rm(directory, { recursive: true });
+    }
+  },
+);
 
 test("runtime construction validates profiles and never falls back from an explicit credential environment", () => {
   const browser = {

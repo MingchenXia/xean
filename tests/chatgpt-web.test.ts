@@ -19,7 +19,6 @@ import {
   campaignOptions,
   declarationVersion,
 } from "../packages/core/src/solve/campaign.ts";
-import { createSolver } from "../packages/core/src/solve/solver.ts";
 import { createRoles } from "../packages/core/src/solve/roles.ts";
 import { offlineResearch } from "../scripts/bounded-solve.ts";
 import { project } from "../packages/core/src/solve/notes.ts";
@@ -298,71 +297,6 @@ test("direct browser roles cannot enable readers or repeat an invalid submission
   expect(settled).toBe(1);
 });
 
-test("ChatGPT Explorer is not dispatched again after an existing attempt", async () => {
-  const task = {
-    problem: "Quota fixture task",
-    completionCriteria: "Quota fixture result",
-  };
-  const settings = readSettings({
-    profiles: {
-      default: { provider: "openai", model: "gpt-6-astra" },
-      explorer: {
-        provider: "codex-chatgpt-web",
-        model: "chatgpt-web/gpt-6-pro",
-      },
-    },
-  });
-  const solver = createSolver(task, piRuntime(settings), {
-    ...settings,
-    chatGptSingleShot: true,
-  });
-  solver.functions.coordinator = async () => ({
-    work: [{ kind: "explorer", guidance: "Continue" }],
-  });
-  const view = {
-    task: { version: declarationVersion, kind: "xean.solve" },
-    status: "running",
-    callLimitReached: false,
-    state: null,
-    work: [],
-    inputs: [],
-  } as any;
-  const execution = {
-    attemptId: "quota-dispatch",
-    attempt: 1,
-    recorder: {
-      begin: () => ({ recordRequest() {}, settle() {} }),
-    },
-  } as any;
-  const first = await solver.coordinator.run(
-    { id: 1 as any, kind: "start", value: null },
-    view,
-    execution,
-    BACKGROUND_CONTEXT,
-  );
-  expect(
-    first.dispatch?.filter(({ role }) => role === "xean.explorer"),
-  ).toHaveLength(1);
-  const second = await solver.coordinator.run(
-    { id: 2 as any, kind: "completed", value: null },
-    {
-      ...view,
-      work: [
-        {
-          id: "w1",
-          role: "xean.explorer",
-          status: "failed",
-        },
-      ],
-    },
-    execution,
-    BACKGROUND_CONTEXT,
-  );
-  expect(
-    second.dispatch?.filter(({ role }) => role === "xean.explorer"),
-  ).toHaveLength(0);
-});
-
 test("browser provider validates typed replies and preserves tool history and served identity", async () => {
   const models = createModels();
   models.setProvider(chatGptWebProvider("https://bridge.invalid/v1"));
@@ -422,13 +356,19 @@ test("browser provider validates typed replies and preserves tool history and se
       expect(result.content).toEqual([]);
       expect(types).not.toContain("done");
     }
-    const plain = await models.completeSimple(
-      model,
-      { ...input, tools: [tool] },
-      { ...options, toolChoice: "none" },
-    );
-    expect(plain.content).toEqual([{ type: "text", text }]);
   }
+  const text = "Ordinary text needs no JSON envelope.";
+  const plain = await models.completeSimple(
+    model,
+    { ...input, tools: [tool] },
+    {
+      toolChoice: "none",
+      fetch: Object.assign(async () => response(text), {
+        preconnect: fetch.preconnect,
+      }),
+    },
+  );
+  expect(plain.content).toEqual([{ type: "text", text }]);
   const lookup = {
     name: "lookup",
     description: "Look up a key",

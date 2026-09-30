@@ -166,20 +166,14 @@ test("the external observer reads coherent live snapshots without changing a loc
       ).toThrow("Unsupported solver declaration");
     const exported = join(directory, "exported");
     await mkdir(exported);
-    await writeFile(
-      join(exported, "observation.json"),
-      JSON.stringify(published),
-    );
-    const readback = await readRun(
-      { id: "exported", directory: exported },
-      directory,
-    );
-    expect(readback.error).toBeUndefined();
-    expect(readback.kind).toBe("snapshot");
-    expect(readback.snapshot).toEqual(published);
     const observationFile = join(exported, "observation.json");
     const exportedRun = () =>
       readRun({ id: "exported", directory: exported }, directory);
+    await writeFile(observationFile, JSON.stringify(published));
+    const readback = await exportedRun();
+    expect(readback.error).toBeUndefined();
+    expect(readback.kind).toBe("snapshot");
+    expect(readback.snapshot).toEqual(published);
     for (const invalid of [
       { ...published, task: { label: "Invalid snapshot" } },
       { ...published, notes: [{ ...published.notes[0], support: undefined }] },
