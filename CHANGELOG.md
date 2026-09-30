@@ -6,6 +6,10 @@ The main branch is the current distribution. Existing numbered releases and
 tags remain historical archives. Pin the source commit and runtime for each
 campaign.
 
+- Select Codex or Claude Code independently for literature, source checking,
+  and independent review through `research.provider`. Both share evidence
+  binding, process recording, and cancellation. The public helpers are now
+  `createResearch` and `askResearch`, and reports use `kind: "research-report"`.
 - Reject dangling database symlinks before acquiring campaign ownership.
 - Retain SQLite WAL sidecars after writer close so independent read-only
   inspection remains available. Finalize native statements before releasing

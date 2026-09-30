@@ -13,11 +13,11 @@ export {
   type SolverCommand,
 } from "./commands.ts";
 export {
-  codexResearch,
+  createResearch,
   type Research,
   type LiteratureInput,
 } from "./research.ts";
-export { askCodex, type CodexOptions } from "./codex.ts";
+export { askResearch, type ResearchOptions } from "./research-call.ts";
 export {
   profileNames,
   type PiRuntime,

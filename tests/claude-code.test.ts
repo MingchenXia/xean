@@ -46,6 +46,7 @@ test("Claude subscription profiles keep gateway credentials out and reject unsup
   for (const options of [
     { apiKey: "must-not-be-forwarded" },
     { transport: "sse" as const },
+    { reasoning: "minimal" as const },
     { signal: controller.signal },
   ]) {
     const result = await runtime.models.completeSimple(
@@ -56,6 +57,8 @@ test("Claude subscription profiles keep gateway credentials out and reject unsup
       options,
     );
     expect(["error", "aborted"]).toContain(result.stopReason);
+    if ("reasoning" in options)
+      expect(result.errorMessage).toContain("minimal is unsupported");
     expect(result.content).toEqual([]);
     expect(reportedPiUsage(result)).toBeNull();
   }

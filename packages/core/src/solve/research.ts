@@ -15,7 +15,7 @@ import {
   type SourceEvidence,
   type Task,
 } from "./contracts.ts";
-import { askCodex, type CodexOptions } from "./codex.ts";
+import { askResearch, type ResearchOptions } from "./research-call.ts";
 
 export type LiteratureInput = { task: Task; query: string; notes: NoteInfo[] };
 export interface Research {
@@ -53,7 +53,7 @@ const reviewInstructions =
   taskEvidence;
 
 /** Retain reported passages directly; observed web activity does not authenticate quotes. */
-export function bindCodex(
+export function bindResearch(
   result: {
     value: Static<typeof sourceSchema>;
     operationId: string;
@@ -111,21 +111,21 @@ export function bindCodex(
     premises: [...premises],
     passages,
     ...(correction === null ? {} : { correction }),
-    kind: "codex-report",
+    kind: "research-report",
     operationId,
     reportedAt: new Date().toISOString(),
     ...(value.verdict === "PASS" && !valid
       ? {
           verdict: "INCONCLUSIVE",
-          report: `Codex PASS lacked valid task or source evidence for every premise. ${value.report}`,
+          report: `Research PASS lacked valid task or source evidence for every premise. ${value.report}`,
         }
       : {}),
   };
 }
 
-/** Codex owns research and its internal tools; the solver only calls functions. */
-export function codexResearch(
-  options: CodexOptions = { model: "gpt-6-astra" },
+/** The selected research agent owns retrieval; both backends share evidence rules. */
+export function createResearch(
+  options: ResearchOptions = { model: "gpt-6-astra" },
   usagePrefix?: string,
 ): Research {
   return {
@@ -138,7 +138,7 @@ export function codexResearch(
       const notes = input.notes.filter((note) => note.premises.length > 0);
       const reports = new Map<string, Source>();
       if (notes.length) {
-        const response = await askCodex(
+        const response = await askResearch(
           options,
           batchSchema(sourceSchema),
           sourceInstructions,
@@ -154,7 +154,7 @@ export function codexResearch(
         notes.forEach((note, index) => {
           reports.set(
             note.id,
-            bindCodex(
+            bindResearch(
               { ...response, value: results[index]! },
               note.premises,
               input.evidence,
@@ -174,7 +174,7 @@ export function codexResearch(
       }));
     },
     async literature(input, execution, context) {
-      const result = await askCodex(
+      const result = await askResearch(
         options,
         explorationSchema,
         literatureInstructions,
@@ -185,12 +185,12 @@ export function codexResearch(
       );
       if (result.value.notes.length && result.searches === 0)
         throw new Error(
-          "Codex returned literature without observed web activity",
+          "Research returned literature without observed web activity",
         );
       return { ...result.value, candidate: false };
     },
     async review(input, execution, context) {
-      const result = await askCodex(
+      const result = await askResearch(
         options,
         reviewSchema,
         reviewInstructions,
@@ -199,7 +199,7 @@ export function codexResearch(
         context,
         usagePrefix,
       );
-      return bindCodex(
+      return bindResearch(
         result,
         result.value.premises,
         [],

@@ -1,0 +1,15 @@
+{
+  "profiles": {
+    "default": {
+      "provider": "claude-code",
+      "model": "claude-opus-5-5",
+      "reasoning": "max"
+    }
+  },
+  "research": {
+    "provider": "claude-code",
+    "model": "claude-opus-5-5",
+    "reasoning": "max"
+  },
+  "literature": false
+}

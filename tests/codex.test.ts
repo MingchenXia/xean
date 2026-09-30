@@ -10,13 +10,13 @@ import {
   type XeanOptions,
 } from "../packages/core/src/index.ts";
 import {
-  bindCodex,
-  codexResearch,
+  bindResearch,
+  createResearch,
 } from "../packages/core/src/solve/research.ts";
 import {
-  askCodex,
-  type CodexOptions,
-} from "../packages/core/src/solve/codex.ts";
+  askResearch,
+  type ResearchOptions,
+} from "../packages/core/src/solve/research-call.ts";
 import {
   sourceSchema,
   reviewSchema,
@@ -24,7 +24,9 @@ import {
   type ResearchReport,
 } from "../packages/core/src/solve/contracts.ts";
 
-async function fixture(directory: string): Promise<CodexOptions> {
+async function fixture(
+  directory: string,
+): Promise<Extract<ResearchOptions, { provider?: "codex" }>> {
   const command = join(directory, "codex");
   await writeFile(
     command,
@@ -62,7 +64,7 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
         name: "worker",
         async run(input, execution, context) {
           if (input === "success") {
-            const research = codexResearch(codex);
+            const research = createResearch(codex);
             expect(
               await research.source(
                 {
@@ -78,7 +80,7 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
             ).toMatchObject([{ noteId: "self", result: { verdict: "PASS" } }]);
           }
           return (
-            await askCodex(
+            await askResearch(
               codex,
               schema,
               "Return the answer",
@@ -132,7 +134,7 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
       operationId: "fixture",
       searches: 0,
     };
-    expect(bindCodex(source, ["P"]).verdict).toBe("INCONCLUSIVE");
+    expect(bindResearch(source, ["P"]).verdict).toBe("INCONCLUSIVE");
     const task = { problem: "Assume P holds.", completionCriteria: "Prove Q" };
     const taskSource = {
       ...source,
@@ -141,11 +143,11 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
         passages: [{ premise: 0, url: "urn:xean:task", quote: task.problem }],
       },
     };
-    const taskReport = bindCodex(taskSource, ["P"], [], "fixture", task);
+    const taskReport = bindResearch(taskSource, ["P"], [], "fixture", task);
     expect(taskReport.verdict).toBe("PASS");
-    expect(bindCodex(taskSource, ["P"]).verdict).toBe("INCONCLUSIVE");
+    expect(bindResearch(taskSource, ["P"]).verdict).toBe("INCONCLUSIVE");
     expect(
-      bindCodex(taskSource, ["P"], [], "fixture", {
+      bindResearch(taskSource, ["P"], [], "fixture", {
         ...task,
         problem: "Prove P.",
       }).verdict,
@@ -158,18 +160,19 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
       },
     };
     expect(
-      bindCodex(taskReuse, ["P"], taskReport.passages, "reuse", task).verdict,
+      bindResearch(taskReuse, ["P"], taskReport.passages, "reuse", task)
+        .verdict,
     ).toBe("PASS");
-    expect(bindCodex(taskReuse, ["P"], taskReport.passages).verdict).toBe(
+    expect(bindResearch(taskReuse, ["P"], taskReport.passages).verdict).toBe(
       "INCONCLUSIVE",
     );
     source.searches = 1;
-    expect(bindCodex(source, ["P", "Q"]).verdict).toBe("INCONCLUSIVE");
-    const verified = bindCodex(source, ["P"]);
+    expect(bindResearch(source, ["P", "Q"]).verdict).toBe("INCONCLUSIVE");
+    const verified = bindResearch(source, ["P"]);
     expect(verified.verdict).toBe("PASS");
     expect(verified).not.toHaveProperty("correction");
     expect(
-      bindCodex(
+      bindResearch(
         {
           ...source,
           value: {
@@ -189,13 +192,13 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
       text: "Harmless edit",
     });
     expect(verified).toMatchObject({
-      kind: "codex-report",
+      kind: "research-report",
       operationId: "fixture",
     });
     expect(verified.passages).toEqual([
       { ...source.value.passages[0]!, id: "fixture/0", statement: "P" },
     ]);
-    const partial = bindCodex(
+    const partial = bindResearch(
       {
         ...source,
         value: {
@@ -221,7 +224,7 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
         passages: [{ premise: 0, passageId: "fixture/0" }],
       },
     };
-    const reuse = bindCodex(
+    const reuse = bindResearch(
       reused,
       ["P applied to this note"],
       verified.passages,
@@ -232,19 +235,19 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
       premises: ["P applied to this note"],
       passages: verified.passages,
     });
-    expect(bindCodex(reused, ["P"]).verdict).toBe("INCONCLUSIVE");
-    expect(bindCodex(reused, ["P", "Q"], verified.passages).verdict).toBe(
+    expect(bindResearch(reused, ["P"]).verdict).toBe("INCONCLUSIVE");
+    expect(bindResearch(reused, ["P", "Q"], verified.passages).verdict).toBe(
       "INCONCLUSIVE",
     );
     expect(
-      bindCodex(
+      bindResearch(
         { ...reused, value: { ...reused.value, verdict: "FAIL" } },
         ["Q"],
         verified.passages,
       ).verdict,
     ).toBe("FAIL");
     expect(
-      bindCodex(
+      bindResearch(
         {
           ...source,
           searches: 0,
@@ -345,7 +348,7 @@ test("source batches preserve note identity and distinct evidence in one Codex c
       { id: "b", text: "Apply Q", premises: ["Q holds"] },
     ];
     await expect(
-      codexResearch(codex).source(
+      createResearch(codex).source(
         { task, notes: [notes[0]!, { ...notes[1]!, id: "a" }] },
         {
           attemptId: "duplicates",
@@ -361,7 +364,7 @@ test("source batches preserve note identity and distinct evidence in one Codex c
     ).rejects.toThrow("Duplicate source note IDs");
     let admitted = 0;
     let request: { operationId: string; prompt: string } | undefined;
-    const results = await codexResearch(codex).source(
+    const results = await createResearch(codex).source(
       { task, notes },
       {
         attemptId: "batch",
@@ -427,7 +430,7 @@ test("close kills a Codex launcher and its resistant descendant and preserves ca
         name: "worker",
         async run(_input, execution, context) {
           return (
-            await askCodex(
+            await askResearch(
               codex,
               schema,
               "Wait",

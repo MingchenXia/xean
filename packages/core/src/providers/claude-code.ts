@@ -52,6 +52,10 @@ function stream(
       throw new Error(
         "Claude Code uses local subscription auth and print mode",
       );
+    if (options.reasoning === "minimal")
+      throw new Error(
+        "Claude Code reasoning starts at low; minimal is unsupported",
+      );
     const { inspectClaudeInstallation } =
       await import("pi-claude-code-provider/src/auth.ts");
     const { createClaudeStream } =

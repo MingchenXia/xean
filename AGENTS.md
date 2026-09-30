@@ -101,9 +101,10 @@ canonical terminology. Reuse an existing term before defining and justifying a n
 - Preserve exact statements, hypotheses, and completion criteria. Keep private
   requester/catalog metadata outside solver tasks. Acceptance of the exact task,
   independent review, and catalog closure remain distinct.
-- Pi runs Coordinator, Explorer, and mathematical checks. Codex owns literature,
-  source verification, and independent review, including internal retrieval tools.
-  Self-contained source checks skip Codex. Actual capabilities govern scheduling.
+- Pi runs Coordinator, Explorer, and mathematical checks. The selected research
+  backend (Codex by default, or Claude Code) owns literature, source verification,
+  and independent review, including internal retrieval tools.
+  Self-contained source checks skip external research. Actual capabilities govern scheduling.
 - Closed-book correctness may establish task-permitted background after checking
   exact statements and hypotheses. Forbidden black boxes fail. Uncertain premises
   remain unresolved under the task's proof rules.

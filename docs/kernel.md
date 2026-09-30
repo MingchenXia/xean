@@ -52,7 +52,7 @@ supplies that signal. Pi's public `getTelemetryContext(context)` helper from
 `@earendil-works/pi-agent-core/harness/context` retrieves the attempt's telemetry
 span. Pass these values directly to Pi's model and agent APIs.
 Each role chooses its execution implementation, models, and tools. Pi-backed
-roles use Pi's native loop, while research functions invoke Codex with its own
+roles use Pi's native loop, while research functions invoke their backend with its own
 tools. The kernel has no campaign-wide model setting. A tool and a scheduled
 role may call the same async function. Scheduling through the kernel supplies
 the durable request and atomic publication boundary.
@@ -292,7 +292,7 @@ turns. Recorded responses and usage remain the originals from each attempt.
 The narrow package patch retains reported failure usage and supports opaque
 credentials on explicitly configured custom Codex endpoints.
 
-The recorder also accepts non-Pi calls. Codex research records one admission
+The recorder also accepts non-Pi calls. Research records one admission
 per subprocess invocation and preserves its native result
 and usage. That admission does not limit the subprocess's internal model calls.
 

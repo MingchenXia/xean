@@ -77,7 +77,11 @@ The [example settings](examples/solver-settings.json) use the public OpenAI API
 with `gpt-6-astra` at max reasoning. Supply `OPENAI_API_KEY` through your shell
 or secret manager. Source checking and independent review use the separately
 installed Codex CLI, authenticated with `codex login` or its native provider
-configuration. Provider credentials stay outside task and settings files.
+configuration. [Claude settings](examples/claude-settings.json) use a local
+Claude Code subscription for every role, including research. Authenticate with
+`claude auth login`. The [provider guide](docs/solver.md#configuration-and-functions)
+also covers mixed providers and Anthropic API credentials. Provider credentials
+stay outside task and settings files.
 
 ChatGPT Web uses a separately managed browser service. Supply its endpoint and
 optional service credential through the [solver settings](docs/solver.md#configuration-and-functions).

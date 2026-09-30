@@ -8,7 +8,7 @@ import type { Execution, JsonValue } from "../packages/core/src/types.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
 import type { Note } from "../packages/core/src/solve/contracts.ts";
 import { refresh } from "../packages/core/src/solve/notes.ts";
-import { codexResearch } from "../packages/core/src/solve/research.ts";
+import { createResearch } from "../packages/core/src/solve/research.ts";
 import { fixtureRuntime } from "./fixtures/pi.ts";
 
 test("conditional hypotheses remain claims while external results require sources and acceptance requires the exact task", async () => {
@@ -188,7 +188,7 @@ test("conditional hypotheses remain claims while external results require source
       task,
       runtime,
       {},
-      codexResearch({
+      createResearch({
         model: "xean-fixture",
         command,
         environment: { HOME: directory, PATH: process.env.PATH },
