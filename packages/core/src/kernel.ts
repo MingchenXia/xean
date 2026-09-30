@@ -157,20 +157,19 @@ function terminal(
     { status: "completed" | "failed" | "aborted" }
   >,
   publicationId: TaskId<JsonValue> | null = null,
-): PiTask & { state: TerminalState } {
+): TerminalState {
   if (task.kind === WORKER && task.state.status !== "terminal") {
     outcome = {
       ...outcome,
       result: {
-        output: "result" in outcome ? (outcome.result ?? null) : null,
+        output: outcome.result ?? null,
         attempts: task.state.checkpoint.attempts,
         attemptId: task.state.checkpoint.attemptId,
         publicationId,
       },
     };
   }
-  const { memos: _memos, ...record } = task;
-  return { ...record, state: { status: "terminal", outcome } };
+  return { status: "terminal", outcome };
 }
 
 /** Xean's campaign policy over pi-durable's native atomic record storage. */
@@ -229,14 +228,10 @@ export class Xean {
               run: (task, runtime, context) =>
                 xean.execute(task, runtime, context),
             },
-            abort: async (task, runtime) => {
-              await xean.store.mutateTask(
-                runtime,
-                () =>
-                  terminal(task, { status: "aborted", reason: "cancelled" })
-                    .state,
-              );
-            },
+            abort: (task, runtime) =>
+              xean.store.mutateTask(runtime, () =>
+                terminal(task, { status: "aborted", reason: "cancelled" }),
+              ),
           }),
         );
       const runtime: HarnessOptions = {
@@ -601,8 +596,9 @@ export class Xean {
           checkpoint.attempts < tx.state.limits.attempts
         ) {
           tx.writeTask({ ...task, state: { status: "pending", checkpoint } });
-        } else return this.failureState(tx, task, message);
-        return undefined;
+          return;
+        }
+        return this.failureState(tx, task, message);
       });
     } finally {
       active.cancel();
@@ -627,22 +623,20 @@ export class Xean {
   ): Promise<TerminalState | undefined> {
     if (task.state.status === "terminal") return;
     const outcome = { status: "failed" as const, error: { message } };
-    if (task.kind === WORKER) {
-      return this.finishWorker(tx, task, outcome);
-    } else if (tx.state.callLimitReached || task.state.checkpoint.callDenied) {
+    if (task.kind === WORKER) return this.finishWorker(tx, task, outcome);
+    if (tx.state.callLimitReached || task.state.checkpoint.callDenied) {
       // End failed Coordinator signals during draining so siblings can finish.
-      return terminal(task, outcome).state;
-    } else {
-      tx.writeTask({
-        ...task,
-        state: {
-          status: "pending",
-          checkpoint: { ...task.state.checkpoint, error: message },
-        },
-      });
-      tx.state.status = "blocked";
-      tx.state.error = message;
+      return terminal(task, outcome);
     }
+    tx.writeTask({
+      ...task,
+      state: {
+        status: "pending",
+        checkpoint: { ...task.state.checkpoint, error: message },
+      },
+    });
+    tx.state.status = "blocked";
+    tx.state.error = message;
     return undefined;
   }
 
@@ -661,7 +655,7 @@ export class Xean {
       task,
       outcome,
       outcome.status === "completed" ? signalId : null,
-    ).state;
+    );
   }
 
   private async commitDecision(
@@ -712,7 +706,7 @@ export class Xean {
     }
     tx.state.state = decision.state;
     for (const request of admitted) await tx.newTask(WORKER, request);
-    return terminal(task, { status: "completed", result: decision }).state;
+    return terminal(task, { status: "completed", result: decision });
   }
 
   private recorder(
@@ -823,7 +817,11 @@ export class Xean {
     tx.state.error = error;
     for (const task of tx.tasks)
       if (task.state.status !== "terminal" && task.id !== except) {
-        tx.writeTask(terminal(task, { status: "aborted", reason: status }));
+        tx.writeTask({
+          ...task,
+          memos: undefined,
+          state: terminal(task, { status: "aborted", reason: status }),
+        });
       }
   }
 

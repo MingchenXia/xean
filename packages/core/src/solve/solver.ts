@@ -124,7 +124,6 @@ export function createSolver(
         plan.work.some((request) => request.kind === "explorer")
       )
         load();
-      const common = { task, notes: notes.map(noteInfo) };
       // Explorer workers may run alongside the single verification batch.
       const targets = verificationTargets(plan);
       let explorerUsed =
@@ -136,21 +135,19 @@ export function createSolver(
         if (request.kind === "explorer") {
           if (explorerUsed) continue;
           explorerUsed = options.chatGptSingleShot === true;
-          dispatch.push({
-            id: `w${signal.id}-${dispatch.length + 1}`,
-            role: "xean.explorer",
-            input: {
-              task,
-              notes,
-              guidance: request.guidance,
-            } satisfies ExplorerInput,
-          });
-        } else
-          dispatch.push({
-            id: `w${signal.id}-${dispatch.length + 1}`,
-            role: "xean.literature",
-            input: { ...common, query: request.query },
-          });
+        }
+        dispatch.push({
+          id: `w${signal.id}-${dispatch.length + 1}`,
+          role: `xean.${request.kind}`,
+          input:
+            request.kind === "explorer"
+              ? ({
+                  task,
+                  notes,
+                  guidance: request.guidance,
+                } satisfies ExplorerInput)
+              : { task, notes: notes.map(noteInfo), query: request.query },
+        });
       }
       if (targets.length)
         dispatch.push({

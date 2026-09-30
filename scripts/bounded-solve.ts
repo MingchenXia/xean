@@ -138,6 +138,7 @@ if (import.meta.main) {
   );
   const rounds = limitRounds(solver, directory, allowance);
   const options: XeanOptions = {
+    ...solver,
     // A separate kind prevents the online CLI from resuming this experiment.
     task: {
       kind: offline ? "xean.solve.offline" : "xean.solve",
@@ -145,10 +146,6 @@ if (import.meta.main) {
       task,
       settings,
     },
-    roles: solver.roles,
-    coordinator: solver.coordinator,
-    accept: solver.accept,
-    validateInput: solver.validateInput,
     limits: settings.limits,
   };
   const database = resolve(directory, "campaign.sqlite");

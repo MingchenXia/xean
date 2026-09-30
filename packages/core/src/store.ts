@@ -123,17 +123,15 @@ export class Store {
     runtime?: HarnessOptions,
     validate?: (state: CampaignState, tasks: readonly PiTask[]) => void,
   ): Promise<Store> {
-    let record = await storage.findDocument(
-      campaignAddress,
-      "current",
-      context,
-    );
-    if (!record) {
+    let documentId = (
+      await storage.findDocument(campaignAddress, "current", context)
+    )?.id;
+    if (documentId === undefined) {
       if (!initial) throw new Error("A new Xean campaign requires a task");
       if (await storage.conversation(ROOT_CONVERSATION_ID, context)) {
         throw new Error("Storage already contains a non-Xean session");
       }
-      const documentId = await storage.mintId<DocumentId>();
+      documentId = await storage.mintId<DocumentId>();
       await storage.commit(
         [
           { type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
@@ -149,9 +147,8 @@ export class Store {
         ],
         context,
       );
-      record = await storage.findDocument(campaignAddress, "current", context);
     }
-    const saved = await storage.document(record!.id, "current", context);
+    const saved = await storage.document(documentId, "current", context);
     if (
       saved?.version !== campaignVersion ||
       saved.value.version !== campaignVersion

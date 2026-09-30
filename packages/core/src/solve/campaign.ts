@@ -84,11 +84,8 @@ export function campaignOptions(
     (ready) => codexResearch(settings.research, ready.usagePrefix),
   );
   const options: XeanOptions = {
+    ...solver,
     task: declaration as unknown as JsonValue,
-    roles: solver.roles,
-    coordinator: solver.coordinator,
-    accept: solver.accept,
-    validateInput: solver.validateInput,
     limits: settings.limits,
   };
   if (declaration.kind === "xean.solve") return options;
@@ -121,9 +118,9 @@ export function campaignOptions(
           };
         const work = view.work.find((work) => work.id === "role");
         if (work?.status === "failed")
-          throw new Error(work?.error ?? "Role failed");
+          throw new Error(work.error ?? "Role failed");
         if (work?.status !== "completed") return { state: null };
-        return { state: null, completion: work?.result };
+        return { state: null, completion: work.result };
       },
     },
     // Completion records successful execution, including FAIL or INCONCLUSIVE reviews.
