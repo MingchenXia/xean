@@ -216,17 +216,13 @@ can trigger a workspace agent and report its status, but cannot currently retrie
 answer. It therefore cannot supply Pi model responses. Its workspace-scoped
 authentication does not establish personal Pro availability.
 
-Claude subscription transport uses `pi-claude-code-provider` pinned to `0.5.0`
-([source](https://github.com/chem/pi-claude-code-provider/tree/a87b98539f57945b8a6df8c26db4cdcf3ed38a7a)).
-Pi supplies the Opus model definition, provider registration, and lazy stream.
-The package owns CLI authentication, serialization, process termination,
-temporary files, and usage parsing. Xean owns the request's image-store lifetime
-and holds terminal events until process and image cleanup settle. A small patch
-exposes the finalization callback and resolves strict TypeScript issues. Existing
-dependency timeouts remain in place. Tune them from measured durations and
-inactivity for the relevant provider, without adding a separate role deadline. Its
-source imports are version-specific and need review on upgrade. Both subscription
-transports remain model providers used by ordinary roles.
+Claude uses Pi's native `anthropicProvider`, backed by `@anthropic-ai/sdk`.
+Pi owns API-key and Pro/Max OAuth authentication, message conversion, tool calls,
+streaming, and usage. Xean uses the same profile and call recorder as other models.
+The CLI accepts an operator-supplied token through `apiKeyEnv`; library callers
+can supply Pi's credential store for OAuth refresh. Native OAuth qualification
+is recorded in [verification](kernel-smoke.md#native-anthropic).
+The separate Claude Code provider, subprocess bridge, and provider patch are removed.
 
 ## Completed private work
 

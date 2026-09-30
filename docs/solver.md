@@ -596,18 +596,20 @@ Optional fields are `baseUrl`, `apiKeyEnv`, and `transport`. Endpoint URLs canno
 contain credentials, query parameters, or fragments. An explicit `apiKeyEnv`
 must name a present, nonblank variable when the runtime is constructed.
 The CLI supports
-Pi's OpenAI, Codex, Anthropic, ChatGPT Web, and Claude Code providers. Library callers supply their own
+Pi's OpenAI, Codex, Anthropic, and ChatGPT Web providers. Library callers supply their own
 native Pi `Models` collection and model objects for other providers.
 Explicit Codex endpoints on `chatgpt.com` and its subdomains retain native
 authentication. Custom hosts enable proxy authentication.
 
-To use a local Claude subscription, select Opus 5.5:
+Claude uses Pi's native Anthropic provider. For a Pro/Max subscription, supply
+a valid OAuth token through your environment or secret manager:
 
 ```json
 {
-  "provider": "claude-code",
+  "provider": "anthropic",
   "model": "claude-opus-5-5",
-  "reasoning": "max"
+  "reasoning": "max",
+  "apiKeyEnv": "ANTHROPIC_OAUTH_TOKEN"
 }
 ```
 
@@ -617,21 +619,16 @@ checks, and for `coordinator`. It also works as `profiles.default`. Research and
 review retain their separately configured Codex backend; provider profiles do not
 silently replace the retrieval and evidence boundary.
 
-Install and log in to Claude Code on the executing machine. `claude auth status`
-must report a first-party Claude subscription. The provider uses that login through
-the pinned `pi-claude-code-provider` package's non-interactive transport. Set
-`PI_CLAUDE_CODE_PROVIDER_PATH` if `claude` is outside `PATH`. Omit `baseUrl`,
-`apiKeyEnv`, and `transport` for this provider. Shared gateway credentials are
-not forwarded. Claude Code accepts `low`, `medium`, `high`, `xhigh`, or `max`
-reasoning. `minimal` is rejected before launch.
+The explicit `apiKeyEnv` requires that token and prevents fallback to an API key
+or shared gateway credential. Pi sends subscription bearer authentication and
+owns native message conversion, reasoning, tool calls, cancellation, and usage.
+Xean adds no Claude-specific model adapter or subprocess. Tokens stay outside
+task/settings files and recorded request bodies.
 
-Pi executes the requested tools. The maintained bridge proposes calls through a
-request-owned subprocess and cleans up the Claude process and temporary state.
-Each request carries the current Pi transcript. The provider reports token usage
-when available and sets monetary cost to zero because API prices do not describe
-subscription billing. Claude subscription capacity is still consumed. Library
-callers can register `claudeCodeProvider` from `xean/pi` with
-`models.setProvider()`.
+The CLI uses Pi's in-memory credential store and does not load a saved Pi login.
+Environment tokens are operator-managed and must be renewed outside Xean.
+Library callers can supply a Pi `Models` collection with a credential store to
+use Pi's native OAuth login and automatic refresh. Xean does not manage login.
 
 To use the Anthropic API instead of a Claude subscription, select the same model
 through Pi's `anthropic` provider and name the API-key environment variable:
@@ -645,17 +642,12 @@ through Pi's `anthropic` provider and name the API-key environment variable:
 }
 ```
 
-This uses Anthropic's Messages API and reports its API usage separately. It does
-not invoke Claude Code or use a claude.ai subscription. Conversely,
-`claude-code` profiles reject `baseUrl`, `apiKeyEnv`, and `transport`; they use
-the local first-party login described above. Keep the two profiles distinct when
-mixing providers by role.
-
-Pi also provides native Anthropic Pro/Max OAuth. That transport uses Pi's OAuth
-flow and `@anthropic-ai/sdk` to call Anthropic directly. The `claude-code`
-profile instead delegates authentication to the installed Claude Code CLI.
-Neither transport uses the Claude Agent SDK. The live subscription qualification
-here covers the CLI-backed provider.
+Both configurations use Anthropic's Messages API through `@anthropic-ai/sdk`,
+not the Claude Agent SDK. The credential determines subscription versus API
+billing. Native token counts are measured when available. Pi's dollar figures
+are catalog API-rate estimates even for OAuth, not subscription charges.
+Xean's usage report omits these estimates. See the
+[native subscription qualification](kernel-smoke.md#native-anthropic).
 
 External research has a separate contract. The built-in source checker,
 literature role, and independent review use the Codex CLI. It preserves exact

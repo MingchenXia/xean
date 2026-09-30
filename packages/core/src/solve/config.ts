@@ -13,10 +13,6 @@ import {
   chatGptWebProvider,
   chatGptWebProviderId,
 } from "../providers/chatgpt-web.ts";
-import {
-  claudeCodeProvider,
-  claudeCodeProviderId,
-} from "../providers/claude-code.ts";
 import { limitsSchema, positiveIntegerSchema } from "../types.ts";
 import { decode, defaultReasoning, object } from "./contracts.ts";
 import {
@@ -41,7 +37,6 @@ const profile = object({
     "openai-codex",
     "anthropic",
     chatGptWebProviderId,
-    claudeCodeProviderId,
   ] as const),
   model: Type.String({ minLength: 1 }),
   reasoning,
@@ -101,13 +96,6 @@ export function readSettings(value: unknown): Settings {
     settings.maxExplorerResponses = 1;
   }
   for (const profile of Object.values(settings.profiles)) {
-    if (
-      profile?.provider === claudeCodeProviderId &&
-      (profile.baseUrl || profile.apiKeyEnv || profile.transport)
-    )
-      throw new Error(
-        "Claude Code profiles use local subscription auth and print mode; omit baseUrl, apiKeyEnv, and transport",
-      );
     const endpoint = profile?.baseUrl;
     if (!endpoint) continue;
     const url = new URL(endpoint);
@@ -131,7 +119,6 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
   models.setProvider(openaiProvider());
   models.setProvider(anthropicProvider());
   models.setProvider(chatGptWebProvider());
-  models.setProvider(claudeCodeProvider());
   models.setProvider({
     ...openaiCodexProvider(),
     auth: { apiKey: envApiKeyAuth("Codex gateway", []) },
@@ -165,8 +152,7 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
         transport: configured.transport,
         apiKey: configured.apiKeyEnv
           ? configuredKey
-          : configured.provider === chatGptWebProviderId ||
-              configured.provider === claudeCodeProviderId
+          : configured.provider === chatGptWebProviderId
             ? undefined
             : key,
       };

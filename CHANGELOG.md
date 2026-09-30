@@ -6,9 +6,10 @@ The main branch is the current distribution. Existing numbered releases and
 tags remain historical archives. Pin the source commit and runtime for each
 campaign.
 
-- Keep Claude as a Pi model provider and research Codex-only. Remove the separate
-  Claude research runner, provider selection, and tests. Retain the mathematical
-  campaign qualification and reject unsupported Claude `minimal` reasoning.
+- Use Pi's native Anthropic provider for Claude models with subscription OAuth
+  or API credentials. Remove the Claude Code provider package, patch, custom
+  adapter, and subprocess tests. Research remains Codex-only. Retain historical
+  qualification evidence and document the native subscription smoke.
 - Reject dangling database symlinks before acquiring campaign ownership.
 - Retain SQLite WAL sidecars after writer close so independent read-only
   inspection remains available. Finalize native statements before releasing

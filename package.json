@@ -41,8 +41,7 @@
   },
   "patchedDependencies": {
     "@earendil-works/pi-ai@vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-ai-0.99.0.tgz": "patches/@earendil-works%2Fpi-ai@0.99.0.patch",
-    "@earendil-works/pi-durable@vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-durable-0.99.0.tgz": "patches/@earendil-works%2Fpi-durable@0.99.0.patch",
-    "pi-claude-code-provider@0.5.0": "patches/pi-claude-code-provider@0.5.0.patch"
+    "@earendil-works/pi-durable@vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-durable-0.99.0.tgz": "patches/@earendil-works%2Fpi-durable@0.99.0.patch"
   },
   "overrides": {
     "@earendil-works/chord": "catalog:",

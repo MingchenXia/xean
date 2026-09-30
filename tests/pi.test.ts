@@ -32,6 +32,36 @@ const context = {
 };
 const apiKey = "xean-offline-fixture-key";
 
+test("Anthropic profiles preserve explicit credentials instead of a shared gateway key", () => {
+  const variable = "XEAN_TEST_ANTHROPIC_CREDENTIAL";
+  const previous = process.env[variable];
+  try {
+    for (const credential of ["sk-ant-oat-fixture", "anthropic-api-fixture"]) {
+      process.env[variable] = credential;
+      const profile = piRuntime(
+        readSettings({
+          profiles: {
+            default: {
+              provider: "anthropic",
+              model: "claude-opus-5-5",
+              apiKeyEnv: variable,
+            },
+          },
+        }),
+        "unrelated-gateway-key",
+      ).profiles.explorer;
+      expect(profile.model.api).toBe("anthropic-messages");
+      expect(profile.options).toMatchObject({
+        apiKey: credential,
+        reasoning: "max",
+      });
+    }
+  } finally {
+    if (previous === undefined) delete process.env[variable];
+    else process.env[variable] = previous;
+  }
+});
+
 test("configuration and library limits share safe integer boundaries", async () => {
   const profiles = { default: { provider: "openai", model: "unused" } };
   const solver = (maxExplorerResponses: number) =>

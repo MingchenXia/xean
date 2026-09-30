@@ -16,7 +16,6 @@
     "@earendil-works/pi-telemetry": "catalog:",
     "@earendil-works/pi-agent-core": "catalog:",
     "execa": "catalog:",
-    "pi-claude-code-provider": "0.5.0",
     "typebox": "catalog:"
   }
 }

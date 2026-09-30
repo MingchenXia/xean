@@ -77,9 +77,9 @@ The [example settings](examples/solver-settings.json) use the public OpenAI API
 with `gpt-6-astra` at max reasoning. Supply `OPENAI_API_KEY` through your shell
 or secret manager. Source checking and independent review use the separately
 installed Codex CLI, authenticated with `codex login` or its native provider
-configuration. [Claude settings](examples/claude-settings.json) select a local
-Claude Code subscription for Pi's mathematical roles. Authenticate with
-`claude auth login`. The [provider guide](docs/solver.md#configuration-and-functions)
+configuration. [Claude settings](examples/claude-settings.json) use Pi's native
+Anthropic provider with an operator-supplied subscription OAuth token in
+`ANTHROPIC_OAUTH_TOKEN`. The [provider guide](docs/solver.md#configuration-and-functions)
 also covers mixed providers and Anthropic API credentials. Provider credentials
 stay outside task and settings files.
 

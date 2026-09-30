@@ -17,10 +17,6 @@ export {
   chatGptWebProvider,
   chatGptWebProviderId,
 } from "./providers/chatgpt-web.ts";
-export {
-  claudeCodeProvider,
-  claudeCodeProviderId,
-} from "./providers/claude-code.ts";
 
 /** Pi output tokens already include reasoning tokens. */
 export function reportedPiUsage(message: AssistantMessage): Usage | null {

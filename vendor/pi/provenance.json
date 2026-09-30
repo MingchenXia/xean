@@ -63,11 +63,6 @@
       "path": "patches/@earendil-works%2Fpi-durable@0.99.0.patch",
       "sha256": "4f4c415d504774a391766be4e8fe243c1cbd0d59bafeb8bc5a26a1fe9ae32451",
       "appliedBy": "Bun patchedDependencies at installation"
-    },
-    {
-      "path": "patches/pi-claude-code-provider@0.5.0.patch",
-      "sha256": "90d8940efe9fcfd71ecf23587746e348545a4e3f932ad1a8c5bd8f1d239867e5",
-      "appliedBy": "Bun patchedDependencies at installation"
     }
   ],
   "verification": {

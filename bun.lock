@@ -42,7 +42,6 @@
         "@earendil-works/pi-durable": "catalog:",
         "@earendil-works/pi-telemetry": "catalog:",
         "execa": "catalog:",
-        "pi-claude-code-provider": "0.5.0",
         "typebox": "catalog:",
       },
     },
@@ -64,7 +63,6 @@
   },
   "patchedDependencies": {
     "@earendil-works/pi-ai@vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-ai-0.99.0.tgz": "patches/@earendil-works%2Fpi-ai@0.99.0.patch",
-    "pi-claude-code-provider@0.5.0": "patches/pi-claude-code-provider@0.5.0.patch",
     "@earendil-works/pi-durable@vendor/pi/312184edb68c38248e1acfc3eec68500ba49d9cb/earendil-works-pi-durable-0.99.0.tgz": "patches/@earendil-works%2Fpi-durable@0.99.0.patch",
   },
   "overrides": {
@@ -365,8 +363,6 @@
     "partial-json": ["partial-json@0.1.7", "", {}, "sha512-Njv/59hHaokb/hRUjce3Hdv12wd60MtM9Z5Olmn+nehe0QDAsRtRbJPvJ0Z91TusF0SuZRIvnM+S4l6EIP8leA=="],
 
     "path-key": ["path-key@4.0.0", "", {}, "sha512-haREypq7xkM7ErfgIyA0z+Bj4AGKlMSdlQE2jvJo6huWD1EdkKYV+G/T4nq0YEF2vgTT8kqMFKo1uHn950r4SQ=="],
-
-    "pi-claude-code-provider": ["pi-claude-code-provider@0.5.0", "", { "peerDependencies": { "@earendil-works/pi-ai": "*", "@earendil-works/pi-coding-agent": "*", "typebox": "*" }, "optionalPeers": ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"] }, "sha512-kt7FXHCnKHlQSk8JRgmrH3cbpNUbQ7QyXnPE/Vybc6U+ni4Ocq0cK74y6pwpOUFOfhD28anwvWWEjQ0ZWt5Z4A=="],
 
     "prettier": ["prettier@3.9.9", "", { "bin": { "prettier": "bin/prettier.cjs" } }, "sha512-Z/CJHIkdujO/OtN7nXUii0Rf3VT5SRuhjBA82Xvu2XhBUgX3nhP67T0LHceBdQLex7OOFGTox+Q5Yg8Jk2Qivg=="],
 

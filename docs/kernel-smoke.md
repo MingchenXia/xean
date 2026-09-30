@@ -86,12 +86,26 @@ generation were not exercised by this smoke. Cancellation, invalid envelopes,
 and no-replay recovery also have deterministic fixture coverage.
 Private artifacts are in `runs/issue2-responses-live-20260930/`.
 
-### Claude Code
+### Native Anthropic
 
-On 2026-09-30, the Claude subscription paths passed on saturn with Claude Code
-2.1.280, Fleet Bun 1.4.2, and `claude-opus-5-5` at `max` reasoning. The
-[settings example](../examples/claude-settings.json) selects Claude as the Pi
-model provider. Research uses Codex.
+On 2026-09-30, Pi's native Anthropic provider passed a two-request subscription
+smoke on saturn with Fleet Bun 1.4.2 and `claude-opus-5-5` at `max` reasoning.
+Both requests used bearer OAuth without an API key and returned HTTP 200. A Pi
+tool returned a random nonce, newline, and LaTeX, preserved exactly by the next
+response. Native terminal events attested the model, and measured token usage
+was retained. No retry occurred. Read-only and completed owning reopens preserved
+records and database bytes without another request.
+
+The [settings example](../examples/claude-settings.json) uses this native provider.
+Private evidence is under `runs/native-anthropic-20260930/`. Credentials were
+supplied in memory and checked absent from saved artifacts. OAuth refresh,
+large contexts, quota exhaustion, and mathematical acceptance were not exercised
+by this transport smoke. Pi's API-rate cost estimates are not subscription bills.
+
+### Historical Claude Code
+
+On 2026-09-30, the now-removed CLI-backed provider passed on saturn with Claude
+Code 2.1.280, Fleet Bun 1.4.2, and `claude-opus-5-5` at `max` reasoning.
 
 An algebra campaign reached acceptance after 11 recorded calls, including one
 Explorer interrupted after native initialization. Reopening recovered that
