@@ -1,8 +1,7 @@
-import { appendFile } from "node:fs/promises";
-import { join } from "node:path";
+import assert from "node:assert/strict";
 import { REQUIRED_HEADLESS_FLAGS } from "../../packages/core/node_modules/pi-claude-code-provider/src/auth.ts";
 
-export async function runFixture(directory: string) {
+export async function runFixture() {
   const args = process.argv.slice(2);
   const event = (value: unknown) => console.log(JSON.stringify(value));
   if (args.includes("--version")) console.log("2.1.281");
@@ -16,13 +15,11 @@ export async function runFixture(directory: string) {
       subscriptionType: "max",
     });
   else {
+    assert.equal(args[args.indexOf("--tools") + 1], "WebSearch,WebFetch");
+    assert.equal(args[args.indexOf("--effort") + 1], "max");
     const input = JSON.parse(await Bun.stdin.text());
     const mode = input.task.problem;
     const schema = JSON.parse(args[args.indexOf("--json-schema") + 1]!);
-    await appendFile(
-      join(directory, "calls.jsonl"),
-      JSON.stringify({ input, args }) + "\n",
-    );
     event({
       type: "system",
       subtype: "init",
