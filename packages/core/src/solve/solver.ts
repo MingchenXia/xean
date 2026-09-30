@@ -24,7 +24,7 @@ import {
   type RoleOptions,
 } from "./roles.ts";
 import { type PiRuntime } from "./pi.ts";
-import { createResearch, type Research } from "./research.ts";
+import { codexResearch, type Research } from "./research.ts";
 import { guidance, validateCommand } from "./commands.ts";
 import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
 
@@ -67,7 +67,7 @@ export function createSolver(
         ready,
         typeof research === "function"
           ? research(ready)
-          : (research ?? createResearch(undefined, ready.usagePrefix)),
+          : (research ?? codexResearch(undefined, ready.usagePrefix)),
         options,
       );
     }

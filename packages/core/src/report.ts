@@ -108,6 +108,6 @@ export function statusReport({
       byModel,
     },
     usageNote:
-      "Reported native counts may be partial and fields overlap. Research internal requests and provider bills are not reconciled. Price estimates are omitted.",
+      "Reported native counts may be partial and fields overlap. Codex internal requests and provider bills are not reconciled. Price estimates are omitted.",
   };
 }

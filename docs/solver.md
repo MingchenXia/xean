@@ -77,7 +77,7 @@ name.
 Correctness checks dependent reasoning conditionally on declared support, even
 when that support is checked in the same batch. A failed dependency invalidates
 its dependents; an inconclusive dependency blocks their verification and acceptance.
-Source checking combines notes with external premises into one research invocation;
+Source checking combines notes with external premises into one Codex invocation;
 notes without external premises pass that stage without a call. Requirements
 checks only verified notes. Missing, duplicate, or unexpected result IDs reject
 the entire submitted batch. Pi lets the model correct an invalid submission.
@@ -125,8 +125,8 @@ The existing Pi capacity check applies to each batch without truncation or
 automatic splitting.
 
 A full self-contained batch normally needs five model requests: correctness,
-requirements, statement extraction, independent proof, and comparison. External premises add one research
-invocation, whose internal searches and model requests belong to the selected backend.
+requirements, statement extraction, independent proof, and comparison. External premises add one Codex
+invocation, whose internal searches and model requests remain Codex's responsibility.
 Completed checks and earlier stopping stages reduce calls; invalid model outputs
 can require additional requests. Each stage retains its configured model profile.
 
@@ -246,7 +246,7 @@ invocation and publishes no partial mathematical result. This recovery is local
 to a live invocation. Reopening after process death restarts the worker, except
 that a recovered ChatGPT Web worker fails before sending another browser request.
 
-Research uses separate instructions, JSON stdin, and an output schema.
+Codex research uses developer instructions, JSON stdin, and an output schema.
 Its source/review schema requires `correction`, with `null` meaning no edit;
 the adapter omits that null in local verdicts. This follows OpenAI's
 [strict structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs#all-fields-must-be-required).
@@ -254,7 +254,7 @@ the adapter omits that null in local verdicts. This follows OpenAI's
 Role invocations are intended to finish with room for a structured result.
 Coordinator chooses subsequent work from committed notes and results, with
 fresh context for each new invocation. Xean does not compact conversations;
-The research backend owns its internal execution as an opaque subprocess.
+Codex owns its internal execution as an opaque subprocess.
 
 Before every Pi request, including requests following tool results, the pinned
 Pi capacity estimator reserves the model's maximum output plus Pi's safety
@@ -271,19 +271,19 @@ token cap on the wire. An oversized task and complete note index require a
 larger-context model. No mathematical text is silently truncated,
 and this adds neither a spending budget nor private checkpoint recovery.
 
-The selected research backend implements literature, source verification, and
-independent full-proof review. It owns search and reading inside those functions. Pi
+Codex implements literature, source verification, and independent full-proof
+review. It owns the search and reading tools used inside those functions. Pi
 runs Coordinator, Explorer, correctness, requirements, statement extraction,
 proof, and reconstruction.
 When correctness explicitly lists no external premise, the source check records
-PASS without invoking a research agent. Correctness checks the scope and application of
+PASS without invoking Codex. Correctness checks the scope and application of
 task-granted assumptions and omits them from external premises. Source checks
 also receive the exact task, so any remaining task-granted premise can be
 established from that input.
 
 The optional `research` object configures the backend. Omission selects Codex
 with `gpt-6-astra` and `max` reasoning.
-The backend starts only when a research function needs it. Literature remains an
+Codex starts only when a research function needs it. Literature remains an
 optional scheduling choice, disabled by default.
 Literature answers its supplied query and stops when the relevant evidence is
 established. It returns only useful new theorem notes, or an empty list when
@@ -291,7 +291,7 @@ there is no useful new result. It records citations in ordinary note text withou
 a mandatory bibliographic schema or a Xean web-action cap. Citation typos alone do not fail
 otherwise checked mathematics.
 
-When `provider` is `codex`, the role calls `codex exec` through Execa with
+Research calls `codex exec` through Execa with
 `web_search="live"`, a read-only sandbox, structured output, and a temporary
 working directory. Research disables
 the native shell with `features.shell_tool=false`. The selected Codex runtime,
@@ -309,47 +309,39 @@ Project-document loading is disabled for this research invocation. Cancellation
 uses Execa to kill the owned process group, and temporary request files are
 removed after execution. The kernel sees only the role's eventual result or failure.
 
-With `provider: "claude-code"`, research uses the authenticated Claude Code
-subscription and its native `WebSearch` and `WebFetch` tools. The pinned provider
-package supplies authentication checks and invocation settings. Xean supplies
-the same prompts, schemas, and evidence binding used for Codex. Native shell,
-MCP servers, project customizations, and conversation persistence are disabled.
-Both backends share Execa recording, cancellation, and temporary-file cleanup.
-
-Source and review results are labeled `kind: "research-report"`, with an
+Codex source and review results are labeled `kind: "codex-report"`, with an
 operation ID, report time, and exact `premises`, using the `ResearchReport` type.
 Fresh passages retain their reported URLs and quotations, an ID derived from
-the original operation, and the original premise as `statement`. Fresh external
-passages require completed native `web_search` items for Codex or successful
-`WebSearch`/`WebFetch` tool results for Claude in that invocation. Arbitrary tool
+the original operation, and the original premise as `statement`. Codex's JSONL records web activity but
+does not reliably expose page contents or opened URLs. Fresh external passages
+require completed native `web_search` items in that invocation. Arbitrary tool
 calls do not establish web activity. A task-granted premise instead uses
 `url: "urn:xean:task"` with an exact quotation from the supplied problem or
-completion criteria, checked against the current task even when reused. The agent
+completion criteria, checked against the current task even when reused. Codex
 must distinguish granted assumptions from requested conclusions or assertions
 made only in notes. Every premise needs valid passage coverage.
 
 Verifier input may include `evidence` projected from source PASS results on
 established live notes. This freezes available quotations with the worker's
 other inputs. Earlier completed checks within that worker also provide evidence.
-For each new source assessment, the agent must check the exact hypotheses, conclusion,
+For each new source assessment, Codex must check the exact hypotheses, conclusion,
 variant, and application. It can return `{premise, passageId}` to reuse a supplied
 quotation or `{premise, url, quote}` for a fresh retrieval. Binding resolves IDs
 only against that invocation's evidence and preserves the original quotation and
 statement. Unknown references or missing coverage downgrade PASS to INCONCLUSIVE.
 Other valid passages are retained even when one reference is invalid.
-The agent assesses supplied evidence first. When it establishes every premise, the
+Codex assesses supplied evidence first. When it establishes every premise, the
 source call returns without web activity. Retrieval addresses only missing
 evidence, and stops once that gap is settled. Every application still needs a
 new applicability verdict. Previous corrections are excluded from evidence.
 Independent review receives no solver evidence and its schema requires fresh
 passages for external premises. Quotation accuracy remains a model judgment,
-and reuse retains `research-report` provenance. Observed retrieval does not
-authenticate every reported quotation.
+and reuse retains `codex-report` provenance rather than host-retrieved page text.
 
-The shared call recorder preserves the research request, selected profile, usage
+The shared call recorder preserves the Codex request, selected profile, usage
 tag, raw stdout/stderr, and native usage fields, including after an invalid answer or
-cancellation. A research invocation consumes one logical call admission. Its internal
-model requests and web actions are opaque to that limit. The role-owned `askResearch`
+cancellation. A Codex invocation consumes one logical call admission. Its internal
+model requests and web actions are opaque to that limit. The role-owned `askCodex`
 function handles admission, execution, output validation, and settlement. The process
 receipt stores `exitCode`, `failed`, and `isCanceled` alongside stdout/stderr.
 Native token fields
@@ -597,7 +589,7 @@ the public OpenAI API and its `OPENAI_API_KEY` environment variable.
 `profiles.default` supplies the shared Pi profile. Override `explorer`,
 `coordinator`, `correctness`, `requirements`, `statement`, `proof`, or `reconstruction`
 with a complete `{provider, model, reasoning?}` profile. Omitted reasoning uses
-`max` for Pi roles and research. Explicit effort overrides remain supported.
+`max` for Pi roles and Codex research. Explicit effort overrides remain supported.
 `ProfileName` and `profileNames` name these model-configuration slots. The
 Verifier uses several profiles within one role invocation.
 Optional fields are `baseUrl`, `apiKeyEnv`, and `transport`. Endpoint URLs cannot
@@ -621,16 +613,17 @@ To use a local Claude subscription, select Opus 5.5:
 
 Use this profile for `explorer` to develop proofs, or for `correctness`,
 `requirements`, `statement`, `proof`, and `reconstruction` to select mathematical
-checks, and for `coordinator`. It also works as `profiles.default`.
-Configure `research.provider` separately to select the agent responsible for
-retrieval and independent review.
+checks, and for `coordinator`. It also works as `profiles.default`. Research and independent source
+review retain their separately configured Codex backend; provider profiles do not
+silently replace the retrieval and evidence boundary.
 
 Install and log in to Claude Code on the executing machine. `claude auth status`
 must report a first-party Claude subscription. The provider uses that login through
 the pinned `pi-claude-code-provider` package's non-interactive transport. Set
 `PI_CLAUDE_CODE_PROVIDER_PATH` if `claude` is outside `PATH`. Omit `baseUrl`,
 `apiKeyEnv`, and `transport` for this provider. Shared gateway credentials are
-not forwarded.
+not forwarded. Claude Code accepts `low`, `medium`, `high`, `xhigh`, or `max`
+reasoning. `minimal` is rejected before launch.
 
 Pi executes the requested tools. The maintained bridge proposes calls through a
 request-owned subprocess and cleans up the Claude process and temporary state.
@@ -658,10 +651,18 @@ not invoke Claude Code or use a claude.ai subscription. Conversely,
 the local first-party login described above. Keep the two profiles distinct when
 mixing providers by role.
 
-External research selects Codex or Claude Code independently of the Pi profiles.
-Both preserve exact premises, quotations, URLs, and PASS/FAIL/INCONCLUSIVE
-evidence rules. Library callers can use `createResearch(settings.research)` or
-supply a custom `Research` object or factory to `createSolver`.
+Pi also provides native Anthropic Pro/Max OAuth. That transport uses Pi's OAuth
+flow and `@anthropic-ai/sdk` to call Anthropic directly. The `claude-code`
+profile instead delegates authentication to the installed Claude Code CLI.
+Neither transport uses the Claude Agent SDK. The live subscription qualification
+here covers the CLI-backed provider.
+
+External research has a separate contract. The built-in source checker,
+literature role, and independent review use the Codex CLI. It preserves exact
+premises, quotations, URLs, and PASS/FAIL/INCONCLUSIVE evidence rules. Library
+callers may supply a `Research` implementation to `createSolver` when they need
+another backend; Claude subscription profiles do not silently replace this
+Codex-backed research boundary.
 
 ChatGPT Web connects to a user-managed browser service. Its logical contract is
 **one self-contained prompt plus model/settings → exact completed answer or error**.
@@ -741,19 +742,19 @@ Configuration and library entry points share bounded integer schemas for limits,
 call grants, and Explorer read and response counts. Settings, declarations, and
 commands are validated strictly, without converting strings or truncating numbers.
 
-Install and authenticate the CLI selected for research. Codex is the default:
+Install and authenticate the Codex CLI for research. To configure its model and
+reasoning, add:
 
 ```json
 {
   "research": {
-    "provider": "codex",
     "model": "gpt-6-astra",
     "reasoning": "max"
   }
 }
 ```
 
-The `research` object requires `model` when present. For Codex, its optional `command`
+The `research` object requires `model` when present. Its optional `command`
 selects another executable or launcher. Relative launcher paths resolve against
 the calling directory before execution enters its temporary directory; bare
 command names use `PATH`. The optional `profile` selects
@@ -764,27 +765,7 @@ The retired `[profiles.NAME]` layout is rejected by the deployed CLI. Follow the
 [native profile documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles)
 and smoke-test the configured research path before a long run.
 
-For Claude research, use the same local subscription login as the mathematical
-provider:
-
-```json
-{
-  "research": {
-    "provider": "claude-code",
-    "model": "claude-opus-5-5",
-    "reasoning": "max"
-  }
-}
-```
-
-Claude Code accepts `low`, `medium`, `high`, `xhigh`, or `max` reasoning.
-Use `PI_CLAUDE_CODE_PROVIDER_PATH` to select its executable and
-`CLAUDE_CONFIG_DIR` for its login directory. Codex-specific `command` and
-`profile` fields are rejected for Claude. Native token counts remain measured
-usage. Missing counts remain unknown, and API price estimates are not
-subscription charges.
-
-For Codex research, `usagePrefix` sets `XEAN_CODEX_USAGE_TAG` to the recorded attempt
+With `usagePrefix`, the role sets `XEAN_CODEX_USAGE_TAG` to the recorded attempt
 tag. Configure the native gateway provider to forward it. Xean does not rewrite
 provider configuration. For a provider named `gateway`, the nonsecret settings are:
 
@@ -801,7 +782,7 @@ runtime configuration, and note projection. Roles remain ordinary functions.
 The selected `Research` implementation declares its `retrieval` capability.
 Coordinator sees whether source retrieval and literature are available. A
 disabled external capability cannot be delegated to Explorer. Its reader
-only accesses internal frozen notes. Research failures expose stderr as their
+only accesses internal frozen notes. Codex failures expose stderr as their
 diagnostic, while the journal retains the complete process output.
 `createSolver` and `campaignOptions` accept either a `PiRuntime` or a factory
 `() => PiRuntime`. A supplied factory runs once, on the first role invocation.
@@ -862,7 +843,7 @@ run the requirements check, so intermediate lemmas can be reconstructed without
 claiming to solve the original task. The library exposes this operation as
 `solver.functions.reconstruct` and `createRoles(...).reconstruct`.
 
-An independent review consumes the exact task and the full exported
+An independent Codex review consumes the exact task and the full exported
 argument, without solver verdicts:
 
 ```sh

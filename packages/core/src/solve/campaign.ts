@@ -9,7 +9,7 @@ import { readSettings, settingsSchema } from "./config.ts";
 import { decode, declarationVersion, object, taskSchema } from "./contracts.ts";
 import type { PiRuntime } from "./pi.ts";
 import { createSolver } from "./solver.ts";
-import { createResearch } from "./research.ts";
+import { codexResearch } from "./research.ts";
 import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
 
 export { declarationVersion } from "./contracts.ts";
@@ -81,7 +81,7 @@ export function campaignOptions(
       chatGptSingleShot:
         settings.profiles.explorer?.provider === chatGptWebProviderId,
     },
-    (ready) => createResearch(settings.research, ready.usagePrefix),
+    (ready) => codexResearch(settings.research, ready.usagePrefix),
   );
   const options: XeanOptions = {
     task: declaration as unknown as JsonValue,

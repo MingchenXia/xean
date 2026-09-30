@@ -43,7 +43,7 @@ The existing `pi-agent-core.AgentHarness` is a different API.
 
 A kernel role needs only its name and `run(input, execution, context)`. Tool
 descriptions belong to Pi's tools. Solver and standalone execution call the same
-functions, with lazy runtime construction. Research invokes the selected CLI through Execa,
+functions, with lazy runtime construction. Research invokes Codex through Execa,
 whose argv, stdin, process cancellation, and separate-output contract remains
 necessary. Pi's shell surface does not supply that contract.
 
@@ -227,15 +227,6 @@ dependency timeouts remain in place. Tune them from measured durations and
 inactivity for the relevant provider, without adding a separate role deadline. Its
 source imports are version-specific and need review on upgrade. Both subscription
 transports remain model providers used by ordinary roles.
-
-Claude research reuses this package's authentication, environment, base CLI
-arguments, and initialization validation. Its `searchWithClaude` helper returns
-only text, fixes the model and effort, and imposes a total deadline. Xean needs
-structured verdicts, native usage, and completed retrieval records, so
-`askResearch` shares the existing Execa lifecycle and adds Claude's native JSONL
-parser. Source binding and mathematical prompts remain common to both backends.
-A maintained structured research API exposing these records would replace this
-branch. No provider patch is added for research.
 
 ## Completed private work
 

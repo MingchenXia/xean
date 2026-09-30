@@ -20,8 +20,8 @@ import {
   sourceEvidence,
 } from "../packages/core/src/solve/notes.ts";
 import {
-  bindResearch,
-  createResearch,
+  bindCodex,
+  codexResearch,
 } from "../packages/core/src/solve/research.ts";
 import { fixtureRuntime } from "./fixtures/pi.ts";
 
@@ -213,7 +213,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     },
     {},
     {
-      ...createResearch(),
+      ...codexResearch(),
       async source({ task, notes, evidence }) {
         expect(task).toEqual({
           problem: "Exact task",
@@ -224,7 +224,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
           if (text.startsWith("ESTABLISHED"))
             return {
               noteId: id,
-              result: bindResearch(
+              result: bindCodex(
                 {
                   operationId: "support-source",
                   searches: 1,
@@ -253,7 +253,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
             throw new Error("Temporary source execution failure");
           return {
             noteId: id,
-            result: bindResearch(
+            result: bindCodex(
               {
                 operationId: "new-application",
                 searches: 0,
@@ -437,7 +437,7 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
     runtime,
     {},
     {
-      ...createResearch(),
+      ...codexResearch(),
       async source({ notes }) {
         sources.push(notes.map(({ id }) => id));
         return notes.map(({ id }) => ({

@@ -28,22 +28,12 @@ import {
 const reasoning = Type.Optional(
   StringEnum(["minimal", "low", "medium", "high", "xhigh", "max"] as const),
 );
-const researchSchema = Type.Union([
-  object({
-    provider: Type.Optional(Type.Literal("codex")),
-    model: Type.String({ minLength: 1 }),
-    reasoning,
-    command: Type.Optional(Type.String({ minLength: 1 })),
-    profile: Type.Optional(Type.String({ minLength: 1 })),
-  }),
-  object({
-    provider: Type.Literal("claude-code"),
-    model: Type.String({ minLength: 1 }),
-    reasoning: Type.Optional(
-      StringEnum(["low", "medium", "high", "xhigh", "max"] as const),
-    ),
-  }),
-]);
+const researchSchema = object({
+  model: Type.String({ minLength: 1 }),
+  reasoning,
+  command: Type.Optional(Type.String({ minLength: 1 })),
+  profile: Type.Optional(Type.String({ minLength: 1 })),
+});
 
 const profile = object({
   provider: StringEnum([

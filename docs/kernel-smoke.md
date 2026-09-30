@@ -90,8 +90,8 @@ Private artifacts are in `runs/issue2-responses-live-20260930/`.
 
 On 2026-09-30, the Claude subscription paths passed on saturn with Claude Code
 2.1.280, Fleet Bun 1.4.2, and `claude-opus-5-5` at `max` reasoning. The
-[complete settings example](../examples/claude-settings.json) selects Claude for
-both mathematical roles and external research.
+[settings example](../examples/claude-settings.json) selects Claude as the Pi
+model provider. Research uses Codex.
 
 An algebra campaign reached acceptance after 11 recorded calls, including one
 Explorer interrupted after native initialization. Reopening recovered that
@@ -99,17 +99,9 @@ worker. Explorer read a full imported note before submitting its proof, and
 correctness, requirements, and blind reconstruction passed. The completed
 campaign reopened with identical records and database bytes.
 
-Three separate research invocations exercised source verification, literature,
-and independent review against the NIST DLMF gamma recurrence. Each returned
-structured output after successful native retrieval and reopened unchanged.
-Native initialization attested the requested model and subscription access.
-Reported token counts matched the native terminal records. Each research
-invocation contains multiple internal model/tool operations. Top-level native
-usage can omit auxiliary WebFetch model usage, which remains in raw records.
-WebFetch content is model processed, so quotation accuracy remains a research
-judgment. No subscription dollar cost is inferred.
-
 Private artifacts, source hashes, and the smoke script are under
-`runs/issue1-claude-20260930/`. Anthropic API credential routing and failure paths
+`runs/issue1-claude-20260930/`, including historical checks of the removed Claude
+research backend. Native model, usage, cleanup, and reopening records passed
+independent artifact review. Anthropic API credential routing and failure paths
 have deterministic coverage. This smoke used the Claude subscription, not the
 Anthropic API, and did not exercise login expiry or quota exhaustion.

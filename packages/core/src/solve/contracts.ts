@@ -121,7 +121,7 @@ export type SourceEvidence = Omit<Static<typeof passageSchema>, "premise"> & {
 export type ResearchReport = Verdict & {
   premises: Static<typeof reviewSchema>["premises"];
   passages: (SourceEvidence & { premise: number })[];
-  kind: "research-report";
+  kind: "codex-report";
   operationId: string;
   reportedAt: string;
 };

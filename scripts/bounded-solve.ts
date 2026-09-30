@@ -11,7 +11,7 @@ import { serveControl } from "xean-cli/control";
 import { verifyInstall } from "./dependencies.ts";
 import {
   createSolver,
-  createResearch,
+  codexResearch,
   declarationVersion,
   piRuntime,
   project,
@@ -134,7 +134,7 @@ if (import.meta.main) {
     settings,
     offline
       ? offlineResearch
-      : (ready) => createResearch(settings.research, ready.usagePrefix),
+      : (ready) => codexResearch(settings.research, ready.usagePrefix),
   );
   const rounds = limitRounds(solver, directory, allowance);
   const options: XeanOptions = {
