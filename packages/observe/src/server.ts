@@ -21,6 +21,11 @@ export function readSources(value: unknown, directory: string): Source[] {
     if (typeof source.directory !== "string" || !source.directory)
       throw new Error("Run directory is required");
     if (
+      source.task !== undefined &&
+      (typeof source.task !== "string" || !source.task.trim())
+    )
+      throw new Error("Nomad task must be a nonempty string");
+    if (
       source.host &&
       (!/^[a-z][a-z0-9-]*$/.test(source.host) ||
         !/^\/[a-zA-Z0-9/_.-]+$/.test(source.runtime ?? "") ||

@@ -27,7 +27,8 @@ The first command writes one `observation.json`. `--watch` refreshes it every
 ten seconds and publishes once more on SIGINT or SIGTERM. Each read opens and
 closes its own read-only snapshot while the solver retains ownership. Deploy
 the watcher as a separate supervised process with access to the run directory.
-The solver and experiment runner neither launch nor join it. Without a watcher,
+A run manager such as Xean Lab may start and join this process for each attempt.
+The solver remains independent of the publisher. Without a watcher,
 remote artifact readers retain completed exports and process logs.
 Artifact readers choose the newer snapshot or result export by file modification
 time, preferring the snapshot on ties. A stopped publisher cannot hide a later
@@ -43,7 +44,9 @@ shown below.
 Create a config file containing the runs to display. Local paths resolve relative
 to the config file. Remote paths are absolute and name a provisioned Bun runtime.
 For either source, an optional `job` obtains process status and recent logs through
-Fleet's Nomad CLI.
+Fleet's Nomad CLI. `task` selects the Nomad task and defaults to `solver`.
+Xean Lab uses `worker`. Shared worker-pool job logs describe the selected allocation
+and may include other runs in the same experiment.
 
 ```json
 [

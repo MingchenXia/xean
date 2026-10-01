@@ -20,6 +20,7 @@ export type Source = {
   host?: string;
   runtime?: string;
   job?: string;
+  task?: string;
 };
 export type Run = {
   id: string;
@@ -137,7 +138,7 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
               "-n",
               stderr ? "10" : "20",
               allocation.ID,
-              "solver",
+              source.task ?? "solver",
             ]);
           } catch (error) {
             reportError(error);

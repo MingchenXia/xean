@@ -20,6 +20,7 @@ async function fakeNomad(
   directory: string,
   failLogs?: "stdout" | "stderr",
   active: unknown = [],
+  task = "solver",
 ) {
   await mkdir(join(directory, "bin"), { recursive: true });
   await writeFile(
@@ -27,6 +28,7 @@ async function fakeNomad(
     `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args[0] === "job") console.log(JSON.stringify([{ ID: "allocation", CreateIndex: 1, ClientStatus: "failed" }]));
+else if (args.at(-1) !== ${JSON.stringify(task)}) throw new Error("wrong Nomad task");
 else if ((args.includes("-stderr") ? "stderr" : "stdout") === ${JSON.stringify(failLogs)}) throw new Error("logs unavailable");
 else if (args.includes("-stderr")) console.log("worker stopped");
 else console.log(JSON.stringify({ calls: 3, rounds: 2, active: ${JSON.stringify(active)} }) + "\\nnull");
@@ -226,9 +228,9 @@ test("the external observer reads coherent live snapshots without changing a loc
     });
     expect(JSON.stringify(after)).not.toContain("request body");
     expect(JSON.stringify(after)).not.toContain("response body");
-    await fakeNomad(directory);
+    await fakeNomad(directory, undefined, [], "worker");
     const supervised = await readRun(
-      { id: "fixture", directory, job: "fixture-job" },
+      { id: "fixture", directory, job: "fixture-job", task: "worker" },
       directory,
     );
     expect(supervised.error).toBeUndefined();
@@ -241,6 +243,7 @@ test("the external observer reads coherent live snapshots without changing a loc
       active: [],
       errorLog: "worker stopped\n",
     });
+    await fakeNomad(directory);
     const handle = api(
       [
         { id: "fixture", directory },
@@ -423,6 +426,9 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
         directory,
       ),
     ).toThrow();
+    expect(() =>
+      readSources([{ id: "run", directory, task: "" }], directory),
+    ).toThrow("Nomad task");
     let reads = 0;
     const handle = api(
       [

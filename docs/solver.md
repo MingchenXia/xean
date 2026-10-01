@@ -739,6 +739,11 @@ provider timeouts remain in place and are tuned from observed provider data.
 Token and dollar budgets remain out of scope. Set `usagePrefix` to a
 unique campaign label when using codex-lb. The frozen settings retain it, and each
 call appends the kernel attempt ID. The smoke assigns a timestamped prefix.
+Supervisors can use `xean resume CAMPAIGN --usage-prefix PREFIX` to attribute
+each process attempt separately. This overrides the prefix for that execution
+in both Pi and Codex calls while preserving the campaign's frozen settings.
+An override requires this invocation to acquire ownership. It cannot change an
+already-running owner's attribution.
 Configuration and library entry points share bounded integer schemas for limits,
 call grants, and Explorer read and response counts. Settings, declarations, and
 commands are validated strictly, without converting strings or truncating numbers.

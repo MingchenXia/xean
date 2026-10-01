@@ -48,7 +48,7 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
     );
     const init = ["init", "task.json", "example", "settings.json"];
     for (const args of [
-      ["--records", ...init],
+      ["--records", "--usage-prefix", "lab/attempt-1", ...init],
       [...init, "--records"],
     ]) {
       const result = run(...args);
@@ -56,6 +56,7 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
       const report = JSON.parse(result.stdout);
       expect(Array.isArray(report.records)).toBe(true);
       expect(report.campaign.providerCalls).toBe(0);
+      expect(report.campaign.task.settings.usagePrefix).toBeUndefined();
     }
     const plain = run(...init);
     expect(plain.code).toBe(0);
@@ -112,6 +113,7 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
     expect(help.code).toBe(0);
     expect(help.stdout).toContain("--records");
     expect(help.stdout).toContain("--key-stdin");
+    expect(help.stdout).toContain("--usage-prefix");
   } finally {
     await rm(directory, { recursive: true });
   }

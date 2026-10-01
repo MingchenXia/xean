@@ -34,6 +34,10 @@ const program = new Command("xean")
   .option("--campaign-dir <dir>", "Directory for named campaigns", ".xean")
   .option("--records", "Include durable call and attempt records")
   .option(
+    "--usage-prefix <prefix>",
+    "Attribute this execution without changing frozen settings",
+  )
+  .option(
     "--key-stdin",
     "Read a provider credential when opening to run offline",
   )
@@ -42,7 +46,7 @@ const program = new Command("xean")
     verifyInstall(resolve(import.meta.dir, "../../..")),
   );
 
-type Flags = { records?: boolean; keyStdin?: boolean };
+type Flags = { records?: boolean; keyStdin?: boolean; usagePrefix?: string };
 const records = () => program.opts<Flags>().records === true;
 const read = (path: string) => Bun.file(resolve(path)).json();
 const readText = (path: string) => Bun.file(resolve(path)).text();
@@ -70,8 +74,15 @@ async function withCampaign(
   // Pi's SQLite close is idempotent, including after Xean assumes ownership.
   cleanup.defer(() => storage.close(BACKGROUND_CONTEXT));
   const declaration = options.declaration ?? (await loadDeclaration(storage));
+  const usagePrefix = program.opts<Flags>().usagePrefix;
   const kernelOptions = campaignOptions(declaration, () =>
-    piRuntime(declaration.settings, options.key),
+    piRuntime(
+      {
+        ...declaration.settings,
+        ...(usagePrefix === undefined ? {} : { usagePrefix }),
+      },
+      options.key,
+    ),
   );
   const engine = await Xean.open(storage, kernelOptions);
   cleanup.defer(() => engine.close());
@@ -83,7 +94,8 @@ async function runCampaign(
   declaration?: Declaration,
   method: "run" | "resume" = "run",
 ) {
-  if (method === "resume") {
+  // A runtime override requires this process to acquire execution ownership.
+  if (method === "resume" && program.opts<Flags>().usagePrefix === undefined) {
     const receipt = await requestOwner(await realpath(campaignPath(target)), {
       kind: "resume",
       records: records(),
