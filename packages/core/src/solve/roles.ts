@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord";
+import { isDeepStrictEqual } from "node:util";
 import { Assert } from "typebox/value";
 import { type Static, type TSchema } from "@earendil-works/pi-ai";
 import type { Execution } from "../types.ts";
@@ -54,21 +55,19 @@ const packet = ({ id, text, summary, detailedSummary, support }: Note) => ({
   detailedSummary,
   support,
 });
-function validatePremises(
+function checkedPremises(
   original: readonly string[],
   extracted: Static<typeof statementSchema>["premises"],
-): void {
+) {
+  const ordered = extracted.toSorted((a, b) => a.premise - b.premise);
   if (
-    extracted.length !== original.length ||
-    new Set(extracted.map(({ premise }) => premise)).size !== original.length ||
-    extracted.some(
-      ({ premise }) =>
-        !Number.isInteger(premise) || premise < 0 || premise >= original.length,
-    )
+    ordered.length !== original.length ||
+    ordered.some(({ premise }, index) => premise !== index)
   )
     throw new Error(
       "Extracted premises must contain exactly one entry per source-checked premise index",
     );
+  return ordered;
 }
 /** Corrections share one policy for standalone reconstruction and verifier batches. */
 function recordCheck<Stage extends VerificationStage>(
@@ -122,7 +121,7 @@ export function createRoles(
     schema: S,
     execution: Execution,
     context: Context,
-    validate?: (results: Static<S>[]) => void,
+    validate?: (result: Static<S>, index: number) => void,
   ): Promise<Static<S>[]> => {
     if (!input.notes.length) return [];
     const ids = input.notes.map((note) => note.id);
@@ -138,7 +137,7 @@ export function createRoles(
       {
         submit(value) {
           const results = batchResults(ids, value.results);
-          validate?.(results);
+          if (validate) results.forEach(validate);
           return { done: true, receipt: { validated: true } };
         },
       },
@@ -165,13 +164,12 @@ export function createRoles(
       chain,
     );
     const originals = notes.map((note) => {
-      const declared = verdict(note, "correctness")?.premises ?? [];
+      const premises = verdict(note, "correctness")?.premises ?? [];
       const source = verdict(note, "source");
-      const premises =
-        source && "premises" in source ? source.premises : declared;
       if (
-        premises.length !== declared.length ||
-        premises.some((premise, index) => premise !== declared[index])
+        source &&
+        "premises" in source &&
+        !isDeepStrictEqual(premises, source.premises)
       )
         throw new Error(
           `Source-checked premises do not match correctness for ${note.id}`,
@@ -190,43 +188,33 @@ export function createRoles(
             },
       };
     });
-    const extract = notes.filter(
-      (note) => !stagePassed(note, "reconstruction"),
+    const extract = originals.filter(
+      (_, index) => !stagePassed(notes[index]!, "reconstruction"),
     );
     const extracted = await batch(
       "statement",
       "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P or listing P as an external premise. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. The supplied premise list is authoritative and source-checked. Return exactly one premises entry per supplied zero-based premise index, retaining its identity even when the external theorem is also the note's claim. Normalize each premise to its theorem statement and exact hypotheses, removing process commentary (including stale awaiting-validation prose) and application hints without removing mathematical qualifications or adding, strengthening, or substituting assumptions. Use [] exactly when the supplied list is empty. Supporting note results remain declared dependencies, not external premises. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
       {
         task: input.task,
-        support: originals.filter(
-          (note) => !extract.some((other) => other.id === note.id),
-        ),
-        notes: originals.filter((note) =>
-          extract.some((other) => other.id === note.id),
-        ),
+        support: originals.filter((note) => !extract.includes(note)),
+        notes: extract,
       },
       statementSchema,
       execution,
       context,
-      (results) =>
-        results.forEach((result, index) =>
-          validatePremises(
-            originals.find((note) => note.id === extract[index]!.id)!.premises,
-            result.premises,
-          ),
-        ),
+      (result, index) =>
+        checkedPremises(extract[index]!.premises, result.premises),
     );
     const statements = notes.map((note, index) => {
       const checked = verdict(note, "reconstruction");
       const { statement, premises } =
         checked?.verdict === "PASS"
           ? checked
-          : extracted[extract.indexOf(note)]!;
-      validatePremises(originals[index]!.premises, premises);
+          : extracted[extract.indexOf(originals[index]!)]!;
       return {
         id: note.id,
         statement,
-        premises: [...premises].sort((a, b) => a.premise - b.premise),
+        premises: checkedPremises(originals[index]!.premises, premises),
         support: note.support,
       };
     });
