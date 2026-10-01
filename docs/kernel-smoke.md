@@ -142,11 +142,18 @@ The Git archive SHA-256 checksums are:
 A supervised Jupiter job exercised these sources in the retained worker image
 with Bun 1.4.2 and Codex CLI 0.153.4. The shared integration smoke passed, then
 four Luna/max gateway calls completed across two concurrent workers with cached
-WebSocket continuation. Credentialless reopening made no additional calls.
+WebSocket continuation. Reopening supplied no provider key and made no
+additional calls. The process still inherited the gateway environment variable.
 Two independent Codex reviews of the earlier accepted Lab packets returned
 PASS, using one admitted Luna/max invocation each. The original campaigns and
 packet bytes remained unchanged. These reviews qualify the current review path
 and the exact elementary task, with no external sources required.
+
+Gateway accounting measured eight successful requests, including Codex's
+internal requests, at $0.0080742 API-equivalent cost. Observe rendered both
+completed campaigns and their separate PASS receipts using public reports from
+the original runtime and the current snapshot API. Browser screenshots are under
+`output/playwright/issue6/`.
 
 The earlier receipts establish live guidance, pause, interruption, and resume at
 their recorded revisions. Current-source checks cover the later integration,
