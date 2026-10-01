@@ -9,6 +9,7 @@ import {
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { googleProvider } from "@earendil-works/pi-ai/providers/google";
 import {
   chatGptWebProvider,
   chatGptWebProviderId,
@@ -36,6 +37,7 @@ const profile = object({
     "openai",
     "openai-codex",
     "anthropic",
+    "google",
     chatGptWebProviderId,
   ] as const),
   model: Type.String({ minLength: 1 }),
@@ -106,6 +108,7 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
   const models = createModels();
   models.setProvider(openaiProvider());
   models.setProvider(anthropicProvider());
+  models.setProvider(googleProvider());
   models.setProvider(chatGptWebProvider());
   models.setProvider({
     ...openaiCodexProvider(),

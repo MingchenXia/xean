@@ -76,7 +76,12 @@ Open <http://127.0.0.1:8797>. The listener is local, with a read-only JSON API a
 Collection requests share an in-flight read and a ten-second cache.
 
 The browser pauses polling while hidden and preserves the last received view
-when a refresh fails. Each run displays the age and source of its evidence.
+when a refresh fails. After an individual run read fails, the API retains its
+last successful campaign observation in memory, marks it `stale`, and returns
+the new diagnostic and current process observation. The evidence timestamp stays
+unchanged; a successful read replaces it and clears the stale marker. An initial
+failure has no cached evidence. The reader never substitutes an older disk artifact
+for a malformed selected artifact. Each run displays the age and source of its evidence.
 Nomad's process status is separate from the campaign's last observed state.
 An old snapshot saying `running` alone does not establish process liveness.
 

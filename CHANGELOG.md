@@ -13,6 +13,12 @@ campaign.
   Indexed reconstruction premises change the persisted solver payload: solver
   declarations now use version 10. Start fresh campaigns with this source and
   retain frozen runtimes for historical campaigns. No migration is provided.
+- Enable Gemini model profiles through Pi's native Google provider and
+  operator-supplied Gemini API credentials.
+- Keep the observer's last successful campaign observation after a read failure,
+  with its original timestamp, a stale marker, and current diagnostics. Preserve
+  note disclosures by identity during refresh and separate process-read errors
+  from the campaign's recorded status.
 - Accept CRLF-framed Codex SSE responses, including line endings split across
   network chunks, instead of reporting a JSON parsing error.
 - Stop treating JSON `Unterminated string` errors as terminated connections and

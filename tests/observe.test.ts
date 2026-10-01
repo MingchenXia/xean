@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
   mkdir,
   mkdtemp,
@@ -245,6 +245,7 @@ test("the external observer reads coherent live snapshots without changing a loc
       [
         { id: "fixture", directory },
         { id: "missing", directory: join(directory, "missing") },
+        { id: "exported", directory: exported, job: "fixture-job" },
       ],
       directory,
     );
@@ -252,6 +253,42 @@ test("the external observer reads coherent live snapshots without changing a loc
     const rows = (await response.json()) as Run[];
     expect(rows[0]?.snapshot?.notes).toHaveLength(1);
     expect(rows[1]?.error).toBeString();
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now());
+    const refresh = async () => {
+      clock.mockReturnValue(Date.now() + 10_001);
+      return (await (
+        await handle(new Request("http://127.0.0.1/api/runs"))
+      ).json()) as Run[];
+    };
+    try {
+      await writeFile(observationFile, "{invalid JSON");
+      await fakeNomad(directory, undefined, [
+        { id: "new-work", role: "verifier" },
+      ]);
+      for (let i = 0; i < 2; i++) {
+        const failed = await refresh();
+        expect(failed[2]).toMatchObject({
+          stale: true,
+          kind: rows[2]!.kind,
+          observedAt: rows[2]!.observedAt,
+          snapshot: rows[2]!.snapshot,
+          process: { active: [{ id: "new-work", role: "verifier" }] },
+        });
+        expect(failed[2]?.error).toBeString();
+        expect(failed[0]).not.toHaveProperty("stale");
+        expect(failed[1]?.snapshot).toBeUndefined();
+        expect(failed[1]).not.toHaveProperty("stale");
+      }
+      const recovered = { ...published, notes: [] };
+      await writeFile(observationFile, JSON.stringify(recovered));
+      await fakeNomad(directory, "stderr");
+      const refreshed = await refresh();
+      expect(refreshed[2]?.snapshot).toEqual(recovered);
+      expect(refreshed[2]).not.toHaveProperty("stale");
+      expect(refreshed[2]?.error).toContain("logs unavailable");
+    } finally {
+      clock.mockRestore();
+    }
     expect(
       (await handle(new Request("http://127.0.0.1/api/runs/unknown"))).status,
     ).toBe(404);
