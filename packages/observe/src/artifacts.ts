@@ -49,3 +49,30 @@ export async function readArtifacts(directory: string) {
     at: last?.at ?? task.at,
   };
 }
+
+/** One remote invocation carries independently available campaign and review evidence. */
+export async function readEvidence(directory: string, receipt?: string) {
+  const [review, evidence] = await Promise.all([
+    readReview(directory, receipt),
+    readArtifacts(directory).then(
+      (artifacts) => ({ artifacts }),
+      (error: unknown) => ({ error: String(error) }),
+    ),
+  ]);
+  return { review, ...evidence };
+}
+
+/** Read one operator-selected receipt without making campaign reads depend on it. */
+export async function readReview(directory: string, receipt?: string) {
+  if (receipt === undefined) return undefined;
+  try {
+    return {
+      state: "reviewed" as const,
+      receipt: (await Bun.file(join(directory, receipt)).json()) as unknown,
+    };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? { state: "missing" as const }
+      : { state: "unavailable" as const, error: String(error) };
+  }
+}

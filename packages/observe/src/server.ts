@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, isAbsolute } from "node:path";
 import { parseArgs } from "node:util";
-import { readRun, type Source, type Run } from "./read.ts";
+import { readProcess, readRun, type Source, type Run } from "./read.ts";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
 import index from "../web/index.html";
 
 export function readSources(value: unknown, directory: string): Source[] {
-  if (!Array.isArray(value) || value.length === 0)
-    throw new Error("Config must be a nonempty list of runs");
+  if (!Array.isArray(value)) throw new Error("Config must be a list of runs");
   const ids = new Set<string>();
   return value.map((source: Source) => {
     if (
@@ -26,6 +25,13 @@ export function readSources(value: unknown, directory: string): Source[] {
     )
       throw new Error("Nomad task must be a nonempty string");
     if (
+      source.review !== undefined &&
+      (typeof source.review !== "string" ||
+        !source.review.trim() ||
+        isAbsolute(source.review))
+    )
+      throw new Error("Review receipt must be a nonempty relative path");
+    if (
       source.host &&
       (!/^[a-z][a-z0-9-]*$/.test(source.host) ||
         !/^\/[a-zA-Z0-9/_.-]+$/.test(source.runtime ?? "") ||
@@ -43,40 +49,73 @@ export function readSources(value: unknown, directory: string): Source[] {
   });
 }
 
-export function api(sources: Source[], fleet: string) {
-  let saved: Run[] | undefined;
-  let readAt = 0;
-  let pending: Promise<Run[]> | undefined;
-  const read = async () => {
-    if (pending) return pending;
-    if (saved && Date.now() - readAt < 10_000) return saved;
-    pending = Promise.all(sources.map((source) => readRun(source, fleet)))
-      .then((runs) => {
-        saved = runs.map((run, index) => {
-          const previous = saved?.[index];
-          if (
-            run.error &&
-            !run.snapshot &&
-            !run.heartbeat &&
-            (previous?.snapshot || previous?.heartbeat)
-          )
-            return {
-              ...run,
-              kind: previous.kind,
-              observedAt: previous.observedAt,
-              snapshot: previous.snapshot,
-              heartbeat: previous.heartbeat,
-              stale: true,
-            };
-          return run;
-        });
-        readAt = Date.now();
-        return saved;
-      })
-      .finally(() => {
-        pending = undefined;
-      });
-    return pending;
+export function api(
+  sources: Source[] | (() => Promise<Source[]>),
+  fleet: string,
+) {
+  type Refresh = {
+    sources: Promise<Source[]>;
+    runs?: Promise<Run[]>;
+    expiresAt: number;
+  };
+  let current: Refresh | undefined;
+  let previous = new Map<string, Run>();
+  const refresh = () => {
+    if (current && Date.now() < current.expiresAt) return current;
+    const batch: Refresh = {
+      sources: Promise.resolve().then(() =>
+        Array.isArray(sources) ? sources : sources(),
+      ),
+      expiresAt: Infinity,
+    };
+    current = batch;
+    void batch.sources.then(
+      () => {
+        batch.expiresAt = Date.now() + 10_000;
+      },
+      () => {
+        if (current === batch) current = undefined;
+      },
+    );
+    return batch;
+  };
+  const read = async (configured: Source[]): Promise<Run[]> => {
+    const processes = new Map<string, ReturnType<typeof readProcess>>();
+    const entries = await Promise.all(
+      configured.map(async (source) => {
+        const identity = JSON.stringify([
+          source.id,
+          source.host ?? null,
+          source.directory,
+        ]);
+        let observation;
+        if (source.job) {
+          const key = JSON.stringify([source.job, source.task ?? "solver"]);
+          observation = processes.get(key) ?? readProcess(source, fleet);
+          processes.set(key, observation);
+        }
+        const run = await readRun(source, fleet, observation);
+        const retained = previous.get(identity);
+        return [
+          identity,
+          run.error &&
+          !run.snapshot &&
+          !run.heartbeat &&
+          (retained?.snapshot || retained?.heartbeat)
+            ? {
+                ...run,
+                kind: retained.kind,
+                observedAt: retained.observedAt,
+                snapshot: retained.snapshot,
+                heartbeat: retained.heartbeat,
+                stale: true,
+              }
+            : run,
+        ] as const;
+      }),
+    );
+    previous = new Map(entries);
+    return [...previous.values()];
   };
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -97,10 +136,26 @@ export function api(sources: Source[], fleet: string) {
       } catch {
         return new Response("Invalid run ID", { status: 400 });
       }
-      if (!sources.some((source) => source.id === id))
-        return new Response("Not found", { status: 404 });
     }
-    const runs = await read();
+    const batch = refresh();
+    let configured: Source[];
+    try {
+      configured = await batch.sources;
+    } catch (error) {
+      return new Response(
+        `Source configuration unavailable: ${String(error)}`,
+        { status: 500 },
+      );
+    }
+    if (id !== undefined && !configured.some((source) => source.id === id))
+      return new Response("Not found", { status: 404 });
+    if (!batch.runs) {
+      batch.expiresAt = Infinity;
+      batch.runs = read(configured).finally(() => {
+        batch.expiresAt = Date.now() + 10_000;
+      });
+    }
+    const runs = await batch.runs;
     return Response.json(
       id === undefined ? runs : runs.find((run) => run.id === id),
       { headers: { "cache-control": "no-store" } },
@@ -126,7 +181,10 @@ if (import.meta.main) {
       "Usage: server.ts CONFIG.json [--port 8797] [--fleet FLEET_INFRA]",
     );
   const config = resolve(positionals[0]!);
-  const sources = readSources(await Bun.file(config).json(), dirname(config));
+  const sources = () =>
+    Bun.file(config)
+      .json()
+      .then((value) => readSources(value, dirname(config)));
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: Number(values.port),

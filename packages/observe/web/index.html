@@ -10,11 +10,12 @@
     <script type="module" src="./app.ts"></script>
   </head>
   <body>
+    <a class="skip-link" href="#app">Skip to content</a>
     <header>
       <a href="#">Xean Observe</a><span>Research runs</span
-      ><button id="refresh">Refresh</button>
+      ><button id="refresh" type="button">Refresh</button>
     </header>
     <p id="connection" role="status">Loading runs…</p>
-    <main id="app"></main>
+    <main id="app" tabindex="-1" aria-label="Campaign inspection"></main>
   </body>
 </html>

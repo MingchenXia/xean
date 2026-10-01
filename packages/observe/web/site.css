@@ -47,13 +47,7 @@ h2 {
   align-items: baseline;
   flex-wrap: wrap;
 }
-.title h1 {
-  margin: 0;
-}
 .badge {
-  font: 13px var(--pf-font-mono);
-  padding: 3px 7px;
-  border: 1px solid var(--pf-border-strong);
   white-space: nowrap;
 }
 section {
@@ -71,29 +65,13 @@ section {
   padding: 16px;
   border: 1px solid var(--pf-border);
 }
-.stats span {
-  display: block;
-  font-size: 13px;
-  color: var(--pf-muted);
-}
-.stats strong {
-  display: block;
-  margin-top: 7px;
-  font: 28px var(--pf-font-mono);
-}
 .table-wrap {
   overflow-x: auto;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
 th,
 td {
-  text-align: left;
   padding: 14px 10px;
   vertical-align: top;
-  border-bottom: 1px solid var(--pf-border);
 }
 th {
   color: var(--pf-muted);
@@ -120,13 +98,6 @@ details {
 summary {
   cursor: pointer;
   line-height: 1.8;
-}
-.note {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--pf-border);
-}
-.note summary code {
-  color: var(--pf-muted);
 }
 .math {
   white-space: pre-wrap;
@@ -176,5 +147,215 @@ footer code {
   }
   .title {
     gap: 8px;
+  }
+}
+
+h3,
+h4,
+h5 {
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+h3 {
+  font-size: 17px;
+}
+h4 {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+h5 {
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+input,
+select {
+  display: block;
+  width: 100%;
+  min-height: 40px;
+}
+.controls {
+  display: flex;
+  gap: 16px;
+  align-items: end;
+  margin: 20px 0 12px;
+}
+.controls label {
+  min-width: 170px;
+  font-size: 13px;
+  line-height: 2;
+}
+.controls .search {
+  flex: 1;
+}
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 30px;
+  border-bottom: 1px solid var(--pf-border);
+}
+.tabs a {
+  padding: 12px 18px;
+  text-decoration: none;
+  color: var(--pf-fg);
+}
+.tabs a[aria-current="page"] {
+  border-bottom: 2px solid var(--pf-fg);
+  font-weight: 600;
+}
+.tabs + section {
+  border-top: 0;
+  margin-top: 10px;
+}
+.stats dt,
+.metrics dt {
+  font-size: 13px;
+  color: var(--pf-muted);
+}
+.stats dd {
+  margin: 7px 0 0;
+  font: 24px var(--pf-font-mono);
+}
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 32px;
+}
+.metrics dd {
+  margin: 6px 0 0;
+  font-family: var(--pf-font-mono);
+  overflow-wrap: anywhere;
+}
+.metrics > div {
+  min-width: 0;
+}
+.reader-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.8fr);
+  gap: 24px;
+  align-items: start;
+}
+.note-index {
+  min-width: 0;
+  max-height: 75vh;
+  overflow-y: auto;
+  position: sticky;
+  top: 16px;
+}
+.note-list {
+  list-style: none;
+}
+.note-list li {
+  padding: 14px 10px;
+  border-bottom: 1px solid var(--pf-border);
+  border-left: 2px solid transparent;
+}
+.note-list a {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.note-list code {
+  display: block;
+  font-size: 12px;
+  color: var(--pf-muted);
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+}
+.selected {
+  background: var(--pf-surface);
+  border-left: 2px solid var(--pf-fg);
+}
+.badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.badges .badge {
+  font-size: 11px;
+}
+.reader {
+  min-width: 0;
+  border: 1px solid var(--pf-border);
+  padding: 18px;
+}
+.reader > .math {
+  margin-top: 16px;
+}
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  margin: 14px 0;
+}
+.pagination > span {
+  color: var(--pf-muted);
+}
+.links {
+  padding-left: 22px;
+}
+.links li {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.check,
+.check-stage,
+.usage-group {
+  border-top: 1px solid var(--pf-border);
+  padding-top: 8px;
+  margin-top: 20px;
+}
+.check-stage h4 {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.source-evidence {
+  margin-bottom: 22px;
+  overflow-wrap: anywhere;
+}
+blockquote {
+  margin: 14px 0;
+  padding-left: 16px;
+  border-left: 2px solid var(--pf-border-strong);
+}
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.skip-link {
+  position: absolute;
+  top: -100px;
+}
+.skip-link:focus {
+  top: 8px;
+  background: var(--pf-bg);
+  padding: 8px;
+}
+@media (max-width: 760px) {
+  .reader-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .reader-layout .reader {
+    grid-row: 1;
+  }
+  .note-index {
+    position: static;
+  }
+  .controls {
+    flex-wrap: wrap;
+  }
+  .controls label {
+    min-width: 0;
+    width: 100%;
+  }
+  .controls .search {
+    flex-basis: 100%;
+  }
+  .reader {
+    padding: 14px;
   }
 }

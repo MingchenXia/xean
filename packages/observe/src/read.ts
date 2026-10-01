@@ -1,17 +1,20 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { execa } from "execa";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { campaignVersion, inspectCampaign } from "xean";
 import { decode, taskSchema } from "xean/solve";
 import { usageRecord } from "xean/report";
-import { readArtifacts } from "./artifacts.ts";
+import { readEvidence, readReview } from "./artifacts.ts";
 import { readSnapshot, snapshot, type Snapshot } from "./snapshot.ts";
 
-const processHeartbeat = Type.Script(
-  { Count: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }) },
-  "{ calls: Count, rounds?: Count, active?: { id: string, role: string }[] }",
+const reviewReceipt = Type.Script(
+  {
+    Text: Type.String({ pattern: "\\S" }),
+    DateTime: Type.String({ format: "date-time" }),
+  },
+  "{ reviewer: Text, reviewedAt: DateTime, verdict: 'PASS' | 'FAIL' | 'INCONCLUSIVE', report: Text }",
 );
 
 export type Source = {
@@ -21,6 +24,7 @@ export type Source = {
   runtime?: string;
   job?: string;
   task?: string;
+  review?: string;
 };
 export type Run = {
   id: string;
@@ -36,18 +40,28 @@ export type Run = {
     lastRound?: unknown;
   };
   process?: {
+    /** A sampled pool allocation, not ownership of this campaign. */
+    job: string;
+    task: string;
+    allocation: string;
     status: string;
     observedAt: string;
-    rounds?: number;
-    calls?: number;
-    active?: { id: string; role: string }[];
     log: string;
     errorLog: string;
+  };
+  review?: {
+    state: "missing" | "reviewed" | "unavailable";
+    receipt?: Static<typeof reviewReceipt>;
+    error?: string;
   };
   error?: string;
 };
 
-export async function readRun(source: Source, fleet: string): Promise<Run> {
+export async function readRun(
+  source: Source,
+  fleet: string,
+  processObservation = source.job ? readProcess(source, fleet) : undefined,
+): Promise<Run> {
   const run: Run = {
     id: source.id,
     source: `${source.host ? `${source.host}:` : ""}${source.directory}`,
@@ -56,6 +70,7 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
   const reportError = (error: unknown) => {
     run.error = [run.error, String(error)].filter(Boolean).join("\n");
   };
+  let review: Awaited<ReturnType<typeof readReview>>;
   try {
     const db = source.host
       ? undefined
@@ -69,7 +84,7 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
       run.kind = "database";
       run.snapshot = snapshot(await inspectCampaign(db, usageRecord));
     } else {
-      const artifacts = source.host
+      const evidence = source.host
         ? (JSON.parse(
             (
               await execa(
@@ -85,12 +100,15 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
                   "-",
                 ],
                 {
-                  input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nawait Bun.write(Bun.stdout, JSON.stringify(await readArtifacts(${JSON.stringify(source.directory)})));`,
+                  input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nawait Bun.write(Bun.stdout, JSON.stringify(await readEvidence(${JSON.stringify(source.directory)}, ${JSON.stringify(source.review)})));`,
                 },
               )
             ).stdout,
-          ) as Awaited<ReturnType<typeof readArtifacts>>)
-        : await readArtifacts(source.directory);
+          ) as Awaited<ReturnType<typeof readEvidence>>)
+        : await readEvidence(source.directory);
+      review = evidence.review;
+      if ("error" in evidence) throw new Error(evidence.error);
+      const { artifacts } = evidence;
       run.kind = artifacts.kind;
       if (artifacts.kind === "snapshot") {
         run.snapshot = readSnapshot(artifacts.value);
@@ -108,6 +126,42 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
   } catch (error) {
     reportError(error);
   }
+  if (!source.host) review = await readReview(source.directory, source.review);
+  if (source.review !== undefined) {
+    if (review?.state !== "reviewed") {
+      run.review = review ?? { state: "unavailable", error: run.error };
+    } else if (Value.Check(reviewReceipt, review.receipt)) {
+      const { reviewer, reviewedAt, verdict, report } = review.receipt;
+      run.review = {
+        state: "reviewed",
+        receipt: { reviewer, reviewedAt, verdict, report },
+      };
+    } else {
+      run.review = {
+        state: "unavailable",
+        error: "Malformed external review receipt",
+      };
+    }
+  }
+  if (processObservation) {
+    const observation = await processObservation;
+    run.process = observation.process;
+    if (observation.error) reportError(observation.error);
+  }
+  return run;
+}
+
+/** One allocation/log read, reusable by runs in the same worker pool. */
+export async function readProcess(
+  source: Pick<Source, "job" | "task">,
+  fleet: string,
+): Promise<Pick<Run, "process" | "error">> {
+  const observation: Pick<Run, "process" | "error"> = {};
+  const reportError = (error: unknown) => {
+    observation.error = [observation.error, String(error)]
+      .filter(Boolean)
+      .join("\n");
+  };
   try {
     if (source.job) {
       const nomad = (args: string[]) =>
@@ -122,7 +176,10 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
         (a, b) => b.CreateIndex - a.CreateIndex,
       )[0];
       if (allocation) {
-        run.process = {
+        observation.process = {
+          job: source.job,
+          task: source.task ?? "solver",
+          allocation: allocation.ID,
           status: allocation.ClientStatus,
           observedAt: new Date().toISOString(),
           log: "",
@@ -149,30 +206,11 @@ export async function readRun(source: Source, fleet: string): Promise<Run> {
           readLog(false),
           readLog(true),
         ]);
-        const heartbeats = log.split("\n").flatMap((line) => {
-          try {
-            return [JSON.parse(line)];
-          } catch {
-            return [];
-          }
-        });
-        const latest = heartbeats.findLast(
-          (row) => typeof row?.calls === "number",
-        );
-        Object.assign(run.process, { log, errorLog });
-        if (latest) {
-          if (!Value.Check(processHeartbeat, latest))
-            throw new Error("Malformed process heartbeat");
-          Object.assign(run.process, {
-            rounds: latest.rounds,
-            calls: latest.calls,
-            active: latest.active,
-          });
-        }
+        Object.assign(observation.process, { log, errorLog });
       }
     }
   } catch (error) {
     reportError(error);
   }
-  return run;
+  return observation;
 }

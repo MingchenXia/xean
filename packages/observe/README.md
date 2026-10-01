@@ -39,18 +39,28 @@ The workspace binaries are `xean-observe` for the dashboard and
 runtime. On Fleet, launch either file through the locked `fleet-run` command
 shown below.
 
+Library callers use `snapshot(inspection)` from `xean-observe`. Callers that
+already have a `campaignReport` and its `statusReport` can pass
+`{ ...report, status }` to `snapshotFromReport` to reuse the prepared notes and
+usage totals. Both reports must come from the same inspection.
+
 ## Run locally
 
 Create a config file containing the runs to display. Local paths resolve relative
 to the config file. Remote paths are absolute and name a provisioned Bun runtime.
 For either source, an optional `job` obtains process status and recent logs through
 Fleet's Nomad CLI. `task` selects the Nomad task and defaults to `solver`.
-Xean Lab uses `worker`. Shared worker-pool job logs describe the selected allocation
-and may include other runs in the same experiment.
+Xean Lab uses `worker`. The process panel identifies a sampled pool allocation
+and its job and task. Its logs may include other campaigns. Pool status and
+heartbeat counts never substitute for an individual campaign's state or usage.
 
 ```json
 [
-  { "id": "local-run", "directory": "./my-run" },
+  {
+    "id": "local-run",
+    "directory": "./my-run",
+    "review": "review/receipt.json"
+  },
   {
     "id": "jupiter-run",
     "host": "jupiter",
@@ -76,7 +86,12 @@ bin/fleet-nix run .#fleet-run -- ../xean/packages/observe/src/server.ts /absolut
 
 Open <http://127.0.0.1:8797>. The listener is local, with a read-only JSON API at
 `/api/runs` and `/api/runs/RUN_ID`. Configured IDs are the only addressable runs.
-Collection requests share an in-flight read and a ten-second cache.
+Collection requests share an in-flight read and a ten-second cache. The server
+reloads the configuration on refresh, so updating the source list requires no
+restart. Invalid configuration leaves the browser's last received view visible
+with an error. Removing a selected run makes its URL unavailable.
+Within each refresh, runs with the same Nomad job and task share one process
+observation. Failed process reads are retried on the next refresh.
 
 The browser pauses polling while hidden and preserves the last received view
 when a refresh fails. After an individual run read fails, the API retains its
@@ -91,14 +106,36 @@ An old snapshot saying `running` alone does not establish process liveness.
 Runs launched before snapshot publishing retain their original runner. Observe
 shows their task, round markers, and Nomad logs until a result export appears.
 Detailed in-flight notes require an owner endpoint or an observation snapshot.
-Snapshots use `xean-observe/v2` and include committed index and detailed summaries,
-full note text and checks, worker outcomes, and native
+Snapshots use `xean-observe/v3` and include committed index and detailed summaries,
+full note text and checks, worker outcomes and note links, and native
 usage counts. Private model reasoning and complete request bodies stay in the
 campaign journal. Exported results without embedded records show usage as
 unavailable. Gateway billing reconciliation remains separate.
 
-Opening a note shows its detailed summary. Full text and checks have separate
-disclosures. Historical snapshots require their matching observer version.
+Run search filters the configured source list. Notes can be searched and filtered
+by status, with paged lists to keep large corpora readable. Run, note, and work
+URLs support browser history and direct links. A note shows its detailed summary,
+supporting notes, and dependents. Full text and structured checks render when
+opened. Refresh preserves the selected view and open disclosures. Historical
+snapshots require their matching observer version.
+
+An optional `review` source field names a receipt file relative to the run
+directory. The same contract works locally and over SSH:
+
+```json
+{
+  "reviewer": "independent-reviewer",
+  "reviewedAt": "2026-10-01T12:00:00Z",
+  "verdict": "PASS",
+  "report": "The exact statement and proof were checked independently."
+}
+```
+
+`verdict` is `PASS`, `FAIL`, or `INCONCLUSIVE`. A missing receipt is reported as
+missing. An unreadable or malformed receipt has its own diagnostic and does not
+erase campaign evidence. Independent review appears separately from solver
+acceptance. Lab supplies this path through its public discovery output.
+Computational artifact browsing is deferred with the computational Codex role.
 
 ## Verify
 
