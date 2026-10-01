@@ -31,7 +31,7 @@ index 106f2b9..bec4188 100644
                              output.usage.input = event.usage.input_tokens;
                          }
 diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index 40014b3..8e515b0 100644
+index 40014b3..1361b11 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
 @@ -10,6 +10,7 @@ import { getPiUserAgent } from "../utils/pi-user-agent.js";
@@ -199,7 +199,15 @@ index 40014b3..8e515b0 100644
              throw new CodexApiError(message || "Codex response failed", { code, payload: event });
          }
          if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
-@@ -702,6 +723,7 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
+@@ -599,6 +620,7 @@ async function* parseSSE(response, signal) {
+                 throw new Error("Request was aborted");
+             }
+             buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
++            buffer = buffer.replaceAll("\r\n", "\n");
+             // Treat EOF as terminating the residual SSE frame.
+             if (done && buffer.trim())
+                 buffer += "\n\n";
+@@ -702,6 +724,7 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
      websocketSessionCache.clear();
  }
  registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
@@ -207,7 +215,7 @@ index 40014b3..8e515b0 100644
  function isWebSocketSseFallbackActive(sessionId) {
      return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
  }
-@@ -1240,13 +1262,14 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
+@@ -1240,13 +1263,14 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
  async function parseErrorResponse(response) {
      const raw = await response.text();
      let message = raw || response.statusText || "Request failed";
@@ -225,7 +233,7 @@ index 40014b3..8e515b0 100644
                  const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
                  const mins = err.resets_at
                      ? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000))
-@@ -1258,11 +1281,16 @@ async function parseErrorResponse(response) {
+@@ -1258,11 +1282,16 @@ async function parseErrorResponse(response) {
          }
      }
      catch { }
@@ -243,7 +251,7 @@ index 40014b3..8e515b0 100644
  function extractAccountId(token) {
      try {
          const parts = token.split(".");
-@@ -1289,7 +1317,10 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
+@@ -1289,7 +1318,10 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
          }
      }
      headers.set("Authorization", `Bearer ${token}`);
@@ -255,7 +263,7 @@ index 40014b3..8e515b0 100644
      headers.set("originator", "pi");
      headers.set("User-Agent", getPiUserAgent());
      return headers;
-@@ -1316,4 +1347,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
+@@ -1316,4 +1348,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
      headers.set("session-id", requestId);
      return headers;
  }

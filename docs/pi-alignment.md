@@ -151,6 +151,8 @@ JSON/serialization allocation fixes. Authentication, invalid requests, context
 limits, and quota failures remain terminal even when their details resemble
 transport errors. Retryable typed WebSocket failures use Pi's HTTP fallback.
 Patch hashes and build qualification remain in the artifact provenance.
+The Codex SSE patch normalizes CRLF framing after joining incoming chunks.
+Remove it when the native parser handles CRLF, including split line endings.
 
 Pi drops failed messages from normal input. Xean retains only completed
 encrypted reasoning items, checks identity and capacity, and preserves original

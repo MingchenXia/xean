@@ -6,6 +6,8 @@ The main branch is the current distribution. Existing numbered releases and
 tags remain historical archives. Pin the source commit and runtime for each
 campaign.
 
+- Accept CRLF-framed Codex SSE responses, including line endings split across
+  network chunks, instead of reporting a JSON parsing error.
 - Use Pi's native Anthropic provider for Claude models with subscription OAuth
   or API credentials. Remove the Claude Code provider package, patch, custom
   adapter, and subprocess tests. Research remains Codex-only. Retain historical

@@ -56,7 +56,7 @@
   "patches": [
     {
       "path": "patches/@earendil-works%2Fpi-ai@0.99.2.patch",
-      "sha256": "52e9a3cc93e92d70500790a5c2e5867a8f78e5c0792cb5ab2e73e01875713443",
+      "sha256": "81844c58e1e69819c0d7b205c68856bdfbc1bee7696d402cfd05643336067ed9",
       "appliedBy": "Bun patchedDependencies at installation"
     },
     {

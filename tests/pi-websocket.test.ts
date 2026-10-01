@@ -343,6 +343,45 @@ test.each([
   },
 );
 
+test("Codex SSE accepts LF and CRLF even across byte boundaries", async () => {
+  for (const newline of ["\n", "\r\n"])
+    for (const fragmented of [false, true]) {
+      const bytes = new TextEncoder().encode(
+        reply(1)
+          .map((event) => `data: ${JSON.stringify(event)}${newline}${newline}`)
+          .join(""),
+      );
+      const body = fragmented
+        ? new ReadableStream({
+            start(controller) {
+              for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+              controller.close();
+            },
+          })
+        : bytes;
+      const result = await streamSimple(
+        model,
+        normalizeContext({ messages: [] }),
+        {
+          apiKey,
+          transport: "sse",
+          maxRetries: 0,
+          fetch: Object.assign(
+            async () =>
+              new Response(body, {
+                headers: { "content-type": "text/event-stream" },
+              }),
+            {
+              preconnect: fetch.preconnect,
+            },
+          ),
+        },
+      ).result();
+      expect(result.stopReason).toBe("stop");
+      expect(result.content).toMatchObject([{ type: "text", text: "reply 1" }]);
+    }
+});
+
 test("opaque proxy authentication rejects the direct ChatGPT endpoint before dispatch", async () => {
   let sent = false;
   const stubFetch: typeof fetch = Object.assign(
