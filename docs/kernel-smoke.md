@@ -72,9 +72,23 @@ builds using the previous frozen model catalog, and all 16 installed patched
 files matched independent extraction and patch application. The checks cover
 extension task registration, atomic publication, pause and close accounting,
 read-only SQLite, provider recovery, JSON-error retry classification, and CRLF
-framing. Live providers have not
-been rerun for this pin. Gateway continuation and native Anthropic tool use
-require qualification before a long model-backed run.
+framing.
+
+Source `6a9510e477ce` exercised this Pi pin on Jupiter under Nomad on 2026-10-01,
+using Bun 1.4.2, Codex CLI 0.153.4, and `gpt-6-astra` at max reasoning.
+Four Pi role calls and one Codex source invocation settled successfully. Two
+auxiliary notes received fresh PASS judgments for correctness, sources, and
+blind reconstruction, with three supporting notes supplied as trusted imports.
+The payload audit confirmed identical canonical premise strings across stages
+and no additional model calls when reusing completed source and reconstruction
+checks. Nomad recorded exit 0 without restarts, and the audit matched 36 runtime
+source files to the frozen image. Evidence is under
+`runs/canonical-premise-smoke/`.
+
+This smoke qualifies the changed verification data flow for those notes. The
+complete mathematical task was outside its scope. Dedicated gateway continuation
+checks and native Anthropic tool use still require reruns on this pin, and a
+complete live Xean Lab workflow remains unqualified on the current source.
 
 Pi revision `d4d74eb19be9` passed the locked Bun 1.4.2 checks on 2026-09-30:
 108 tests and 1,494 assertions. All five artifacts matched across two clean
@@ -88,6 +102,25 @@ These checks qualify transport and lifecycle behavior, not a full mathematical
 solver campaign. Source hashes and receipts are under
 `runs/pi-upgrade-20260930-d4d74eb/` and
 `runs/codex-lb-2026-09-30T21-11-45-790Z/`.
+
+### Lab lifecycle qualification
+
+On 2026-10-01, Xean `d76728f` and Lab `abf3f13` completed two supervised
+campaigns on Jupiter with identical task, settings, and source, using direct
+and inductive guidance. One campaign received SIGINT after its first durable
+note; the other was paused through the active owner. Both resumed in a second
+Nomad generation, retained notes and frozen inputs, and reached acceptance.
+They recorded 16 and 11 calls respectively. Observe inspection and accepted
+argument exports passed. Independent review packets were created separately.
+
+The 26 measured gateway requests totalled $0.0215228. One cancelled request had
+unknown usage and price, so this is a subtotal. Lab `6127523` subsequently fixed
+Linux RSS units and passed image qualification with zero provider calls.
+Original resource artifacts retain their inflated child RSS fields; measured
+cgroup allocation peaks were about 257 MB and 255 MB, with no OOM kills.
+Receipts are in `jupiter:/srv/xean-lab/deployments/issue6-20261001/` and campaigns
+in `jupiter:/srv/xean-lab/runs/issue6-20261001/`. These receipts qualify their
+recorded source revisions, not every later change.
 
 ### ChatGPT Web
 

@@ -1,7 +1,12 @@
-{ pkgs, bun, projectRoot }:
+{ fleetRoot, projectRoot, testFilesJson ? "[]" }:
 let
+  fleet = builtins.getFlake ("path:" + fleetRoot);
+  system = builtins.currentSystem;
+  pkgs = fleet.inputs.nixpkgs.legacyPackages.${system};
+  bun = fleet.packages.${system}.bun;
+  testFiles = builtins.fromJSON testFilesJson;
   source = builtins.path {
-    path = projectRoot;
+    path = builtins.toPath projectRoot;
     name = "xean-check-source";
     filter = path: type:
       let
@@ -14,6 +19,7 @@ let
   };
 in pkgs.runCommand "xean-check" {
   nativeBuildInputs = [ bun ];
+  src = source;
 } ''
   export HOME="$TMPDIR/home"
   export BUN_INSTALL_CACHE_DIR="$TMPDIR/bun-cache"
@@ -21,6 +27,7 @@ in pkgs.runCommand "xean-check" {
   cp -R ${source} source
   chmod -R u+w source
   cd source
-  bun --no-install --no-env-file scripts/check.ts
+  ${if testFiles == [] then "bun --no-install --no-env-file scripts/check.ts"
+    else "bun --no-install --no-env-file test ${pkgs.lib.escapeShellArgs (map (file: "./" + file) testFiles)}"}
   touch "$out"
 ''

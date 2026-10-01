@@ -20,6 +20,21 @@ campaign.
   with its original timestamp, a stale marker, and current diagnostics. Preserve
   note disclosures by identity during refresh and separate process-read errors
   from the campaign's recorded status.
+- Expand Observe with searchable, filtered note lists, dependency navigation,
+  structured checks, worker publication links, and direct run, note, and work
+  URLs. Read independent-review receipts separately from campaign evidence.
+  Refresh source configuration without restarting and share Nomad process reads
+  among runs in the same pool. Snapshots now use `xean-observe/v3`.
+- Integrate the separate Xean Lab runner through public CLI, inspection, and
+  reporting APIs. Freeze task, settings, and optional guidance bytes, retain
+  immutable attempt records, and resume with keyed provider-call grants.
+  Lab supervises the separate Observe publisher and records exact source,
+  image, and Bun identities. Historical experiments retain their frozen runtimes.
+- Add focused test-file runs through Fleet's locked, socket-free Nix checks.
+  Lab's source checks and image qualification share a zero-call integration
+  smoke covering Xean's CLI, Lab execution, Observe snapshots, and memory
+  accounting. Linux image builds check both repositories before packaging and
+  reuse dependency layers after source-only changes.
 - Accept CRLF-framed Codex SSE responses, including line endings split across
   network chunks, instead of reporting a JSON parsing error.
 - Stop treating JSON `Unterminated string` errors as terminated connections and
@@ -42,8 +57,8 @@ campaign.
   without discarding valid replies when they differ from the requested model.
 - Verify note summaries against their authoritative mathematics while keeping
   the independent prover blind to original proofs and summaries.
-- Reject malformed observer snapshots and heartbeat data without breaking the
-  dashboard or discarding available process logs.
+- Reject malformed observer snapshots without breaking the dashboard or
+  discarding available process logs.
 - Trust typed role outputs and internal projections, validate model and external
   inputs at their boundaries, and keep current-format rejection without legacy
   readers or fixtures. Recovery scheduling uses Pi's candidate order.
@@ -58,7 +73,7 @@ process. Existing campaign and observation formats are unchanged by this split.
 Notes now require `summary`, `detailedSummary`, and authoritative full `text`.
 Harmless corrections replace all three together. This changes public note and
 correction APIs, CLI input files, and persisted solver inputs. Solver declarations
-use version 11 and observer exports use `xean-observe/v2`. Keep historical
+use version 11 and observer exports use `xean-observe/v3`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
 - Pin all Pi/Chord packages to upstream main commit `8ce69e9d2b17`, preserving the

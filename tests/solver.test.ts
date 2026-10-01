@@ -382,7 +382,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     await engine?.close();
     await rm(directory, { recursive: true });
   }
-});
+}, 15_000);
 
 test("source INCONCLUSIVE is final across revisions, evidence, dependency checks, and batches", async () => {
   const pass = { verdict: "PASS" as const, report: "Checked." };

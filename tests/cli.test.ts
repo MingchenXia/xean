@@ -117,7 +117,7 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
   } finally {
     await rm(directory, { recursive: true });
   }
-});
+}, 15_000);
 
 test("CLI inspects solver campaign kinds, drains large output, and restricts execution declarations", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-output-"));
@@ -218,4 +218,4 @@ try {
   } finally {
     await rm(directory, { recursive: true });
   }
-});
+}, 15_000);

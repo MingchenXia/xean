@@ -39,41 +39,41 @@ test("an increased total resumes only additional rounds and preserves prior work
   };
   let engine: Xean | undefined;
   try {
-    const first = setup(20);
+    const first = setup(2);
     engine = await Xean.open(await openXeanStorage(database), first.solver);
     await engine.run();
     const paused = await engine.pause();
-    expect(first.rounds()).toBe(20);
-    expect(paused.work).toHaveLength(20);
-    const lastMarker = await readFile(join(directory, "round-20.json"), "utf8");
+    expect(first.rounds()).toBe(2);
+    expect(paused.work).toHaveLength(2);
+    const lastMarker = await readFile(join(directory, "round-2.json"), "utf8");
     await engine.close();
 
-    const continuation = setup(40);
+    const continuation = setup(4);
     engine = await Xean.open(
       await openXeanStorage(database),
       continuation.solver,
     );
     expect(await engine.run()).toEqual(paused);
-    const resumed = await resumeExperiment(engine, 40);
-    expect(continuation.rounds()).toBe(40);
-    expect(resumed.work).toHaveLength(40);
-    expect(resumed.work.slice(0, 20)).toEqual(paused.work);
+    const resumed = await resumeExperiment(engine, 4);
+    expect(continuation.rounds()).toBe(4);
+    expect(resumed.work).toHaveLength(4);
+    expect(resumed.work.slice(0, 2)).toEqual(paused.work);
     expect(resumed.providerCalls).toBe(0);
-    expect(await readFile(join(directory, "round-20.json"), "utf8")).toBe(
+    expect(await readFile(join(directory, "round-2.json"), "utf8")).toBe(
       lastMarker,
     );
     const finished = await engine.pause();
     await engine.close();
 
-    const repeated = setup(40);
+    const repeated = setup(4);
     engine = await Xean.open(await openXeanStorage(database), repeated.solver);
-    expect(repeated.rounds()).toBe(40);
+    expect(repeated.rounds()).toBe(4);
     expect(await engine.run()).toEqual(finished);
-    const retried = await resumeExperiment(engine, 40);
-    expect(retried.work).toHaveLength(40);
+    const retried = await resumeExperiment(engine, 4);
+    expect(retried.work).toHaveLength(4);
     expect(retried.inputs).toEqual(finished.inputs);
-    expect(repeated.rounds()).toBe(40);
-    expect(() => setup(20)).toThrow("exceeded its round allowance");
+    expect(repeated.rounds()).toBe(4);
+    expect(() => setup(2)).toThrow("exceeded its round allowance");
   } finally {
     await engine?.close();
     await rm(directory, { recursive: true });

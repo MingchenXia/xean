@@ -144,6 +144,7 @@ authority, while Xean's `bun.lock` locks JavaScript dependencies.
 cd ~/playground/fleet-infra
 bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts install
 bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts check
+bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts test tests/observe.test.ts tests/report.test.ts
 ```
 
 `install` requires the existing lockfile, performs a clean frozen installation,
@@ -151,6 +152,8 @@ and skips lifecycle scripts. After an intentional dependency edit, use
 `install --update-lockfile`. An installation receipt rejects changed dependency
 inputs until a clean reinstall. `check` runs typechecking, formatting, distribution checks, and tests
 inside a socket-free Nix build. `format` formats project sources and documentation.
+`test` runs only the named test files in that same sandbox. Pass existing files
+under `tests/`. Set `XEAN_FLEET_INFRA` when Fleet Infra is elsewhere.
 
 Use the same locked runtime for local CLI work:
 
