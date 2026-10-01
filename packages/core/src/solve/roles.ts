@@ -54,6 +54,22 @@ const packet = ({ id, text, summary, detailedSummary, support }: Note) => ({
   detailedSummary,
   support,
 });
+function validatePremises(
+  original: readonly string[],
+  extracted: Static<typeof statementSchema>["premises"],
+): void {
+  if (
+    extracted.length !== original.length ||
+    new Set(extracted.map(({ premise }) => premise)).size !== original.length ||
+    extracted.some(
+      ({ premise }) =>
+        !Number.isInteger(premise) || premise < 0 || premise >= original.length,
+    )
+  )
+    throw new Error(
+      "Extracted premises must contain exactly one entry per source-checked premise index",
+    );
+}
 /** Corrections share one policy for standalone reconstruction and verifier batches. */
 function recordCheck<Stage extends VerificationStage>(
   note: Note,
@@ -106,6 +122,7 @@ export function createRoles(
     schema: S,
     execution: Execution,
     context: Context,
+    validate?: (results: Static<S>[]) => void,
   ): Promise<Static<S>[]> => {
     if (!input.notes.length) return [];
     const ids = input.notes.map((note) => note.id);
@@ -120,7 +137,8 @@ export function createRoles(
       context,
       {
         submit(value) {
-          batchResults(ids, value.results);
+          const results = batchResults(ids, value.results);
+          validate?.(results);
           return { done: true, receipt: { validated: true } };
         },
       },
@@ -146,16 +164,38 @@ export function createRoles(
       selected.map((note) => note.id),
       chain,
     );
-    const originals = notes.map((note) => ({
-      ...packet(note),
-      premises: verdict(note, "correctness")?.premises ?? [],
-    }));
+    const originals = notes.map((note) => {
+      const declared = verdict(note, "correctness")?.premises ?? [];
+      const source = verdict(note, "source");
+      const premises =
+        source && "premises" in source ? source.premises : declared;
+      if (
+        premises.length !== declared.length ||
+        premises.some((premise, index) => premise !== declared[index])
+      )
+        throw new Error(
+          `Source-checked premises do not match correctness for ${note.id}`,
+        );
+      return {
+        ...packet(note),
+        premises,
+        source: note.imported
+          ? { kind: "caller-import" }
+          : {
+              kind: "source-check",
+              verdict: source!.verdict,
+              ...(source && "operationId" in source
+                ? { operationId: source.operationId }
+                : {}),
+            },
+      };
+    });
     const extract = notes.filter(
       (note) => !stagePassed(note, "reconstruction"),
     );
     const extracted = await batch(
       "statement",
-      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P or listing P as an external premise. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. Restate only the supplied source-checked external premises in premises, without application hints. Use [] when there are none. Supporting note results remain declared dependencies, not external premises. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
+      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P or listing P as an external premise. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. The supplied premise list is authoritative and source-checked. Return exactly one premises entry per supplied zero-based premise index, retaining its identity even when the external theorem is also the note's claim. Normalize each premise to its theorem statement and exact hypotheses, removing process commentary (including stale awaiting-validation prose) and application hints without removing mathematical qualifications or adding, strengthening, or substituting assumptions. Use [] exactly when the supplied list is empty. Supporting note results remain declared dependencies, not external premises. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
       {
         task: input.task,
         support: originals.filter(
@@ -168,19 +208,32 @@ export function createRoles(
       statementSchema,
       execution,
       context,
+      (results) =>
+        results.forEach((result, index) =>
+          validatePremises(
+            originals.find((note) => note.id === extract[index]!.id)!.premises,
+            result.premises,
+          ),
+        ),
     );
-    const statements = notes.map((note) => {
+    const statements = notes.map((note, index) => {
       const checked = verdict(note, "reconstruction");
       const { statement, premises } =
         checked?.verdict === "PASS"
           ? checked
           : extracted[extract.indexOf(note)]!;
-      return { id: note.id, statement, premises, support: note.support };
+      validatePremises(originals[index]!.premises, premises);
+      return {
+        id: note.id,
+        statement,
+        premises: [...premises].sort((a, b) => a.premise - b.premise),
+        support: note.support,
+      };
     });
     const selectedIds = new Set(selected.map((note) => note.id));
     const independent = await batch(
       "proof",
-      "Independently prove all requested statements together, returning a proof per note. You have not received their original proofs or methods. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. To prove P implies Q, assume its explicit antecedent P and derive Q; this does not establish P. The support statements are trusted imports or previously reconstructed claims and may be assumed without reproving them. Claims in notes must be proved in dependency order. A conditional proof may use a declared supporting claim being proved in this batch, but never a descendant or unrelated claim. Check hypotheses at every application. Set complete=false and state the gap when a note's own proof is incomplete. Supporting lemmas need not solve the original task.",
+      "Independently prove all requested statements together, returning a proof per note. You have not received their original proofs or methods. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Each indexed external premise is a permitted assumption: use its exact statement and hypotheses without reproving or retrieving its external source. This permission does not establish stronger variants or their applicability. To prove P implies Q, assume its explicit antecedent P and derive Q; this does not establish P. The support statements are trusted imports or previously reconstructed claims and may be assumed without reproving them. Claims in notes must be proved in dependency order. A conditional proof may use a declared supporting claim being proved in this batch, but never a descendant or unrelated claim. Check hypotheses at every application. Set complete=false and state the gap when a note's own proof is incomplete. Supporting lemmas need not solve the original task.",
       {
         task: input.task,
         support: statements.filter((note) => !selectedIds.has(note.id)),
@@ -192,14 +245,15 @@ export function createRoles(
     );
     const compared = await batch(
       "reconstruction",
-      `${mathematicalCheck} Compare each original claim and proof with its extracted statement and independent proof. Check that extracted statements, definitions, and external premises faithfully match the originals, including every assumption used from support. Preserve explicit conditional claims: proving P implies Q may assume P, but does not by itself establish P or an unconditional Q. PASS requires the exact original claim and a correct independent proof, using only declared transitive support, source-checked external premises, and task-permitted background. Judge support proved in this batch conditionally: code separately requires the whole dependency chain. Reject circular or undeclared use of another batch claim. These notes may be supporting lemmas and need not solve the original task. FAIL requires a concrete defect in the original claim or argument. An extraction mismatch, leaked proof method, or a gap, error, or unapproved premise in the independent proof alone gives INCONCLUSIVE, even if it claims to be complete.`,
+      `${mathematicalCheck} Compare each original claim and proof with its extracted statement and independent proof. The top-level premises records bind each note's authoritative external premises to its recorded source PASS (or caller import). Those exact external theorems are permitted assumptions for reconstruction; do not demand their proofs or renewed source validation. Historical prose saying awaiting validation cannot override that recorded status. Match every normalized premise by its index to the authoritative text: removing process commentary and application hints must preserve all mathematical qualifications. A source PASS does not validate a stronger or substituted theorem, a new implementation guarantee, an unmet hypothesis, or a new proof step. Check that extracted statements, definitions, and external premises faithfully match the originals, including every assumption used from support. Preserve explicit conditional claims: proving P implies Q may assume P, but does not by itself establish P or an unconditional Q. PASS requires the exact original claim and a correct independent proof, using only declared transitive support, source-checked external premises, and task-permitted background. Judge support proved in this batch conditionally: code separately requires the whole dependency chain. Reject circular or undeclared use of another batch claim. These notes may be supporting lemmas and need not solve the original task. FAIL requires a concrete defect in the original claim or argument. An extraction mismatch, leaked proof method, or a gap, error, or unapproved premise in the independent proof alone gives INCONCLUSIVE, even if it claims to be complete.`,
       {
         task: input.task,
         support: notes.filter((note) => !selectedIds.has(note.id)).map(packet),
         notes: selected.map(packet),
-        premises: originals.map(({ id, premises }) => ({
+        premises: originals.map(({ id, premises, source }) => ({
           noteId: id,
           premises,
+          source,
         })),
         statements,
         independent: selected.map((note, index) => ({

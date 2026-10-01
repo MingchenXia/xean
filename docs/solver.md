@@ -108,6 +108,14 @@ previously reconstructed claims supply statement-only assumptions. Source-checke
 external premises also remain assumptions. Imported notes explicitly selected
 as targets must themselves be reconstructed.
 
+The source-assessed premise strings remain authoritative, bound to their note
+and source record. Extraction returns one theorem-only statement per premise
+index. Missing, duplicate, or invented indices reject the submitted batch, and
+the same check applies to reused extractions. Normalization removes process
+commentary and application hints while preserving mathematical qualifications.
+Index validation preserves premise identities; the comparison judge checks
+mathematical fidelity, including any strengthened or substituted theorem.
+
 The blind prover receives the task, extracted statements, permitted premises,
 and dependency links. Original proofs, index and detailed summaries, and verifier reports are
 withheld. Each proof may use only its declared transitive support and permitted
@@ -117,9 +125,15 @@ are excluded when retrying an unresolved ancestor.
 One comparison call checks statement fidelity and both arguments for each
 pending note, including the assumptions used. Supporting lemmas need only prove
 their own claims. Requirements alone checks the original completion criteria.
+The judge receives the original premise strings and their recorded source PASS
+with its operation ID when available, or explicit caller-import trust. Those
+external theorems are permitted assumptions at this stage. Stale prose about
+awaiting validation cannot reopen their source status. The judge still checks
+exact hypotheses, applicability, and every new proof step. Neither source PASS
+nor a premise index permits a stronger theorem or hides a proof defect.
 An incomplete or incorrect independent proof, or an unfaithful extraction, gives
 INCONCLUSIVE unless the original argument has a concrete defect. Successful
-checks retain the statement, premises, and proof for reuse. A conditional PASS
+checks retain the statement, indexed normalized premises, and proof for reuse. A conditional PASS
 may survive an inconclusive dependency, but acceptance waits for the whole chain.
 The existing Pi capacity check applies to each batch without truncation or
 automatic splitting.

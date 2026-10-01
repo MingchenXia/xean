@@ -7,7 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
-export const declarationVersion = 9;
+export const declarationVersion = 10;
 const text = Type.String({ minLength: 1 });
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -83,10 +83,19 @@ export const correctnessSchema = object({
 export type Correctness = Static<typeof correctnessSchema>;
 export const statementSchema = object({
   statement: text,
-  premises: Type.Array(text, {
-    description:
-      "Source-checked external results only. Explicit hypothetical antecedents belong in the statement; task-granted assumptions and declared support are not external premises.",
-  }),
+  premises: Type.Array(
+    object({
+      premise: Type.Integer({
+        minimum: 0,
+        description: "Index in this note's source-checked premise list.",
+      }),
+      statement: text,
+    }),
+    {
+      description:
+        "One theorem-only statement per supplied premise index. Preserve its exact mathematical meaning and qualifications, removing only process commentary and application hints. Explicit hypothetical antecedents belong in the note statement.",
+    },
+  ),
 });
 export const proofSchema = object({ proof: text, complete: Type.Boolean() });
 const passageSchema = object({

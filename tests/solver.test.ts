@@ -151,7 +151,12 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
       case "statement":
         result = batch((note) => ({
           statement: `Claim ${note.id}`,
-          premises: [],
+          premises: input.notes
+            .find((entry: Note) => entry.id === note.id)
+            .premises.map((statement: string, premise: number) => ({
+              premise,
+              statement,
+            })),
         }));
         break;
       case "proof":
