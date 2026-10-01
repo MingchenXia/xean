@@ -1,4 +1,6 @@
 import { html, render } from "lit-html";
+import { keyed } from "lit-html/directives/keyed.js";
+import { repeat } from "lit-html/directives/repeat.js";
 import renderMath from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
 import type { Run } from "../src/read.ts";
@@ -12,10 +14,11 @@ const count = (value: number | undefined) =>
 const problem = (run: Run) =>
   run.snapshot?.task?.problem ?? run.heartbeat?.task.problem ?? run.id;
 const state = (run: Run) =>
-  run.snapshot?.status.status ?? run.process?.status ?? "Unknown";
+  run.snapshot?.status.status ??
+  run.process?.status ??
+  (run.error ? "Unavailable" : "Unknown");
 const age = (run: Run) => {
-  const timestamp =
-    run.snapshot?.observedAt ?? run.process?.observedAt ?? run.observedAt;
+  const timestamp = run.snapshot?.observedAt ?? run.observedAt;
   const seconds = Math.max(
     0,
     Math.floor((Date.now() - Date.parse(timestamp)) / 1000),
@@ -38,6 +41,7 @@ function detailView(run: Run) {
       ${run.kind === "database" ? "Live database snapshot" : run.kind === "snapshot" ? "Published snapshot" : run.kind === "export" ? "Exported result" : "Run heartbeat"},
       ${age(run)}
     </p>
+    ${run.stale ? html`<p class="error">Stale campaign data: showing the last successful observation. The latest read failed.</p>` : ""}
     ${run.error ? html`<p class="error">${run.error}</p>` : ""}
     ${run.snapshot?.status.error ? html`<p class="error">${run.snapshot.status.error}</p>` : ""}
     <section>
@@ -79,7 +83,9 @@ function detailView(run: Run) {
               <h2>Notes and verification</h2>
               ${
                 run.snapshot.notes.length
-                  ? run.snapshot.notes.map(
+                  ? repeat(
+                      run.snapshot.notes,
+                      (note) => note.id,
                       (note) =>
                         html` <details class="note">
                           <summary>
@@ -238,7 +244,7 @@ function indexView() {
                   <a href=${`#${encodeURIComponent(item.id)}`}>${item.id}</a>
                   <p class="excerpt">${problem(item)}</p>
                 </td>
-                <td>${item.error ? "Unavailable" : state(item)}</td>
+                <td>${state(item)}</td>
                 <td>
                   ${count(item.snapshot?.status.calls.admitted ?? item.process?.calls)}
                 </td>
@@ -247,6 +253,7 @@ function indexView() {
                   ${item.kind ?? "Unavailable"}<br /><span class="muted"
                     >${age(item)}</span
                   >
+                  ${item.error ? html`<br /><span class="error">${item.stale ? "Stale" : "Read error"}</span>` : ""}
                 </td>
               </tr>`,
           )}
@@ -264,7 +271,10 @@ function draw() {
   } catch {
     /* Unmatched URL stays on the index. */
   }
-  render(selected ? detailView(selected) : indexView(), app);
+  render(
+    selected ? keyed(selected.id, detailView(selected)) : indexView(),
+    app,
+  );
   for (const element of app.querySelectorAll<HTMLElement>(".math"))
     renderMath(element, {
       delimiters: [

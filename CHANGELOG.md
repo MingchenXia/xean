@@ -6,6 +6,10 @@ The main branch is the current distribution. Existing numbered releases and
 tags remain historical archives. Pin the source commit and runtime for each
 campaign.
 
+- Keep the observer's last successful campaign observation after a read failure,
+  with its original timestamp, a stale marker, and current diagnostics. Preserve
+  note disclosures by identity during refresh and separate process-read errors
+  from the campaign's recorded status.
 - Accept CRLF-framed Codex SSE responses, including line endings split across
   network chunks, instead of reporting a JSON parsing error.
 - Stop treating JSON `Unterminated string` errors as terminated connections and

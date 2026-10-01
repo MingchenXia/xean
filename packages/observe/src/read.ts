@@ -26,6 +26,8 @@ export type Run = {
   source: string;
   kind?: "database" | "snapshot" | "export" | "heartbeat";
   observedAt: string;
+  /** Campaign evidence retained from a previous successful read. */
+  stale?: boolean;
   snapshot?: Snapshot;
   heartbeat?: {
     task: { problem: string; completionCriteria: string };

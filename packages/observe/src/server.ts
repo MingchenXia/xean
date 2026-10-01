@@ -47,9 +47,26 @@ export function api(sources: Source[], fleet: string) {
     if (saved && Date.now() - readAt < 10_000) return saved;
     pending = Promise.all(sources.map((source) => readRun(source, fleet)))
       .then((runs) => {
-        saved = runs;
+        saved = runs.map((run, index) => {
+          const previous = saved?.[index];
+          if (
+            run.error &&
+            !run.snapshot &&
+            !run.heartbeat &&
+            (previous?.snapshot || previous?.heartbeat)
+          )
+            return {
+              ...run,
+              kind: previous.kind,
+              observedAt: previous.observedAt,
+              snapshot: previous.snapshot,
+              heartbeat: previous.heartbeat,
+              stale: true,
+            };
+          return run;
+        });
         readAt = Date.now();
-        return runs;
+        return saved;
       })
       .finally(() => {
         pending = undefined;
