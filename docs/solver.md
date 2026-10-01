@@ -595,11 +595,28 @@ Verifier uses several profiles within one role invocation.
 Optional fields are `baseUrl`, `apiKeyEnv`, and `transport`. Endpoint URLs cannot
 contain credentials, query parameters, or fragments. An explicit `apiKeyEnv`
 must name a present, nonblank variable when the runtime is constructed.
-The CLI supports
-Pi's OpenAI, Codex, Anthropic, and ChatGPT Web providers. Library callers supply their own
-native Pi `Models` collection and model objects for other providers.
+The CLI supports Pi's OpenAI, Codex, Anthropic, Google Gemini, and ChatGPT Web
+providers. Library callers supply their own native Pi `Models` collection and
+model objects for other providers.
 Explicit Codex endpoints on `chatgpt.com` and its subdomains retain native
 authentication. Custom hosts enable proxy authentication.
+
+Gemini uses Pi's native Google provider with a Gemini API key:
+
+```json
+{
+  "provider": "google",
+  "model": "gemini-3.1-pro-preview",
+  "reasoning": "max",
+  "apiKeyEnv": "GEMINI_API_KEY"
+}
+```
+
+Use this profile in any Pi slot, including `profiles.default`. Pi maps `max` to
+the model's highest supported thinking level and handles tools, thought
+signatures, streaming, and usage through `@google/genai`. This uses Gemini API
+access, separately from a Google AI Pro/Ultra subscription. The pinned Pi no
+longer includes Gemini CLI or Antigravity subscription authentication.
 
 Claude uses Pi's native Anthropic provider. For a Pro/Max subscription, supply
 a valid OAuth token through your environment or secret manager:

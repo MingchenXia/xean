@@ -32,25 +32,44 @@ const context = {
 };
 const apiKey = "xean-offline-fixture-key";
 
-test("Anthropic profiles preserve explicit credentials instead of a shared gateway key", () => {
-  const variable = "XEAN_TEST_ANTHROPIC_CREDENTIAL";
+test("native provider profiles preserve explicit credentials instead of a shared gateway key", () => {
+  const variable = "XEAN_TEST_PROVIDER_CREDENTIAL";
   const previous = process.env[variable];
   try {
-    for (const credential of ["sk-ant-oat-fixture", "anthropic-api-fixture"]) {
+    for (const [provider, model, api, credential] of [
+      [
+        "anthropic",
+        "claude-opus-5-5",
+        "anthropic-messages",
+        "sk-ant-oat-fixture",
+      ],
+      [
+        "anthropic",
+        "claude-opus-5-5",
+        "anthropic-messages",
+        "anthropic-api-fixture",
+      ],
+      [
+        "google",
+        "gemini-3.1-pro-preview",
+        "google-generative-ai",
+        "gemini-api-fixture",
+      ],
+    ] as const) {
       process.env[variable] = credential;
       const profile = piRuntime(
         readSettings({
           profiles: {
             default: {
-              provider: "anthropic",
-              model: "claude-opus-5-5",
+              provider,
+              model,
               apiKeyEnv: variable,
             },
           },
         }),
         "unrelated-gateway-key",
       ).profiles.explorer;
-      expect(profile.model.api).toBe("anthropic-messages");
+      expect(profile.model.api).toBe(api);
       expect(profile.options).toMatchObject({
         apiKey: credential,
         reasoning: "max",

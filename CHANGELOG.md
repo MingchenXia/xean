@@ -6,6 +6,8 @@ The main branch is the current distribution. Existing numbered releases and
 tags remain historical archives. Pin the source commit and runtime for each
 campaign.
 
+- Enable Gemini model profiles through Pi's native Google provider and
+  operator-supplied Gemini API credentials.
 - Keep the observer's last successful campaign observation after a read failure,
   with its original timestamp, a stale marker, and current diagnostics. Preserve
   note disclosures by identity during refresh and separate process-read errors
