@@ -86,9 +86,9 @@ source files to the frozen image. Evidence is under
 `runs/canonical-premise-smoke/`.
 
 This smoke qualifies the changed verification data flow for those notes. The
-complete mathematical task was outside its scope. Dedicated gateway continuation
-checks and native Anthropic tool use still require reruns on this pin, and a
-complete live Xean Lab workflow remains unqualified on the current source.
+complete mathematical task was outside its scope. The source qualification below
+also checks gateway continuation on this pin. Native Anthropic tool use retains
+the earlier pin's qualification and has not been rerun on this pin.
 
 Pi revision `d4d74eb19be9` passed the locked Bun 1.4.2 checks on 2026-09-30:
 108 tests and 1,494 assertions. All five artifacts matched across two clean
@@ -121,6 +121,46 @@ cgroup allocation peaks were about 257 MB and 255 MB, with no OOM kills.
 Receipts are in `jupiter:/srv/xean-lab/deployments/issue6-20261001/` and campaigns
 in `jupiter:/srv/xean-lab/runs/issue6-20261001/`. These receipts qualify their
 recorded source revisions, not every later change.
+
+### Source distribution qualification
+
+On 2026-10-01, clean archives of Xean `bb053d1` and Lab `1696814` passed on
+macOS ARM64 and Linux x64 with Fleet's locked Bun 1.4.2. Xean passed 113 tests
+and 1,509 assertions. Lab passed 93 tests and 524 assertions, plus the shared
+zero-call CLI integration smoke. CLI help/version, README initialization/status,
+and deterministic completion and reopening also passed. The clean macOS check
+exposed a source-path alias bug in Lab, fixed by resolving `XEAN_SOURCE` before
+Nix filters the source tree.
+
+The Git archive SHA-256 checksums are:
+
+| Source         | SHA-256                                                            |
+| -------------- | ------------------------------------------------------------------ |
+| Xean `bb053d1` | `70f647736e0ec6e94f905c1bafafe51f9afb89bc7f06bf542310bdd575b1ea0d` |
+| Lab `1696814`  | `fbe80f8f7301ba05c6bff458dbe7c3ef8ea2634f288a837667a00ac85ecb07c8` |
+
+A supervised Jupiter job exercised these sources in the retained worker image
+with Bun 1.4.2 and Codex CLI 0.153.4. The shared integration smoke passed, then
+four Luna/max gateway calls completed across two concurrent workers with cached
+WebSocket continuation. Credentialless reopening made no additional calls.
+Two independent Codex reviews of the earlier accepted Lab packets returned
+PASS, using one admitted Luna/max invocation each. The original campaigns and
+packet bytes remained unchanged. These reviews qualify the current review path
+and the exact elementary task, with no external sources required.
+
+The earlier receipts establish live guidance, pause, interruption, and resume at
+their recorded revisions. Current-source checks cover the later integration,
+observation, transport, and review changes. This qualification used mounted
+source archives in a retained image. It did not replace the production
+coordinator or upgrade existing campaigns. Historical subscription-provider
+receipts retain their original scope.
+
+Receipts and archives are under `runs/issue6-8-qualification-20261001/`, with
+live evidence at
+`jupiter:/srv/xean-lab/runs/_xean/issue68-qualification-20261001-r02/`.
+The preceding `r01` attempt failed during dependency installation before any
+model calls. The new attempt moved Bun's install cache from bounded scratch
+space to its mounted run directory.
 
 ### ChatGPT Web
 
