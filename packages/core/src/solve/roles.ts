@@ -55,20 +55,6 @@ const packet = ({ id, text, summary, detailedSummary, support }: Note) => ({
   detailedSummary,
   support,
 });
-function checkedPremises(
-  original: readonly string[],
-  extracted: Static<typeof statementSchema>["premises"],
-) {
-  const ordered = extracted.toSorted((a, b) => a.premise - b.premise);
-  if (
-    ordered.length !== original.length ||
-    ordered.some(({ premise }, index) => premise !== index)
-  )
-    throw new Error(
-      "Extracted premises must contain exactly one entry per source-checked premise index",
-    );
-  return ordered;
-}
 /** Corrections share one policy for standalone reconstruction and verifier batches. */
 function recordCheck<Stage extends VerificationStage>(
   note: Note,
@@ -121,7 +107,6 @@ export function createRoles(
     schema: S,
     execution: Execution,
     context: Context,
-    validate?: (result: Static<S>, index: number) => void,
   ): Promise<Static<S>[]> => {
     if (!input.notes.length) return [];
     const ids = input.notes.map((note) => note.id);
@@ -136,8 +121,7 @@ export function createRoles(
       context,
       {
         submit(value) {
-          const results = batchResults(ids, value.results);
-          if (validate) results.forEach(validate);
+          batchResults(ids, value.results);
           return { done: true, receipt: { validated: true } };
         },
       },
@@ -193,7 +177,7 @@ export function createRoles(
     );
     const extracted = await batch(
       "statement",
-      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P or listing P as an external premise. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. The supplied premise list is authoritative and source-checked. Return exactly one premises entry per supplied zero-based premise index, retaining its identity even when the external theorem is also the note's claim. Normalize each premise to its theorem statement and exact hypotheses, removing process commentary (including stale awaiting-validation prose) and application hints without removing mathematical qualifications or adding, strengthening, or substituting assumptions. Use [] exactly when the supplied list is empty. Supporting note results remain declared dependencies, not external premises. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
+      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. Return only the statement. Code supplies the source-checked external premises unchanged; do not rewrite them or move an unproved step into that list. Supporting note results remain declared dependencies. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
       {
         task: input.task,
         support: originals.filter((note) => !extract.includes(note)),
@@ -202,26 +186,24 @@ export function createRoles(
       statementSchema,
       execution,
       context,
-      (result, index) =>
-        checkedPremises(extract[index]!.premises, result.premises),
     );
     const statements = notes.map((note, index) => {
       const checked = verdict(note, "reconstruction");
-      const { statement, premises } =
+      const { statement } =
         checked?.verdict === "PASS"
           ? checked
           : extracted[extract.indexOf(originals[index]!)]!;
       return {
         id: note.id,
         statement,
-        premises: checkedPremises(originals[index]!.premises, premises),
+        premises: originals[index]!.premises,
         support: note.support,
       };
     });
     const selectedIds = new Set(selected.map((note) => note.id));
     const independent = await batch(
       "proof",
-      "Independently prove all requested statements together, returning a proof per note. You have not received their original proofs or methods. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Each indexed external premise is a permitted assumption: use its exact statement and hypotheses without reproving or retrieving its external source. This permission does not establish stronger variants or their applicability. To prove P implies Q, assume its explicit antecedent P and derive Q; this does not establish P. The support statements are trusted imports or previously reconstructed claims and may be assumed without reproving them. Claims in notes must be proved in dependency order. A conditional proof may use a declared supporting claim being proved in this batch, but never a descendant or unrelated claim. Check hypotheses at every application. Set complete=false and state the gap when a note's own proof is incomplete. Supporting lemmas need not solve the original task.",
+      "Independently prove all requested statements together, returning a proof per note. You have not received their original proofs or methods. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Each supplied external premise is a permitted assumption: use its exact statement and hypotheses without reproving or retrieving its external source. This permission does not establish stronger variants or their applicability. To prove P implies Q, assume its explicit antecedent P and derive Q; this does not establish P. The support statements are trusted imports or previously reconstructed claims and may be assumed without reproving them. Claims in notes must be proved in dependency order. A conditional proof may use a declared supporting claim being proved in this batch, but never a descendant or unrelated claim. Check hypotheses at every application. Set complete=false and state the gap when a note's own proof is incomplete. Supporting lemmas need not solve the original task.",
       {
         task: input.task,
         support: statements.filter((note) => !selectedIds.has(note.id)),
@@ -233,7 +215,7 @@ export function createRoles(
     );
     const compared = await batch(
       "reconstruction",
-      `${mathematicalCheck} Compare each original claim and proof with its extracted statement and independent proof. The top-level premises records bind each note's authoritative external premises to its recorded source PASS (or caller import). Those exact external theorems are permitted assumptions for reconstruction; do not demand their proofs or renewed source validation. Historical prose saying awaiting validation cannot override that recorded status. Match every normalized premise by its index to the authoritative text: removing process commentary and application hints must preserve all mathematical qualifications. A source PASS does not validate a stronger or substituted theorem, a new implementation guarantee, an unmet hypothesis, or a new proof step. Check that extracted statements, definitions, and external premises faithfully match the originals, including every assumption used from support. Preserve explicit conditional claims: proving P implies Q may assume P, but does not by itself establish P or an unconditional Q. PASS requires the exact original claim and a correct independent proof, using only declared transitive support, source-checked external premises, and task-permitted background. Judge support proved in this batch conditionally: code separately requires the whole dependency chain. Reject circular or undeclared use of another batch claim. These notes may be supporting lemmas and need not solve the original task. FAIL requires a concrete defect in the original claim or argument. An extraction mismatch, leaked proof method, or a gap, error, or unapproved premise in the independent proof alone gives INCONCLUSIVE, even if it claims to be complete.`,
+      `${mathematicalCheck} Compare each original claim and proof with its extracted statement and independent proof. The top-level premises records bind each note's authoritative external premises to its recorded source PASS (or caller import). Those exact external theorems are permitted assumptions for reconstruction; do not demand their proofs or renewed source validation. Historical prose saying awaiting validation cannot override that recorded status. Code supplies the exact source-assessed premises unchanged. If a supplied premise leaks a proof method or application hint, report INCONCLUSIVE rather than using the leak or silently editing the assumption. Distinguish a premise's substantive algorithmic guarantee from hints for proving or applying this note. A source PASS does not validate a stronger or substituted theorem, a new implementation guarantee, an unmet hypothesis, or a new proof step. Check that extracted statements and definitions faithfully match the originals, including every assumption used from support and every external premise actually invoked. Preserve explicit conditional claims: proving P implies Q may assume P, but does not by itself establish P or an unconditional Q. PASS requires the exact original claim and a correct independent proof, using only declared transitive support, source-checked external premises, and task-permitted background. Judge support proved in this batch conditionally: code separately requires the whole dependency chain. Reject circular or undeclared use of another batch claim. These notes may be supporting lemmas and need not solve the original task. FAIL requires a concrete defect in the original claim or argument. An extraction mismatch, leaked proof method, or a gap, error, or unapproved premise in the independent proof alone gives INCONCLUSIVE, even if it claims to be complete.`,
       {
         task: input.task,
         support: notes.filter((note) => !selectedIds.has(note.id)).map(packet),
@@ -258,14 +240,11 @@ export function createRoles(
       checks: selected.map((note, index) => {
         const proof = independent[index]!;
         const judgment = compared[index]!;
-        const { statement, premises } = statements.find(
-          (other) => other.id === note.id,
-        )!;
+        const { statement } = statements.find((other) => other.id === note.id)!;
         const check: Check = { noteId: note.id };
         recordCheck(note, check, "reconstruction", {
           ...judgment,
           statement,
-          premises,
           proof: proof.proof,
           ...(!proof.complete && judgment.verdict === "PASS"
             ? {
@@ -458,7 +437,7 @@ export function createRoles(
       const judgments = await assess(
         "correctness",
         correctness,
-        `Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For an explicit conditional claim P implies Q, check the derivation of Q assuming P. Its hypothetical antecedent P is part of the claim, not an external theorem to establish; omit it from premises. Proving the implication does not establish P. An unstated assumption in an unconditional claim remains a gap: do not silently weaken the claim to an implication or promote a missing proof step to an external theorem. External results actually used to prove an implication still require the normal assessment below. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Find missing cases, unsupported inferences, and undeclared substantive dependencies. ${research.retrieval ? "A cited theorem note may state an external result without reproving it: assess its statement and application conditionally and list it in premises for source validation. List every directly needed nonroutine external result with exact hypotheses, conclusion, and application, including any invoked without citation." : "This is a closed-book check: source retrieval is disabled. Apply the task's proof rules. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses, conclusion, and application. The steps producing the requested conclusion must satisfy the task's proof requirements."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
+        `Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For an explicit conditional claim P implies Q, check the derivation of Q assuming P. Its hypothetical antecedent P is part of the claim, not an external theorem to establish; omit it from premises. Proving the implication does not establish P. An unstated assumption in an unconditional claim remains a gap: do not silently weaken the claim to an implication or promote a missing proof step to an external theorem. External results actually used to prove an implication still require the normal assessment below. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Find missing cases, unsupported inferences, and undeclared substantive dependencies. ${research.retrieval ? "A cited theorem note may state an external result without reproving it: assess its statement and application conditionally and list it in premises for source validation. List every directly needed nonroutine external claim with exact hypotheses and conclusion, including any invoked without citation. Explain its application in report." : "This is a closed-book check: source retrieval is disabled. Apply the task's proof rules. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses and conclusion. Explain their applications in report. The steps producing the requested conclusion must satisfy the task's proof requirements."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Each premise must be a standalone statement with all hypotheses, definitions, and qualifications needed to understand it. Source names and citations are allowed. Put proof ideas, application hints, and validation commentary in report, never in premises. Source checking will assess these exact strings, and reconstruction will receive them unchanged. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
         correctnessSchema,
       );
       correctness.forEach((note, index) =>

@@ -171,7 +171,6 @@ test("public solver functions replace planning, Explorer, and Verifier without c
             verdict: "PASS",
             report: "Independent proof agrees",
             statement: task.problem,
-            premises: [],
             proof: "Counting two pairs gives four units.",
           },
         },

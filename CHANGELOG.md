@@ -6,12 +6,13 @@ The main branch is the current distribution. Existing numbered releases and
 tags remain historical archives. Pin the source commit and runtime for each
 campaign.
 
-- Preserve source-checked premise identities through blind reconstruction and
-  reuse. Reject dropped or invented premise indices, keep process commentary
-  and application hints out of the blind proof, and give the comparison judge
-  explicit source status while retaining its fidelity and proof checks.
-  Indexed reconstruction premises change the persisted solver payload: solver
-  declarations now use version 10. Start fresh campaigns with this source and
+- Record external premises as exact standalone claims before source checking,
+  keeping application and validation commentary in reports. Reconstruction
+  receives the approved strings unchanged, with explicit source status for its
+  judge. Remove extracted premise indices, normalization, and the second stored
+  premise list. Statement extraction now returns only the note's claim.
+  This changes the persisted solver payload: solver declarations now use
+  version 11. Start fresh campaigns with this source and
   retain frozen runtimes for historical campaigns. No migration is provided.
 - Enable Gemini model profiles through Pi's native Google provider and
   operator-supplied Gemini API credentials.
@@ -57,7 +58,7 @@ process. Existing campaign and observation formats are unchanged by this split.
 Notes now require `summary`, `detailedSummary`, and authoritative full `text`.
 Harmless corrections replace all three together. This changes public note and
 correction APIs, CLI input files, and persisted solver inputs. Solver declarations
-use version 10 and observer exports use `xean-observe/v2`. Keep historical
+use version 11 and observer exports use `xean-observe/v2`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
 - Pin all Pi/Chord packages to upstream main commit `8ce69e9d2b17`, preserving the

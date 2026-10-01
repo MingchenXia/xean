@@ -70,9 +70,13 @@ theorem note can pass conditionally on source verification without reproducing
 its external proof. Requirements alone checks the original completion criteria.
 Correctness checks the hypotheses of established support at each application
 without asking source verification to establish the same supporting result again.
-Its `premises` array names any nonroutine external claims that still require
-source checking. Source verification and independent review use the same field
-name.
+Its `premises` array contains exact standalone external claims that still require
+source checking, with complete hypotheses, definitions, and qualifications.
+Source names and citations are allowed. Proof ideas, application explanations,
+and validation commentary belong in the existing `report`, not in a premise.
+Substantive algorithmic guarantees remain part of the claim. Source verification
+and independent review use the same field name. Ordinary notes remain free-form
+research records, including failed approaches, experiments, and partial results.
 
 Correctness checks dependent reasoning conditionally on declared support, even
 when that support is checked in the same batch. A failed dependency invalidates
@@ -108,13 +112,16 @@ previously reconstructed claims supply statement-only assumptions. Source-checke
 external premises also remain assumptions. Imported notes explicitly selected
 as targets must themselves be reconstructed.
 
-The source-assessed premise strings remain authoritative, bound to their note
-and source record. Extraction returns one theorem-only statement per premise
-index. Missing, duplicate, or invented indices reject the submitted batch, and
-the same check applies to reused extractions. Normalization removes process
-commentary and application hints while preserving mathematical qualifications.
-Index validation preserves premise identities; the comparison judge checks
-mathematical fidelity, including any strengthened or substituted theorem.
+Source checking assesses these exact premise strings and their suitability for
+blind reuse before approving them. This is also the contract for custom research
+implementations. Code carries the approved strings unchanged through extraction,
+proof, judgment, and reuse. The extractor returns only the note's claim and has
+no premise field to change. There is no second normalized premise list.
+Code guarantees unchanged text; source checking and comparison judge its
+suitability for blind reuse.
+Contaminated or ambiguous premise wording gives INCONCLUSIVE at source checking;
+a concrete mathematical mismatch still gives FAIL. Later evidence or repaired
+wording requires a new note, following source-verdict finality.
 
 The blind prover receives the task, extracted statements, permitted premises,
 and dependency links. Original proofs, index and detailed summaries, and verifier reports are
@@ -127,13 +134,16 @@ pending note, including the assumptions used. Supporting lemmas need only prove
 their own claims. Requirements alone checks the original completion criteria.
 The judge receives the original premise strings and their recorded source PASS
 with its operation ID when available, or explicit caller-import trust. Those
-external theorems are permitted assumptions at this stage. Stale prose about
+external claims are permitted assumptions at this stage. Stale prose about
 awaiting validation cannot reopen their source status. The judge still checks
-exact hypotheses, applicability, and every new proof step. Neither source PASS
-nor a premise index permits a stronger theorem or hides a proof defect.
+exact hypotheses, applicability, and every new proof step. Source PASS never
+permits a stronger claim or hides a proof defect. Proof hints discovered in a
+supplied premise make reconstruction inconclusive without rewriting that
+premise or reopening its source verdict.
 An incomplete or incorrect independent proof, or an unfaithful extraction, gives
 INCONCLUSIVE unless the original argument has a concrete defect. Successful
-checks retain the statement, indexed normalized premises, and proof for reuse. A conditional PASS
+checks retain the statement and proof for reuse. Permitted premises always come
+from the note's original assessment. A conditional PASS
 may survive an inconclusive dependency, but acceptance waits for the whole chain.
 The existing Pi capacity check applies to each batch without truncation or
 automatic splitting.
@@ -867,7 +877,7 @@ The library is in `packages/core`, and the optional `xean-cli` app is in
 library APIs, including shared status reports from `xean/report`. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 9, with distinct solver, standalone-role, and review kinds. Only this
+version 11, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the

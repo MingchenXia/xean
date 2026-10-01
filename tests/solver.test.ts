@@ -151,12 +151,6 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
       case "statement":
         result = batch((note) => ({
           statement: `Claim ${note.id}`,
-          premises: input.notes
-            .find((entry: Note) => entry.id === note.id)
-            .premises.map((statement: string, premise: number) => ({
-              premise,
-              statement,
-            })),
         }));
         break;
       case "proof":
@@ -555,7 +549,7 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
     const input = JSON.parse(prompt);
     const result =
       selected.id === "statement"
-        ? { statement: "Claim", premises: [] }
+        ? { statement: "Claim" }
         : selected.id === "proof"
           ? { proof: "INDEPENDENT-PROOF", complete: true }
           : {
@@ -669,7 +663,7 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
           noteId: note.id,
           result:
             selected.id === "statement"
-              ? { statement: `Claim ${note.id}`, premises: [] }
+              ? { statement: `Claim ${note.id}` }
               : selected.id === "proof"
                 ? {
                     proof: `Independent ${note.id}`,
@@ -773,7 +767,6 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     reconstruction: {
       ...pass,
       statement: "Claim imported",
-      premises: [],
       proof: "Independent imported",
     },
   });

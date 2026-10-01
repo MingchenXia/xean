@@ -139,9 +139,7 @@ test("conditional hypotheses remain claims while external results require source
             "hypothetical antecedent belongs in the statement",
           );
           expect(input.notes[0].premises).toEqual([]);
-          results = [
-            { noteId: "n1", result: { statement: conditional, premises: [] } },
-          ];
+          results = [{ noteId: "n1", result: { statement: conditional } }];
           break;
         case "proof":
           expect(input.notes).toEqual([
@@ -241,7 +239,6 @@ test("conditional hypotheses remain claims while external results require source
     expect(reconstructed.checks[0]!.reconstruction).toMatchObject({
       verdict: "PASS",
       statement: conditional,
-      premises: [],
     });
     expect(calls.slice(2)).toEqual(["statement", "proof", "reconstruction"]);
     expect(sources).toHaveLength(1);
@@ -250,14 +247,13 @@ test("conditional hypotheses remain claims while external results require source
   }
 });
 
-test("reconstruction retains source-bound assumptions, blinds their commentary, and reuses checked statements", async () => {
+test("reconstruction uses unchanged source premises, rejects extractor replacements, and reuses checked statements", async () => {
   const task = {
     problem: "Prove q > 0 whenever q is the square of a nonzero rational.",
     completionCriteria: "Give a complete proof using established theorems.",
   };
   const theorem = "For every nonzero rational x, x squared is positive.";
-  const raw = `${theorem} This assertion remains for source validation. SECRET-APPLICATION: substitute the witness defining q.`;
-  const normalized = [{ premise: 0, statement: theorem }];
+  const stronger = "Every rational x has a positive square.";
   const pass = { verdict: "PASS" as const, report: "Checked." };
   const source: Source = {
     ...pass,
@@ -265,12 +261,12 @@ test("reconstruction retains source-bound assumptions, blinds their commentary, 
     report: "SECRET-SOURCE-OPINION",
     operationId: "source-operation",
     reportedAt: "2026-10-01T00:00:00.000Z",
-    premises: [raw],
+    premises: [theorem],
     passages: [
       {
         id: "source-operation/0",
         premise: 0,
-        statement: raw,
+        statement: theorem,
         url: "https://example.org/theorem",
         quote: theorem,
       },
@@ -280,16 +276,9 @@ test("reconstruction retains source-bound assumptions, blinds their commentary, 
     id: "n1",
     summary: "SECRET-SUMMARY",
     detailedSummary: "SECRET-DETAILED-SUMMARY",
-    text: `Claim: q is positive. SECRET-ORIGINAL: apply the theorem to its nonzero rational square root.`,
+    text: "Claim: q is positive. SECRET-ORIGINAL: apply the theorem to its nonzero rational square root.",
     support: [],
-    checks: [
-      {
-        noteId: "n1",
-        correctness: { ...pass, premises: [raw] },
-        source,
-        requirements: pass,
-      },
-    ],
+    checks: [],
     revision: 0,
     imported: false,
     verified: false,
@@ -303,9 +292,8 @@ test("reconstruction retains source-bound assumptions, blinds their commentary, 
     operationId: source.operationId,
   };
   const calls: string[] = [];
-  let mode: "valid" | "reuse" | "stronger" | "invalid" = "valid";
-  let invalidAttempts = 0;
-  const stronger = "Every rational x has a positive square.";
+  let mode: "invalid" | "reuse" = "invalid";
+  let extractionAttempts = 0;
   const runtime = fixtureRuntime((context, _options, selected) => {
     calls.push(selected.id);
     const input = JSON.parse(
@@ -314,70 +302,73 @@ test("reconstruction retains source-bound assumptions, blinds their commentary, 
       ),
     );
     let result: JsonValue;
-    if (selected.id === "statement") {
-      if (mode === "reuse") {
-        expect(input.notes.map(({ id }: Note) => id)).toEqual(["n2"]);
-        result = { statement: "q + 1 > 1.", premises: [] };
-      } else {
-        expect(input.notes[0].premises).toEqual([raw]);
-        expect(input.notes[0].source).toEqual(metadata);
-        let premises =
-          mode === "stronger"
-            ? [{ premise: 0, statement: stronger }]
-            : normalized;
+    switch (selected.id) {
+      case "correctness":
+        result = {
+          ...pass,
+          report: "SECRET-APPLICATION: substitute the witness defining q.",
+          premises: [theorem],
+        };
+        break;
+      case "requirements":
+        result = pass;
+        break;
+      case "statement":
+        expect(input.notes.map(({ id }: Note) => id)).toEqual([
+          mode === "reuse" ? "n2" : "n1",
+        ]);
+        result = {
+          statement:
+            mode === "reuse"
+              ? "q + 1 > 1."
+              : "q is the square of a nonzero rational; then q > 0.",
+        };
         if (mode === "invalid") {
-          // Each malformed submission must be rejected before the next role.
-          if (invalidAttempts > 0)
+          // Extractors cannot drop or replace the authoritative premises.
+          if (extractionAttempts > 0)
             expect(
               context.messages.some(
                 (message) => message.role === "toolResult" && message.isError,
               ),
             ).toBe(true);
-          expect(invalidAttempts).toBeLessThan(4);
-          premises = [
-            [],
-            [...normalized, ...normalized],
-            [{ premise: 1, statement: theorem }],
-            normalized,
-          ][invalidAttempts++]!;
+          expect(extractionAttempts).toBeLessThan(3);
+          if (extractionAttempts < 2)
+            result = {
+              ...result,
+              premises: extractionAttempts === 0 ? [] : [stronger],
+            };
+          extractionAttempts++;
         }
+        break;
+      case "proof": {
+        const payload = JSON.stringify(context.messages);
+        expect(payload).not.toContain("SECRET-");
+        expect(payload).not.toContain("source-operation");
+        expect(payload).not.toContain("source-check");
+        const premiseNote =
+          mode === "reuse" ? input.support[0] : input.notes[0];
+        expect(premiseNote).toMatchObject({ id: "n1", premises: [theorem] });
         result = {
-          statement: "q is the square of a nonzero rational; then q > 0.",
-          premises,
+          proof: "Apply the supplied theorem with its hypotheses satisfied.",
+          complete: true,
         };
+        break;
       }
-    } else if (selected.id === "proof") {
-      const payload = JSON.stringify(context.messages);
-      expect(payload).not.toContain("SECRET-");
-      expect(payload).not.toContain("remains for source validation");
-      expect(payload).not.toContain("source-operation");
-      expect(payload).not.toContain("source-check");
-      const premiseNote = mode === "reuse" ? input.support[0] : input.notes[0];
-      expect(premiseNote.premises).toEqual(
-        mode === "stronger"
-          ? [{ premise: 0, statement: stronger }]
-          : normalized,
-      );
-      if (mode === "reuse") expect(premiseNote.id).toBe("n1");
-      result = {
-        proof: "Apply the supplied theorem with its hypotheses satisfied.",
-        complete: true,
-      };
-    } else if (selected.id === "reconstruction") {
-      expect(
-        input.premises.find(
-          ({ noteId }: { noteId: string }) => noteId === "n1",
-        ),
-      ).toEqual({ noteId: "n1", premises: [raw], source: metadata });
-      result =
-        mode === "stronger"
-          ? {
-              verdict: "INCONCLUSIVE",
-              report:
-                "The normalization strengthened the allowed theorem by removing nonzero; zero is not covered.",
-            }
-          : pass;
-    } else throw new Error(`Unexpected role: ${selected.id}`);
+      case "reconstruction":
+        expect(
+          input.premises.find(
+            ({ noteId }: { noteId: string }) => noteId === "n1",
+          ),
+        ).toEqual({ noteId: "n1", premises: [theorem], source: metadata });
+        expect(
+          input.statements.find(({ id }: { id: string }) => id === "n1")
+            .premises,
+        ).toEqual([theorem]);
+        result = pass;
+        break;
+      default:
+        throw new Error(`Unexpected role: ${selected.id}`);
+    }
     return fauxAssistantMessage(
       [
         fauxToolCall("submit_result", {
@@ -387,19 +378,42 @@ test("reconstruction retains source-bound assumptions, blinds their commentary, 
       { stopReason: "toolUse" },
     );
   });
-  const solver = createSolver(task, runtime);
+  const solver = createSolver(
+    task,
+    runtime,
+    {},
+    {
+      ...codexResearch(),
+      async source({ notes }) {
+        calls.push("source");
+        expect(notes).toEqual([
+          { id: "n1", text: note.text, premises: [theorem] },
+        ]);
+        return [{ noteId: "n1", result: source }];
+      },
+    },
+  );
   const execution: Execution = {
     attemptId: "source-reconstruction",
     attempt: 1,
     recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
   };
+  const verified = await solver.functions.verifier(
+    { task, notes: [note], targets: [{ id: "n1", through: "requirements" }] },
+    execution,
+    BACKGROUND_CONTEXT,
+  );
+  if (verified.kind !== "verification")
+    throw new Error("Expected verification");
+  note.checks.push(...verified.checks);
+  expect(calls).toEqual(["correctness", "source", "requirements"]);
+  calls.length = 0;
   const reconstruct = (notes: Note[], target = "n1") =>
     solver.functions.reconstruct(
       { task, notes, targets: [target] },
       execution,
       BACKGROUND_CONTEXT,
     );
-
   for (const verdict of [undefined, "FAIL", "INCONCLUSIVE"] as const) {
     const blocked = structuredClone(note);
     blocked.checks[0]!.source = verdict ? { ...source, verdict } : undefined;
@@ -414,15 +428,24 @@ test("reconstruction retains source-bound assumptions, blinds their commentary, 
   );
   expect(calls).toEqual([]);
   const result = await reconstruct([note]);
-  expect(result.checks[0]!.reconstruction).toMatchObject({
-    verdict: "PASS",
-    premises: normalized,
+  expect(result.checks[0]!.reconstruction).toEqual({
+    ...pass,
+    statement: "q is the square of a nonzero rational; then q > 0.",
+    proof: "Apply the supplied theorem with its hypotheses satisfied.",
   });
+  expect(calls).toEqual([
+    "statement",
+    "statement",
+    "statement",
+    "proof",
+    "reconstruction",
+  ]);
   const checked = structuredClone(note);
   checked.checks.push(...result.checks);
   expect(refresh([checked])[0]!.accepted).toBe(true);
 
   mode = "reuse";
+  calls.length = 0;
   const dependent = {
     ...structuredClone(note),
     id: "n2",
@@ -438,40 +461,5 @@ test("reconstruction retains source-bound assumptions, blinds their commentary, 
   };
   const reused = await reconstruct([checked, dependent], "n2");
   expect(reused.checks.map(({ noteId }) => noteId)).toEqual(["n2"]);
-  expect(calls).toEqual([
-    "statement",
-    "proof",
-    "reconstruction",
-    "statement",
-    "proof",
-    "reconstruction",
-  ]);
-
-  const wrongReuse = structuredClone(checked);
-  wrongReuse.checks.at(-1)!.reconstruction!.premises = [];
-  calls.length = 0;
-  await expect(reconstruct([wrongReuse, dependent], "n2")).rejects.toThrow(
-    "exactly one entry per source-checked premise index",
-  );
-  expect(calls).toEqual(["statement"]);
-
-  mode = "stronger";
-  const mismatch = await reconstruct([note]);
-  const unaccepted = structuredClone(note);
-  unaccepted.checks.push(...mismatch.checks);
-  expect(mismatch.checks[0]!.reconstruction!.verdict).toBe("INCONCLUSIVE");
-  expect(refresh([unaccepted])[0]!.accepted).toBe(false);
-
-  mode = "invalid";
-  calls.length = 0;
-  const recovered = await reconstruct([note]);
-  expect(recovered.checks[0]!.reconstruction!.premises).toEqual(normalized);
-  expect(calls).toEqual([
-    "statement",
-    "statement",
-    "statement",
-    "statement",
-    "proof",
-    "reconstruction",
-  ]);
+  expect(calls).toEqual(["statement", "proof", "reconstruction"]);
 });

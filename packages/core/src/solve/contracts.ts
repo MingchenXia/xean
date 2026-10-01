@@ -7,7 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
-export const declarationVersion = 10;
+export const declarationVersion = 11;
 const text = Type.String({ minLength: 1 });
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -73,30 +73,16 @@ export const verdictSchema = object({
   correction: Type.Optional(noteContentSchema),
 });
 export type Verdict = Static<typeof verdictSchema>;
+const premisesSchema = Type.Array(text, {
+  description:
+    "Exact standalone external claims, including all hypotheses and qualifications. Source names and citations are allowed. Substantive algorithmic guarantees belong in the claim. Put proof ideas, application explanations, and validation status in report, not here. Exclude explicit hypothetical antecedents, task-granted assumptions, and declared supporting notes.",
+});
 export const correctnessSchema = object({
   ...verdictSchema.properties,
-  premises: Type.Array(text, {
-    description:
-      "Unresolved external results used in the argument. Exclude explicit hypothetical antecedents, task-granted assumptions, and declared supporting notes.",
-  }),
+  premises: premisesSchema,
 });
 export type Correctness = Static<typeof correctnessSchema>;
-export const statementSchema = object({
-  statement: text,
-  premises: Type.Array(
-    object({
-      premise: Type.Integer({
-        minimum: 0,
-        description: "Index in this note's source-checked premise list.",
-      }),
-      statement: text,
-    }),
-    {
-      description:
-        "One theorem-only statement per supplied premise index. Preserve its exact mathematical meaning and qualifications, removing only process commentary and application hints. Explicit hypothetical antecedents belong in the note statement.",
-    },
-  ),
-});
+export const statementSchema = object({ statement: text });
 export const proofSchema = object({ proof: text, complete: Type.Boolean() });
 const passageSchema = object({
   premise: Type.Integer({ minimum: 0 }),
@@ -120,7 +106,7 @@ export const sourceSchema = object({
 export const reviewSchema = object({
   ...sourceProperties,
   passages: Type.Array(passageSchema),
-  premises: Type.Array(text),
+  premises: premisesSchema,
 });
 export type SourceEvidence = Omit<Static<typeof passageSchema>, "premise"> & {
   id: string;
