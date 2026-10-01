@@ -45,9 +45,12 @@ correction APIs, CLI input files, and persisted solver inputs. Solver declaratio
 use version 9 and observer exports use `xean-observe/v2`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
-- Pin all Pi/Chord packages to upstream main commit `d4d74eb19be9`, with a fresh
-  frozen model catalog and matching hashes from two clean builds. The changed
-  Pi SQLite schema and task ownership require campaign format 9 and fresh campaigns.
+- Pin all Pi/Chord packages to upstream main commit `8ce69e9d2b17`, preserving the
+  frozen model catalog and matching hashes from two clean builds. Register worker
+  and Coordinator tasks through Pi's native extension API. Pi's per-conversation
+  agent document replaces its configuration document, requiring campaign format
+  10 and fresh campaigns. Retain the existing admission, shutdown, read-only
+  storage, and provider patches, including CRLF response framing.
 - Delegate SQL operation ordering, statement caching, asynchronous transactions,
   and read draining to Pi. Return invocation state changes through Pi's native
   task runtime. Retain Xean's admission, atomic failure signals, and shutdown policy.

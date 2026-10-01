@@ -9,7 +9,7 @@ export type { JsonValue };
 /** Select or reduce detached records in Pi's newest-first scan order. */
 export type RecordProjection = (entry: EntryRecord) => EntryRecord | undefined;
 
-export const campaignVersion = 9;
+export const campaignVersion = 10;
 
 /** Opt in to whole-attempt recovery only for a known transient execution failure. */
 export class TransientError extends Error {

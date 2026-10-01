@@ -17,15 +17,18 @@ import { campaignVersion } from "../packages/core/src/types.ts";
 test("Store snapshots entries and keeps rejected commits separate from uncertain commits", async () => {
   const storage = new MemoryStorage();
   const registry = createRegistry();
-  registry.tasks.add(
-    defineTask({
-      name: "xean.worker",
-      version: 1,
-      initial: initialAttempt,
-      phases: { run: async () => {} },
-      abort: async () => {},
-    }),
-  );
+  registry.install({
+    name: "fixture",
+    tasks: [
+      defineTask({
+        name: "xean.worker",
+        version: 1,
+        initial: initialAttempt,
+        phases: { run: async () => {} },
+        abort: async () => {},
+      }),
+    ],
+  });
   const store = await Store.open(
     storage,
     {

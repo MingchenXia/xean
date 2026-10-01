@@ -1,16 +1,16 @@
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
-index 79c8a50..f1e6501 100644
+index e473c94..fe162dc 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
-@@ -193,6 +193,7 @@ class HarnessImpl extends SessionImpl {
+@@ -101,6 +101,7 @@ class HarnessImpl extends SessionImpl {
              now,
-             report: options.onReport ?? (() => { }),
+             report: this.#report,
              settleOutcome: settleSchedulerOutcome,
 +            policy: options,
              withdrawInputs: withdrawQueuedInputs,
              conversation: async (id, binding, callContext) => {
                  const record = await this.readOnLine(() => storage.conversation(id, callContext));
-@@ -220,6 +221,13 @@ class HarnessImpl extends SessionImpl {
+@@ -141,6 +142,13 @@ class HarnessImpl extends SessionImpl {
          this.#assertOpen();
          this.#tasks.resume();
      }
@@ -25,19 +25,19 @@ index 79c8a50..f1e6501 100644
          return this.readOnLine(() => this.#storage.task(id, context));
      }
 diff --git a/dist/harness/scheduler.d.ts b/dist/harness/scheduler.d.ts
-index 806d2cf..1d120e9 100644
+index c485fb9..838b6c2 100644
 --- a/dist/harness/scheduler.d.ts
 +++ b/dist/harness/scheduler.d.ts
 @@ -4,7 +4,7 @@ import type { ExecutionEnv } from "../env/index.ts";
  import type { SessionImpl } from "../session/session.ts";
  import type { Transaction } from "../session/transaction.ts";
  import type { ConversationId, Storage, TaskId, TaskOutcome, TaskRecord } from "../types.ts";
--import type { ConversationHandle, HarnessInspection, RegistryReader, RegistrySnapshot, SettledTask, TaskInspection } from "./types.ts";
-+import type { ConversationHandle, HarnessInspection, HarnessOptions, RegistryReader, RegistrySnapshot, SettledTask, TaskInspection } from "./types.ts";
+-import type { Agent, ConversationHandle, HarnessInspection, RegistryReader, RegistrySnapshot, Settings, SettledTask, TaskInspection } from "./types.ts";
++import type { Agent, ConversationHandle, HarnessInspection, HarnessOptions, RegistryReader, RegistrySnapshot, Settings, SettledTask, TaskInspection } from "./types.ts";
  type AnyTaskRecord = TaskRecord<JsonValue, JsonValue, JsonValue>;
  /** Terminal outcomes the scheduler writes without running task code. */
  export type SchedulerOutcome = Extract<TaskOutcome<JsonValue>, {
-@@ -31,6 +31,7 @@ export type TaskSchedulerOptions = {
+@@ -36,6 +36,7 @@ export type TaskSchedulerOptions = {
      readonly conversation: (id: ConversationId, binding: InvocationBinding, context: Context) => Promise<ConversationHandle | undefined>;
      /** Context for scheduler commits and invocations; carries no caller cancellation. */
      readonly context: Context;
@@ -45,7 +45,7 @@ index 806d2cf..1d120e9 100644
  };
  /**
   * Durable task scheduler of one Harness.
-@@ -54,6 +55,8 @@ export declare class TaskScheduler {
+@@ -59,6 +60,8 @@ export declare class TaskScheduler {
      open(context: Context): Promise<void>;
      /** Enable scheduling. Idempotent; the kick does nothing once closing. */
      resume(): void;
@@ -55,10 +55,10 @@ index 806d2cf..1d120e9 100644
      join(): Promise<void>;
      /**
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
-index 1233196..1875238 100644
+index 2ac1755..855af55 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
-@@ -3,6 +3,7 @@ import { awaitWithContext, withAbortSignal } from "@earendil-works/chord/context
+@@ -4,6 +4,7 @@ import { agentHooks } from "./agent.js";
  import { readContext } from "./context.js";
  import { closedError, scanAll, Waiters } from "./util.js";
  const SCAN_PAGE_SIZE = 256;
@@ -66,7 +66,7 @@ index 1233196..1875238 100644
  /** Longest delay `setTimeout` supports; longer sleeps wait in several steps. */
  const MAX_TIMER_DELAY = 2_147_483_647;
  const LIVE_STATUSES = ["pending", "running", "waiting", "completing"];
-@@ -33,11 +34,13 @@ export class TaskScheduler {
+@@ -36,11 +37,13 @@ export class TaskScheduler {
      #withdrawInputs;
      #conversation;
      #context;
@@ -80,7 +80,7 @@ index 1233196..1875238 100644
      /** Definition whose migration failed per task; retried only once the registry resolves another definition. */
      #failedMigrations = new Map();
      /** Owner task of each loaded conversation, `null` when ownerless. */
-@@ -52,12 +55,14 @@ export class TaskScheduler {
+@@ -55,12 +58,14 @@ export class TaskScheduler {
       */
      #failFastChecks = new Set();
      #reconcileScheduled = false;
@@ -95,7 +95,7 @@ index 1233196..1875238 100644
      constructor(options) {
          this.#session = options.session;
          this.#storage = options.storage;
-@@ -70,6 +75,7 @@ export class TaskScheduler {
+@@ -75,6 +80,7 @@ export class TaskScheduler {
          this.#withdrawInputs = options.withdrawInputs;
          this.#conversation = options.conversation;
          this.#context = options.context;
@@ -103,7 +103,7 @@ index 1233196..1875238 100644
      }
      /** Load live tasks and change surviving `running` tasks back to `pending`. Dispatches nothing. */
      async open(context) {
-@@ -86,6 +92,7 @@ export class TaskScheduler {
+@@ -91,6 +97,7 @@ export class TaskScheduler {
                  for (const record of records) {
                      this.#live.set(record.id, record);
                      if (record.state.status === "running") {
@@ -111,7 +111,7 @@ index 1233196..1875238 100644
                          tx.setTask(withState(record, { status: "pending", checkpoint: record.state.checkpoint }));
                      }
                      if (record.state.status === "waiting" && record.state.policy === "failFast") {
-@@ -103,6 +110,27 @@ export class TaskScheduler {
+@@ -108,6 +115,27 @@ export class TaskScheduler {
          this.#enabled = true;
          this.#kick();
      }
@@ -139,7 +139,7 @@ index 1233196..1875238 100644
      /** Wait for every invocation signalled by `#seal()`. Writes nothing. */
      async join() {
          await Promise.allSettled([...this.#invocations.values()].map((invocation) => invocation.done));
-@@ -272,7 +300,7 @@ export class TaskScheduler {
+@@ -277,7 +305,7 @@ export class TaskScheduler {
          // Also retries, with the next commit of any kind, a cascade whose commit failed.
          if (this.#cascadePending)
              this.#scheduleReconcile();
@@ -148,7 +148,7 @@ index 1233196..1875238 100644
              return;
          this.#resolveIdleWaiters();
          this.#kick();
-@@ -298,6 +326,7 @@ export class TaskScheduler {
+@@ -303,6 +331,7 @@ export class TaskScheduler {
       */
      async #reconcile() {
          this.#reconcileScheduled = false;
@@ -156,7 +156,7 @@ index 1233196..1875238 100644
          const cascade = this.#cascadePending;
          this.#cascadePending = false;
          const checks = [...this.#failFastChecks];
-@@ -344,7 +373,9 @@ export class TaskScheduler {
+@@ -349,7 +378,9 @@ export class TaskScheduler {
              if (!this.#closing)
                  this.#report(error);
          }
@@ -166,7 +166,7 @@ index 1233196..1875238 100644
      }
      /** Whether any of `ids` holds or ended with an outcome other than `completed`. */
      async #anyFailed(ids) {
-@@ -369,11 +400,12 @@ export class TaskScheduler {
+@@ -374,11 +405,12 @@ export class TaskScheduler {
                  return;
              for (const record of done) {
                  const outcome = record.state.outcome;
@@ -181,7 +181,7 @@ index 1233196..1875238 100644
              }
          }
      }
-@@ -547,6 +579,7 @@ export class TaskScheduler {
+@@ -552,6 +584,7 @@ export class TaskScheduler {
          const error = closedError();
          this.#taskWaiters.rejectAll(error);
          this.#idleWaiters.rejectAll(error);
@@ -189,7 +189,7 @@ index 1233196..1875238 100644
          for (const invocation of this.#invocations.values())
              invocation.controller.abort();
      }
-@@ -564,6 +597,8 @@ export class TaskScheduler {
+@@ -569,6 +602,8 @@ export class TaskScheduler {
                  this.#dirty = false;
                  for (const reservation of await this.#reserve())
                      this.#start(reservation);
@@ -198,7 +198,7 @@ index 1233196..1875238 100644
              }
          }
          catch (error) {
-@@ -575,6 +610,7 @@ export class TaskScheduler {
+@@ -580,6 +615,7 @@ export class TaskScheduler {
              // A wakeup that arrived during a failed pass still needs its pass.
              if (this.#dirty)
                  this.#kick();
@@ -206,7 +206,7 @@ index 1233196..1875238 100644
          }
      }
      /** Reserve every eligible task in one commit; orphan abort-marked tasks no definition can take. */
-@@ -584,26 +620,36 @@ export class TaskScheduler {
+@@ -589,26 +625,36 @@ export class TaskScheduler {
              await this.#session.commitWith(async (tx) => {
                  if (!this.#enabled || this.#closing)
                      return;
@@ -251,7 +251,7 @@ index 1233196..1875238 100644
                          tx.setTask(withState(resolution.record, {
                              status: "running",
                              checkpoint: resolution.record.state.checkpoint,
-@@ -613,13 +659,19 @@ export class TaskScheduler {
+@@ -618,13 +664,19 @@ export class TaskScheduler {
                      const invocation = this.#createInvocation(record, mode);
                      reservations.push({ invocation, task: resolution.task, snapshot });
                  }
@@ -271,7 +271,7 @@ index 1233196..1875238 100644
              throw error;
          }
          return reservations;
-@@ -712,6 +764,7 @@ export class TaskScheduler {
+@@ -717,6 +769,7 @@ export class TaskScheduler {
              context: withAbortSignal(controller.signal, this.#context),
              watches: new Set(),
              ended: false,
@@ -279,7 +279,7 @@ index 1233196..1875238 100644
              done,
              finish: () => finish(),
          };
-@@ -732,8 +785,10 @@ export class TaskScheduler {
+@@ -737,8 +790,10 @@ export class TaskScheduler {
              }
              finally {
                  this.#end(invocation);
@@ -290,7 +290,7 @@ index 1233196..1875238 100644
              }
          })();
      }
-@@ -746,7 +801,7 @@ export class TaskScheduler {
+@@ -752,7 +807,7 @@ export class TaskScheduler {
          for (;;) {
              const current = await this.#step(invocation, (tx, current) => this.#decide(tx, current, previous, state));
              // Close may seal between the decision and dispatch.
@@ -298,8 +298,8 @@ index 1233196..1875238 100644
 +            if (current === undefined || this.#closing || invocation.interrupted)
                  return;
              const checkpoint = current.state.checkpoint;
-             try {
-@@ -796,7 +851,7 @@ export class TaskScheduler {
+             // Each phase handler resolves its agent afresh, at first use.
+@@ -804,7 +859,7 @@ export class TaskScheduler {
      async #runAbort(reservation) {
          const invocation = reservation.invocation;
          const current = this.#live.get(invocation.taskId);
@@ -308,7 +308,7 @@ index 1233196..1875238 100644
              return;
          let failure;
          try {
-@@ -820,7 +875,7 @@ export class TaskScheduler {
+@@ -829,7 +884,7 @@ export class TaskScheduler {
              return await this.#session.commitWith(async (tx) => {
                  const found = this.#live.get(invocation.taskId);
                  const current = found?.state.status === "running" ? found : undefined;
@@ -317,7 +317,7 @@ index 1233196..1875238 100644
                  if (decision === true)
                      return current;
                  this.#end(invocation);
-@@ -848,6 +903,11 @@ export class TaskScheduler {
+@@ -857,6 +912,11 @@ export class TaskScheduler {
              tx.setTask(withState(record, { status: "completing", outcome }));
              return;
          }
@@ -329,7 +329,7 @@ index 1233196..1875238 100644
          tx.setTask(withState(record, { status: "terminal", outcome }));
          await this.#settleOutcome(tx, record, outcome);
      }
-@@ -896,13 +956,11 @@ export class TaskScheduler {
+@@ -905,13 +965,11 @@ export class TaskScheduler {
              }
          }
      }
@@ -344,7 +344,7 @@ index 1233196..1875238 100644
          for (const watch of invocation.watches)
              void watch.stop();
          // Pending waits bound to the invocation, such as a tool's waitForTask(), reject with it.
-@@ -1029,10 +1087,10 @@ export class TaskScheduler {
+@@ -1035,10 +1093,10 @@ export class TaskScheduler {
      }
      /** Commit after rereading the task on the line and gating the invocation. */
      #gated(invocation, change, context) {
@@ -357,7 +357,7 @@ index 1233196..1875238 100644
                  throw endedError(invocation);
              if (this.#closing)
                  throw closedError();
-@@ -1045,7 +1103,10 @@ export class TaskScheduler {
+@@ -1051,7 +1109,10 @@ export class TaskScheduler {
              if (invocation.mode === "run" && current.abortRequested) {
                  throw new Error(`Task ${invocation.taskId} has a durable abort mark`);
              }
@@ -370,19 +370,19 @@ index 1233196..1875238 100644
      }
      /** Wait until the Harness clock reaches `until`, rechecking it after every timer. */
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index a9de613..5ae72ea 100644
+index 99c3c9f..e49d4dc 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
 @@ -1,7 +1,7 @@
  import type { AttachedReplicatedState, Context, JsonValue } from "@earendil-works/chord";
- import type { AssistantMessage, CacheRetention, Message, Models, ModelThinkingLevel, Tool, ToolCall, ToolResultMessage, Transport, Usage, UserMessage } from "@earendil-works/pi-ai";
+ import type { AssistantMessage, CacheRetention, Message, Models, ModelThinkingLevel, Static, Tool, ToolCall, ToolResultMessage, Transport, TSchema, Usage, UserMessage } from "@earendil-works/pi-ai";
  import type { ExecutionEnv } from "../env/index.ts";
 -import type { ConversationId, ConversationOwnership, ConversationRecord, Cursor, DocumentObserver, DocumentReader, EntryDraft, EntryId, EntryQuery, EntryRecord, JsonObject, Page, Session, SubmissionId, SubmissionRecord, Task, TaskId, TaskOptions, TaskRecord, TaskState, Tx, WatchHandle } from "../types.ts";
 +import type { ConversationId, ConversationOwnership, ConversationRecord, Cursor, DocumentObserver, DocumentReader, EntryDraft, EntryId, EntryQuery, EntryRecord, JsonObject, Page, Session, SubmissionId, SubmissionRecord, Task, TaskId, TaskOptions, TaskOutcome, TaskRecord, TaskState, Tx, WatchHandle } from "../types.ts";
  import type { UsageState } from "./usage.ts";
  import type { ConversationView } from "./view.ts";
  /** Provider and model ID resolved through pi-ai `Models`. */
-@@ -324,6 +324,17 @@ export type HarnessOptions<Tool extends ToolRegistration = ToolRegistration> = {
+@@ -374,6 +374,17 @@ export type HarnessOptions<Tool extends ToolRegistration = ToolRegistration> = {
      readonly now?: () => number;
      /** Receives extension failures that do not fail the calling operation. Must not throw. */
      readonly onReport?: (error: unknown) => void;
@@ -400,7 +400,7 @@ index a9de613..5ae72ea 100644
  };
  /** Live task and what the scheduler would do with it under the current registry. */
  export type TaskInspection = {
-@@ -450,6 +461,12 @@ export interface Harness extends Session {
+@@ -473,6 +484,12 @@ export interface Harness extends Session {
       * `Submission.wait()`, `waitForTask()`, `waitForIdle()`) enable it too.
       */
      resume(): void;
@@ -410,11 +410,11 @@ index a9de613..5ae72ea 100644
 +    }): void;
 +    /** Wait until reservations and admitted invocations settle, including when pending tasks are held by admission policy. */
 +    waitForQuiescence(context: Context): Promise<void>;
-     /** Return the reserved root conversation, creating it with `init` in one commit when absent. */
+     /** Return the reserved root conversation, creating it with `agent` and `init` in one commit when absent. */
      root(context: Context, options?: {
-         readonly init?: ConversationInit;
+         readonly agent?: AgentChange;
 diff --git a/dist/session/transaction.js b/dist/session/transaction.js
-index e48085f..9b27afb 100644
+index cbc2992..fb000da 100644
 --- a/dist/session/transaction.js
 +++ b/dist/session/transaction.js
 @@ -165,7 +165,7 @@ export class Transaction {
@@ -426,28 +426,6 @@ index e48085f..9b27afb 100644
              }, TABLE_JSON_COPY_OPTIONS);
              this.#writes.push({ type: "entry", value: record });
              return record;
-diff --git a/dist/types.d.ts b/dist/types.d.ts
-index cba8920..018883b 100644
---- a/dist/types.d.ts
-+++ b/dist/types.d.ts
-@@ -282,7 +282,7 @@ export type EntryRecord = {
-     readonly byTaskId?: TaskId;
- };
- /** Entry content supplied before the Session assigns identity and task attribution. */
--export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "byTaskId" | "head"> & {
-+export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "head"> & {
-     /** `"self"` starts active context at the newly assigned entry ID. */
-     readonly head?: EntryId | "self";
- };
-@@ -684,6 +684,8 @@ export interface Tx {
-     createTask<I, S extends {
-         phase: string;
-     }, R, H extends object>(task: Task<I, S, R, H>, input: I, options: TaskOptions): Promise<TaskId<R>>;
-+    /** Stage a complete task replacement using the native validation and retirement path. */
-+    setTask(record: TaskRecord<JsonValue, JsonValue, JsonValue>): void;
-     /**
-      * Settle a queued or placed submission; only a placed input can be answered, and a settled submission stays
-      * unchanged. Resolved against this transaction's latest record of the submission, so it works after table writes.
 diff --git a/dist/storage/sqlite/node.d.ts b/dist/storage/sqlite/node.d.ts
 index 45c897f..9eb7e5b 100644
 --- a/dist/storage/sqlite/node.d.ts
@@ -629,3 +607,25 @@ index e425feb..23fbd3b 100644
  }
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 19096c0..de736a7 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -286,7 +286,7 @@ export type EntryRecord = {
+     readonly byTaskId?: TaskId;
+ };
+ /** Entry content supplied before the Session assigns identity and task attribution. */
+-export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "byTaskId" | "head"> & {
++export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "head"> & {
+     /** `"self"` starts active context at the newly assigned entry ID. */
+     readonly head?: EntryId | "self";
+ };
+@@ -690,6 +690,8 @@ export interface Tx {
+     createTask<I, S extends {
+         phase: string;
+     }, R, H extends object>(task: Task<I, S, R, H>, input: I, options: TaskOptions): Promise<TaskId<R>>;
++    /** Stage a complete task replacement using the native validation and retirement path. */
++    setTask(record: TaskRecord<JsonValue, JsonValue, JsonValue>): void;
+     /**
+      * Create a raw submission record with a fresh ID. No admission rules apply: no busy check, no inbox queueing, no
+      * placement. Use `Conversation.submit()` or a conversation handle unless the caller implements admission itself.

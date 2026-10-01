@@ -9,8 +9,8 @@ prevent further delegation.
 ## Sources and availability
 
 All five Pi/Chord packages are pinned to
-[`d4d74eb19be9`](https://github.com/earendil-works/pi/tree/d4d74eb19be92c559f629a7f9707c5503a840edc),
-the upstream main revision checked on 2026-09-30.
+[`8ce69e9d2b17`](https://github.com/earendil-works/pi/tree/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d),
+the upstream main revision checked on 2026-10-01.
 Their upstream manifests say `0.99.2`. The
 [artifact record](../vendor/pi/provenance.json) identifies the source, frozen
 model catalog, reproducible builds, and retained patches.
@@ -23,6 +23,14 @@ conversation views, and compaction. Their contracts are in the [Pico5 specificat
 Xean adopts Harness with local admission, pause, recovery, and failure-settlement
 extensions described below. These extensions are not upstream APIs.
 The existing `pi-agent-core.AgentHarness` is a different API.
+
+The registry installs named extensions. Xean registers its worker and Coordinator
+tasks together in one extension. Pi now resolves models, tools, prompt sections,
+hooks, and environments per conversation through `pi.agent`. These APIs support
+future role-specific tools and environments. Opaque Xean roles retain their own
+model loops and frozen inputs. Campaign format 10 requires fresh campaigns after
+the replacement of Pi's `pi.config` document. Anthropic OAuth also supports a
+copy-code login method through Pi's credential APIs.
 
 ## API ownership
 
@@ -151,6 +159,9 @@ JSON/serialization allocation fixes. Authentication, invalid requests, context
 limits, and quota failures remain terminal even when their details resemble
 transport errors. Retryable typed WebSocket failures use Pi's HTTP fallback.
 Patch hashes and build qualification remain in the artifact provenance.
+The upstream changes leave all retained patch guarantees unresolved. Deferred
+request-body serialization and JSON repair allocation are performance patches,
+separate from transport correctness, authentication, and accounting.
 The Codex SSE patch normalizes CRLF framing after joining incoming chunks.
 Remove it when the native parser handles CRLF, including split line endings.
 
@@ -276,7 +287,7 @@ Private-progress recovery, hot extension registries, alternate storage, and a
 second task framework remain deferred. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/src/session/session.ts
-[scheduler]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/src/harness/scheduler.ts
-[spec]: https://github.com/earendil-works/pi/blob/d4d74eb19be92c559f629a7f9707c5503a840edc/packages/durable/docs/pico-v5.md
+[types]: https://github.com/earendil-works/pi/blob/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/packages/durable/docs/pico-v5.md

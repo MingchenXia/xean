@@ -66,6 +66,15 @@ review, and catalog closure remain distinct evidence.
 
 ### Pi upgrade qualification
 
+Pi revision `8ce69e9d2b17` passed the locked Bun 1.4.2 checks on 2026-10-01:
+109 tests and 1,502 assertions. All five artifacts matched across two clean
+builds using the previous frozen model catalog, and all 16 installed patched
+files matched independent extraction and patch application. The checks cover
+extension task registration, atomic publication, pause and close accounting,
+read-only SQLite, provider recovery, and CRLF framing. Live providers have not
+been rerun for this pin. Gateway continuation and native Anthropic tool use
+require qualification before a long model-backed run.
+
 Pi revision `d4d74eb19be9` passed the locked Bun 1.4.2 checks on 2026-09-30:
 108 tests and 1,494 assertions. All five artifacts matched across two clean
 builds, and all 16 patched installed files matched fresh patch application.

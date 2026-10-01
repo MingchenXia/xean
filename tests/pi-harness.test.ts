@@ -41,7 +41,7 @@ test("Harness pause rolls back an unfinished admission and resumes it once", asy
     },
     abort: async () => {},
   });
-  registry.tasks.add(task);
+  registry.install({ name: "fixture", tasks: [task] });
   const harness = await Harness.open(
     storage,
     {
@@ -156,7 +156,7 @@ test("Harness interruption rejects late publication while keeping accounting wri
     },
     abort: async () => {},
   });
-  registry.tasks.add(task);
+  registry.install({ name: "fixture", tasks: [task] });
   harness = await Harness.open(
     storage,
     { registry, models: createModels() },
@@ -208,7 +208,7 @@ test("Harness quiescence waits for atomic runtime failure publication", async ()
     },
     abort: async () => {},
   });
-  registry.tasks.add(task);
+  registry.install({ name: "fixture", tasks: [task] });
   const publications: string[][] = [];
   const harness = await Harness.open(
     storage,

@@ -1,10 +1,10 @@
 # Pi artifacts
 
 Xean consumes the five packages listed in [provenance.json](provenance.json)
-from Pi commit `312184edb68c38248e1acfc3eec68500ba49d9cb`.
+from Pi commit `8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
-Pi's internal dependencies. Their upstream package version remains `0.99.0`.
+Pi's internal dependencies. Their upstream package version remains `0.99.2`.
 The commit and artifact hashes identify this build.
 
 Normal installation uses Xean's existing locked Bun command, documented in the
@@ -24,9 +24,8 @@ The Node/npm versions used for these artifacts are recorded in the provenance.
 
 Pi's model values are a second build input. They were hydrated once with the
 upstream `npm run hydrate:model-data` command and are frozen in the AI tarball
-under `package/dist/providers/data/`. This upgrade refreshes the snapshot because
-the new provider factories require classifier catalogs absent from the previous
-data. To rebuild, extract that directory,
+under `package/dist/providers/data/`. This upgrade preserves the previous pin's
+frozen catalog. To rebuild, extract that directory,
 including `.manifest.json`, into the checkout's `packages/ai/src/providers/data/`.
 Check the manifest SHA-256 against the provenance. Rehydrating queries live
 catalogs and creates a new snapshot.
@@ -55,7 +54,7 @@ the committed artifact set.
 The tarballs contain unpatched upstream output. Xean's patches live
 in `patches/` and are applied during Bun installation. Each key in
 `patchedDependencies` uses the exact tarball resolution, without the `file:`
-prefix. A `name@0.99.0` key does not match these local artifacts.
+prefix. A version-only key does not match these local artifacts.
 
 The AI patch retains measured usage on failed and zero-token
 responses, custom Codex authentication and credential-specific connection
@@ -68,6 +67,10 @@ Codex failures retain structured status, type, and code for the same native
 retry classifier. This permits bounded recovery for new server-error codes and
 activates the existing HTTP fallback after transient typed WebSocket failures.
 Quota and billing exhaustion remain terminal, including HTTP 429 responses.
+The Codex SSE parser accepts CRLF framing, including split network chunks.
+The deferred request-body serialization and JSON repair allocation changes are
+performance patches. The remaining AI changes preserve transport and accounting
+behavior. None has an upstream replacement in this revision.
 Related upstream reports are [#7444](https://github.com/earendil-works/pi/issues/7444)
 for WebSocket recovery and [#9702](https://github.com/earendil-works/pi/issues/9702)
 for preserving structured failure metadata.

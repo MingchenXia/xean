@@ -218,8 +218,9 @@ export class Xean {
             };
       let xean: Xean;
       const registry = createRegistry();
-      for (const name of [WORKER, COORDINATOR])
-        registry.tasks.add(
+      registry.install({
+        name: "xean",
+        tasks: [WORKER, COORDINATOR].map((name) =>
           defineTask<Input, AttemptState, JsonValue, object>({
             name,
             version: 1,
@@ -233,7 +234,8 @@ export class Xean {
                 terminal(task, { status: "aborted", reason: "cancelled" }),
               ),
           }),
-        );
+        ),
+      });
       const runtime: HarnessOptions = {
         models: createModels(),
         registry,
