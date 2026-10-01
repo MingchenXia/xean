@@ -28,9 +28,9 @@ The registry installs named extensions. Xean registers its worker and Coordinato
 tasks together in one extension. Pi now resolves models, tools, prompt sections,
 hooks, and environments per conversation through `pi.agent`. These APIs support
 future role-specific tools and environments. Opaque Xean roles retain their own
-model loops and frozen inputs. Campaign format 10 requires fresh campaigns after
-the replacement of Pi's `pi.config` document. Anthropic OAuth also supports a
-copy-code login method through Pi's credential APIs.
+model loops and frozen inputs. This pin uses campaign format 10; start fresh
+campaigns and retain old runtimes for existing runs. Anthropic OAuth also supports
+a copy-code login method through Pi's credential APIs.
 
 ## API ownership
 
@@ -158,6 +158,9 @@ zero counts, retry-listener cleanup, cache-session isolation, and the existing
 JSON/serialization allocation fixes. Authentication, invalid requests, context
 limits, and quota failures remain terminal even when their details resemble
 transport errors. Retryable typed WebSocket failures use Pi's HTTP fallback.
+The retry pattern matches `terminated` as a word so JSON `Unterminated string`
+errors do not trigger transport retries. Remove that change when upstream narrows
+the pattern or uses an equivalent classification.
 Patch hashes and build qualification remain in the artifact provenance.
 The upstream changes leave all retained patch guarantees unresolved. Deferred
 request-body serialization and JSON repair allocation are performance patches,

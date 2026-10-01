@@ -8,6 +8,8 @@ campaign.
 
 - Accept CRLF-framed Codex SSE responses, including line endings split across
   network chunks, instead of reporting a JSON parsing error.
+- Stop treating JSON `Unterminated string` errors as terminated connections and
+  automatically repeating the model call. Genuine connection termination still retries.
 - Use Pi's native Anthropic provider for Claude models with subscription OAuth
   or API credentials. Remove the Claude Code provider package, patch, custom
   adapter, and subprocess tests. Research remains Codex-only. Retain historical
@@ -47,9 +49,9 @@ campaigns and exports on their matching runtime. No migration is provided.
 
 - Pin all Pi/Chord packages to upstream main commit `8ce69e9d2b17`, preserving the
   frozen model catalog and matching hashes from two clean builds. Register worker
-  and Coordinator tasks through Pi's native extension API. Pi's per-conversation
-  agent document replaces its configuration document, requiring campaign format
-  10 and fresh campaigns. Retain the existing admission, shutdown, read-only
+  and Coordinator tasks through Pi's native extension API. This pin uses campaign
+  format 10; start fresh campaigns and retain the old runtimes for existing runs.
+  Retain the existing admission, shutdown, read-only
   storage, and provider patches, including CRLF response framing.
 - Delegate SQL operation ordering, statement caching, asynchronous transactions,
   and read draining to Pi. Return invocation state changes through Pi's native

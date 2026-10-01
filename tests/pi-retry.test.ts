@@ -73,7 +73,7 @@ async function retryTurn(signal: AbortSignal, delay: number) {
   return { result, calls };
 }
 
-test("recorded gateway interruptions retry without retrying invalid requests", async () => {
+test("recorded transport failures retry without retrying request or JSON errors", async () => {
   for (const [errorMessage, expectedCalls] of [
     ["Upstream closed stream without completion", 2],
     [
@@ -84,6 +84,11 @@ test("recorded gateway interruptions retry without retrying invalid requests", a
     ["subscription_sharing_usage_limit_exceeded: HTTP 429", 1],
     ["subscription_sharing_usage_unavailable", 2],
     ["subscription_sharing_user_unavailable", 2],
+    ["terminated", 2],
+    ["Connection terminated unexpectedly", 2],
+    ["JSON Parse error: Unterminated string", 1],
+    ["JSON Parse error: Invalid escape character F", 1],
+    ["JSON Parse error: Invalid escape character {", 1],
   ] as const) {
     let calls = 0;
     await retryAssistantCall(
