@@ -127,6 +127,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
         };
         break;
       case "correctness":
+        expect(input).not.toHaveProperty("sources");
         expect(input.notes.map((note: Note) => note.text)).toEqual([
           "ESTABLISHED-SUPPORT",
           "CANDIDATE-SECRET",
@@ -141,6 +142,27 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
         break;
       case "requirements":
         expect(input.notes[0].text).toBe("CANDIDATE-SECRET corrected");
+        expect(input.sources).toEqual([
+          {
+            noteId: input.support[0].id,
+            source: expect.objectContaining({
+              verdict: "PASS",
+              operationId: "support-source",
+              premises: ["Established premise"],
+              passages: [
+                expect.objectContaining({ quote: "Established premise" }),
+              ],
+            }),
+          },
+          {
+            noteId: input.notes[0].id,
+            source: expect.objectContaining({
+              verdict: "PASS",
+              operationId: "new-application",
+              premises: ["Fixture premise"],
+            }),
+          },
+        ]);
         result = batch(() =>
           calls.filter((name) => name === "requirements").length === 2
             ? {
@@ -734,6 +756,10 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
         if (turn > 4)
           throw new Error("Batch validation did not accept the valid retry");
       } else if (selected.id === "requirements") {
+        expect(input.sources).toContainEqual({
+          noteId: "imported",
+          source: { kind: "caller-import" },
+        });
         expect(input.notes.map((note: Note) => note.id)).toEqual([
           "a",
           "b",

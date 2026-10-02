@@ -96,7 +96,11 @@ when that support is checked in the same batch. A failed dependency invalidates
 its dependents; an inconclusive dependency blocks their verification and acceptance.
 Source checking combines notes with external premises into one Codex invocation;
 notes without external premises pass that stage without a call. Requirements
-checks only verified notes. Missing, duplicate, or unexpected result IDs reject
+checks only verified notes and receives their recorded source verdicts and bound
+evidence, or explicit caller-import trust. Historical prose about awaiting
+validation cannot override those records. Source PASS does not establish stronger
+claims or unrelated completion criteria, and caller import alone does not satisfy
+an explicit retrieval requirement. Missing, duplicate, or unexpected result IDs reject
 the entire submitted batch. Pi lets the model correct an invalid submission.
 
 For an explicit conditional claim `P implies Q`, correctness checks the derivation

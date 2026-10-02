@@ -58,7 +58,7 @@ job "xean-bounded-template" {
       config {
         image = var.image
         force_pull = false
-        entrypoint = ["/runs/_xean/${var.run_id}/runtime/bun"]
+        command = "/runs/_xean/${var.run_id}/runtime/bun"
         args = concat([
           "--config=/runs/_xean/${var.run_id}/runtime/bun-runtime.toml",
           "--no-install", "--no-env-file",

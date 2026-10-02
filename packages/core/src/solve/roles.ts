@@ -469,6 +469,16 @@ export function createRoles(
             verifiedSupport: support
               .filter((note) => note.verified)
               .map((note) => note.id),
+            ...(stage === "requirements"
+              ? {
+                  sources: [...support, ...selected].map((note) => ({
+                    noteId: note.id,
+                    source: note.imported
+                      ? { kind: "caller-import" }
+                      : verdict(note, "source"),
+                  })),
+                }
+              : {}),
           },
           stage === "correctness" ? correctnessSchema : verdictSchema,
           execution,
@@ -514,7 +524,7 @@ export function createRoles(
       }
       await assess(
         "requirements",
-        "Decide whether each note meets every completion criterion of the original task. Check quantifiers, variants, parameters, computational model, and bounds. A proved implication does not establish its antecedent. If the task requires an unconditional conclusion, an extra hypothesis must be discharged by a proof within the note, established support, or the task's assumptions. A specific unmet completion criterion is a concrete reason for FAIL, even when the note is mathematically sound partial progress.",
+        "Decide whether each note meets every completion criterion of the original task. All supplied notes have established correctness and sources, through completed checks or caller import. The sources records supply their authoritative source verdicts and available bound evidence, or explicit caller-import trust. Historical prose about awaiting validation cannot override those records. Source PASS does not establish a stronger theorem, an unmet hypothesis, or an unrelated completion criterion. Caller import alone is not evidence of external retrieval when the task explicitly requires it. Check quantifiers, variants, parameters, computational model, and bounds. A proved implication does not establish its antecedent. If the task requires an unconditional conclusion, an extra hypothesis must be discharged by a proof within the note, established support, or the task's assumptions. A specific unmet completion criterion is a concrete reason for FAIL, even when the note is mathematically sound partial progress.",
       );
 
       const reconstructed = await reconstruct(
