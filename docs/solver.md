@@ -141,6 +141,10 @@ proof, judgment, and reuse. The extractor returns only the note's claim and has
 no premise field to change. There is no second normalized premise list.
 Code guarantees unchanged text; source checking and comparison judge its
 suitability for blind reuse.
+Extracted statements, proofs, and verifier result strings reject non-whitespace
+ASCII control characters through schema validation. Invalid Pi tool submissions
+can be corrected within the existing invocation allowance. Text is never stripped
+or repaired by guessing mathematical symbols.
 Contaminated or ambiguous premise wording gives INCONCLUSIVE at source checking;
 a concrete mathematical mismatch still gives FAIL. Later evidence or repaired
 wording requires a new note, following source-verdict finality.

@@ -8,7 +8,11 @@ import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
 export const declarationVersion = 12;
-const text = Type.String({ minLength: 1 });
+const text = Type.String({
+  minLength: 1,
+  // Reject non-whitespace ASCII controls without rewriting mathematical text.
+  pattern: "^[^\\u0000-\\u0008\\u000e-\\u001f\\u007f]+$",
+});
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
 export const batchSchema = <S extends TSchema>(schema: S) =>

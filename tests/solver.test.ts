@@ -582,6 +582,7 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
     string,
     { system: unknown; tools: unknown; prompt: string }
   >();
+  let extractions = 0;
   const runtime = fixtureRuntime((context, _options, selected) => {
     const prompt = String(
       context.messages.find((message) => message.role === "user")!.content,
@@ -592,9 +593,23 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
       prompt,
     });
     const input = JSON.parse(prompt);
+    if (selected.id === "statement" && ++extractions === 2)
+      expect(context.messages.at(-1)).toMatchObject({
+        role: "toolResult",
+        isError: true,
+      });
+    if (selected.id === "proof")
+      expect(input.notes[0].statement).toBe(
+        "Claim n ≥ 2\n\twith n - 2 and literal \\u001e",
+      );
     const result =
       selected.id === "statement"
-        ? { statement: "Claim" }
+        ? {
+            statement:
+              extractions === 1
+                ? "Claim n \u001e 2"
+                : "Claim n ≥ 2\n\twith n - 2 and literal \\u001e",
+          }
         : selected.id === "proof"
           ? { proof: "INDEPENDENT-PROOF", complete: true }
           : {
@@ -638,6 +653,7 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
     expect(input.instructions).toContain("Check both summaries");
   }
   expect(reconstruction.prompt).toContain("INDEPENDENT-PROOF");
+  expect(extractions).toBe(2);
 });
 
 test("batched reconstruction proves the dependency chain, trusts imported support, and reuses conditional checks", async () => {

@@ -208,7 +208,7 @@ export function createRoles(
     );
     const extracted = await batch(
       "statement",
-      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. Return only the statement. Code supplies the source-checked external premises unchanged; do not rewrite them or move an unproved step into that list. Supporting note results remain declared dependencies. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
+      "Extract each note's exact mathematical claim for a blind prover. Preserve every hypothesis, quantifier, definition, and conclusion. When a note applies an external theorem, include the note's resulting conclusion rather than returning only the cited theorem. An explicit hypothetical antecedent belongs in the statement: preserve P implies Q without asserting P. Omit proofs, proof methods, hints, summaries, and verifier opinions. Do not weaken a claim or turn a step needing proof into an assumption. Return only the statement. Code supplies the source-checked external premises unchanged; do not rewrite them or move an unproved step into that list. Supporting note results remain declared dependencies. The original task supplies proof rules, but these claims may be supporting lemmas rather than solutions of that task.",
       {
         task: input.task,
         support: originals.filter((note) => !extract.includes(note)),
