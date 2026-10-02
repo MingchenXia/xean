@@ -126,7 +126,8 @@ Use the run's matching source checkout and runtime for historical campaigns.
 
 Runs launched before snapshot publishing retain their original runner. Observe
 shows their task, round markers, and Nomad logs until a result export appears.
-Detailed in-flight notes require an owner endpoint or an observation snapshot.
+Detailed notes during execution require a compatible local campaign database
+or an observation snapshot.
 Snapshots use `xean-observe/v4` and include committed index and detailed summaries,
 full note text and checks, worker outcomes and note links, and native
 usage counts. Private model reasoning and complete request bodies stay in the
@@ -156,7 +157,9 @@ directory. The same contract works locally and over SSH:
 missing. An unreadable or malformed receipt has its own diagnostic and does not
 erase campaign evidence. Independent review appears separately from solver
 acceptance. Lab supplies this path through its public discovery output.
-Computational artifact browsing is deferred with the computational Codex role.
+Observe shows the [Codex worker's](../../docs/solver.md#codex-worker) published
+notes and work results. Its files remain in the recorded workspace, outside
+Observe's browsing interface.
 
 ## Verify
 

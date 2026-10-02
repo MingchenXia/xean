@@ -305,12 +305,16 @@ through the call-admission and settlement wrapper.
 
 ## Next adoption opportunities
 
+Revisit these when compatible upstream APIs reduce the overall implementation
+or an observed failure justifies a change. The linked closed issues record why
+publication waiting, catalog merging, and capacity handoff remain as implemented.
+
 - **Durable execution:** replace the local Harness extensions with upstream
   admission, domain settlement, and pause controls when available. Preserve
   atomic whole-worker publication and durable failure delivery. Native ownership
   delays a task's terminal state, but writes made in its callback commit
-  immediately. A [success-settlement callback](https://github.com/chaoxu/xean/issues/15) after descendants finish would
-  let Xean remove its explicit wait before publishing results and signals.
+  immediately. A [success-settlement callback](https://github.com/chaoxu/xean/issues/15) could replace the success-path
+  wait. Failure handling would still need to join owned work.
 - **Role configuration:** [conversation-scoped model resolution](https://github.com/chaoxu/xean/issues/16) would remove
   shared catalog merging. A [stop decision in `beforeRequest`](https://github.com/chaoxu/xean/issues/17) would let a role
   hand off an accepted submission at capacity without recognizing a persisted
