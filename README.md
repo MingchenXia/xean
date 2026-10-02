@@ -41,14 +41,17 @@ all three packages, with one dependency lock and aligned package versions.
 Matching Pi packages are pinned to one exact source commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
 build, frozen model data, and hashes. The `main` branch contains the unreleased
-3.0 candidate. Its three-view note format, updated Pi storage schema, and Harness
-checkpoints require new campaigns. Historical campaigns require their original
-source revision and runtime. Existing releases and tags remain historical archives.
+3.0 candidate. New campaigns use campaign format 11 and solver declaration
+version 12. Observer snapshots use `xean-observe/v4`. Historical campaigns require
+their original source revision and runtime, and historical snapshots require
+their matching observer. No migration is provided. Existing releases and tags
+remain historical archives.
 
 ## Install and run
 
-Use Bun 1.4.2 on Linux or macOS. Clone `main` and install its locked dependencies.
-The checkout includes the library, CLI, observer, pinned Pi packages, and patches.
+Use Bun 1.4.2 on Linux or macOS. Use the complete prepared source archive or clone
+`main` and install its locked dependencies. The distribution includes the library,
+CLI, observer, pinned Pi packages, patches, and dependency lockfile.
 Individual workspace packages are private and are not installed from npm.
 
 ```sh
@@ -128,10 +131,11 @@ licenses.
 
 ## Distribution
 
-Prepare 3.0 from a checked source revision. Development builds retain their
-prerelease version until qualification is complete. Run ongoing campaigns with
-their original source revision and frozen settings. Preserve existing releases
-and tags as historical archives.
+The prepared 3.0.0 candidate uses aligned package versions. Its
+[verification record](docs/kernel-smoke.md) identifies the tested platforms,
+provider paths, and limitations. Retain the exact source commit, dependency
+lockfile, and Bun version. Run ongoing campaigns with their original source
+revision and frozen settings. Existing releases and tags remain historical archives.
 
 Before distributing a source revision:
 

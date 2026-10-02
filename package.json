@@ -1,6 +1,6 @@
 {
   "name": "xean-workspace",
-  "version": "3.0.0-dev.0",
+  "version": "3.0.0",
   "license": "MIT",
   "private": true,
   "type": "module",

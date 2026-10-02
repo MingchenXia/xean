@@ -54,11 +54,10 @@ and pass it over stdin to the child runtime with the provisioned lab CA.
 The gateway smoke uses Pi Durable conversations to check two concurrent workers,
 native usage, cached WebSocket connection reuse and delta requests, and reopening
 in another process. Successful execution prints `completed` for both phases.
-Its Durable implementation still requires live qualification. The solver smoke
-initializes without model calls, then checks the tree edge-count task through
-acceptance and unchanged reopening with a forty-call allowance. Both use Luna
-at max reasoning. The source-checking Codex path and
-subscription providers require separate checks when affected. Their setup is
+The solver smoke initializes without model calls, then checks the tree edge-count
+task through acceptance and unchanged reopening with a forty-call allowance.
+Both use Luna at max reasoning. The source-checking Codex path and subscription
+providers require separate checks when affected. Their setup is
 in the [solver guide](solver.md#configuration-and-functions).
 
 Retain source revision, Bun version, frozen task/settings, campaign, result,
@@ -67,232 +66,157 @@ as `argument.md` and preserves failed-attempt artifacts. A snapshot left by a
 failed assertion is not a successful smoke. Record provider limitations with the
 source revision.
 
-Historical provider, benchmark, and memory measurements remain in Git and their
-original local run artifacts. Those private artifacts are not part of the source
-distribution. Model execution, internal acceptance, independent mathematical
-review, and catalog closure remain distinct evidence.
+## 2026-10-02 candidate qualification
 
-### Codex worker
+The initial receipts below qualify Xean
+`b1515e787a327f9fbe950705c7b597fddbaf6a42`, Pi `7fbbd5f4a1d9`, and Fleet
+Bun 1.4.2. Subsequent verifier fixes have separate receipts below. Use the prepared
+distribution's accompanying qualification record to identify the final source
+commit, archive hashes, and clean platform checks. No numbered release or tag has been
+published for this candidate.
 
-On 2026-10-01, a frozen Xean source snapshot passed a Codex worker smoke on
-saturn with Bun 1.4.2, Codex CLI 0.153.4, and `gpt-5.6-luna` at max reasoning.
-A deterministic Coordinator dispatched one Codex worker, then the full built-in
-Verifier. Codex used its native `codex-lb` profile, workspace-write sandbox,
-and shell to write and run a TypeScript enumerator. It published an ordinary
-candidate note proving that the maximum of `3x + 5y`, for nonnegative integers
-with `2x + 3y <= 19`, is 31 at `(2, 5)`.
+Clean archives passed setup, the full check, CLI help/version, README
+initialization/status, and deterministic completion and reopening on macOS ARM64
+and Linux ARM64. Both checks passed 143 tests and 1,985 assertions with no model
+calls. The source archive SHA-256 was
+`4b8abcaa2c9d14200d11b10e27533913c7784f842788ae3888163462f2b8f6b9`.
+Linux ran under Nomad and retained unchanged source, campaign records, and
+deterministic database bytes. Earlier failed staging and installation attempts
+remain recorded separately. Receipts are under `runs/release-3.0.0/macos/` and
+`runs/release-3.0.0/linux/attempts/r04/`.
 
-Correctness, self-contained source checking, requirements, and blind
-reconstruction passed. The campaign accepted the note after one Codex invocation
-and five Pi calls. Both workers completed on their first attempt. A separate
-execution of the retained program reproduced the exact JSON result. Reopening
-in a second process without a supplied credential preserved the campaign,
-records, and database bytes and made no new calls. The accepted argument was
-exported separately.
+The Durable gateway smoke completed four Luna/max calls across two concurrent
+workers. Each worker reused its WebSocket connection for a delta request, with
+no fallback or WebSocket failure. The solver smoke initialized without calls,
+then accepted the tree edge-count argument after 16 calls. Both campaigns
+reopened without credentials or additional work. Their receipts are under
+`runs/release-3.0.0/macos/xean/runs/`.
 
-The frozen source passed the full locked check with 121 tests and 1,746
-assertions. Lab passed 97 tests and 573 assertions, including its zero-call
-CLI integration smoke against that snapshot. The artifact audit matched all
-48 recorded hashes of source and dependency inputs. Native Codex recorded a startup
-warning for the operator's enabled `context_management` feature and no failed
-turn. This qualification covers local computation and ordinary note verification
-on the recorded snapshot. It does not qualify later Pi migration changes.
+Headed Chromium inspection checked Observe's accepted tree, note links, full
+proofs, verification disclosures, and refresh behavior. It found no horizontal
+document overflow or console errors. The receipt is
+`runs/release-3.0.0/observe-qualification.json`, with inspected screenshots under
+`output/playwright/release-3.0.0/`. Other browsers and mobile layouts were not
+qualified.
 
-The frozen source, check logs, campaign, native records, program, rerun receipt,
-and source manifest are retained under `runs/issue4-codex-smoke/`. The campaign
-directory is `frozen/runs/issue4-codex-2026-10-01T21-32-06-092Z/` within that root.
+### Lifecycle
 
-### Pi Durable conversations
+A supervised Linux ARM64 smoke exercised private recovery, pause/resume,
+cancellation after HTTP 200, call-cap draining, and unchanged credentialless
+reopening. Explorer retained its full-note read, private intermediate submission,
+and original one-read/three-response allowances across separate processes,
+publishing one shared result. All five admitted calls settled. The cancelled
+call's usage remains unknown.
 
-The 2026-10-01 migration passed the locked Bun 1.4.2 check: 127 tests and 1,809
-assertions. A subsequent focused regression for explicit Coordinator retry passed
-alongside the restart fixture (2 tests, 39 assertions). Lab passed 97 tests and
-573 assertions plus its zero-call CLI integration. Independent extraction and
-patch application matched all 1,226 installed Pi files.
+The interruption used cooperative close at a private-work boundary. Pause
+targeted recovered pending work. This qualifies those execution and persistence
+paths, without claiming SIGKILL recovery, pause during an active request, or
+mathematical verification. Source and artifact hashes, native records, and the
+retained failed preflight are bound in
+`runs/release-3.0.0/lifecycle/qualification.json`.
 
-A live `openai-codex/gpt-5.6-luna` Explorer at max reasoning used exactly three
-calls: a full note read, a private intermediate submission, and a final submission
-after continuation. Pi retained three completed generations and three completed
-tool tasks. The full note and both submissions survived unchanged. A second
-process reopened the completed campaign without credentials, made zero calls,
-and preserved campaign, transcript, task records, and database bytes.
+### Mathematical comparison
 
-This smoke qualified execution and persistence; it did not run mathematical
-verification. Offline fixtures cover interrupted private resumption, frozen
-input, consumed allowances, logical retry, large untruncated note reads,
-call-cap draining, cancellation, and one atomic shared publication. Deferred
-model polling is rejected because it bypasses call accounting.
+Frozen v2.0.0 at `a53d29f` and the candidate each accepted the tree edge-count
+task and the sum-of-odd-integers task. All four arguments passed an independent
+blind review supplied only the exact tasks and proofs. The task bytes, Luna/max
+model, gateway, and admission allowances were shared. Each version retained its
+own scheduler, dependencies, campaign format, and reader.
 
-Source hashes, native records, and qualification receipts are retained in
-`runs/pi-durable-2026-10-01T21-53-42-358Z/`.
+Each version used 25 calls across the two tasks. The gateway recorded $0.029739
+for v2 and $0.034285 for the candidate. Candidate calls decreased on the odd-sum
+task and increased on the tree task. One observation per version and elementary
+task establishes no statistical capability or efficiency advantage. Native
+token counts matched the gateway records. Recorded costs are not provider-bill
+reconciliation, and blind review usage is separate. The design, results,
+accounting, and opaque review packets are under
+`runs/release-3.0.0/comparison/`.
 
-### Pi upgrade qualification
+### Codex work and verifier qualification
 
-Pi 1.0.0 revision `a13d35a742c6` passed the locked Bun 1.4.2 checks on 2026-10-01:
-119 tests and 1,657 assertions. Lab passed 97 tests and 573 assertions, plus
-its zero-call CLI integration smoke against the Xean snapshot checked for that
-upgrade. All five artifacts matched across two clean builds using the previous
-frozen model catalog, and all 17 installed patched files matched independent
-extraction and patch application. The checks cover direct native telemetry, model and tool
-execution, atomic publication, cancellation, accounting, and read-only inspection.
-No live provider calls were made for this upgrade. The receipts below qualify
-their recorded revisions.
+The source smoke retrieved evidence for Cayley's labelled-tree formula and
+received source PASS with three bound quotations. A separate Codex review,
+given only the task and argument, obtained its own evidence and returned PASS.
+The implementation worker wrote and ran a TypeScript enumerator for
+`max 3x + 5y` over nonnegative integers with `2x + 3y <= 19`.
+Five Pi calls completed verification and acceptance of its ordinary candidate note.
+An independent program
+run reproduced the optimum 31 at `(2, 5)`. Credentialless reopens preserved all
+three campaigns and database bytes.
 
-Pi revision `8ce69e9d2b17` passed the locked Bun 1.4.2 checks on 2026-10-01:
-109 tests and 1,507 assertions. All five artifacts matched across two clean
-builds using the previous frozen model catalog, and all 16 installed patched
-files matched independent extraction and patch application. The checks cover
-extension task registration, atomic publication, pause and close accounting,
-read-only SQLite, provider recovery, JSON-error retry classification, and CRLF
-framing.
+The source smoke exposed a requirements defect: the judge
+reported missing source verification after the source stage had already passed.
+The rejected note remains rejected under the final-per-note-ID contract.
 
-Source `6a9510e477ce` exercised Pi `8ce69e9d2b17` on Jupiter under Nomad on 2026-10-01,
-using Bun 1.4.2, Codex CLI 0.153.4, and `gpt-6-astra` at max reasoning.
-Four Pi role calls and one Codex source invocation settled successfully. Two
-auxiliary notes received fresh PASS judgments for correctness, sources, and
-blind reconstruction, with three supporting notes supplied as trusted imports.
-The payload audit confirmed identical canonical premise strings across stages
-and no additional model calls when reusing completed source and reconstruction
-checks. Nomad recorded exit 0 without restarts, and the audit matched 36 runtime
-source files to the frozen image. Evidence is under
-`runs/canonical-premise-smoke/`.
+Source `d1cc6df` supplies recorded source verdicts and bound evidence to the
+requirements judge. An isolated fresh note explicitly retaining the original
+correctness and source evidence passed requirements in one live call. Its
+credentialless reopen preserved records and database bytes. This qualifies the
+changed stage, without claiming a fresh correctness or source assessment.
 
-This smoke qualifies the changed verification data flow for those notes. The
-complete mathematical task was outside its scope. The source qualification below
-also checks gateway continuation on this pin. Native Anthropic tool use retains
-the earlier pin's qualification and has not been rerun on this pin.
+A separate reconstruction retained the exact external premises but produced a
+malformed extracted statement containing U+001E controls and omitting the note's
+application. The comparison incorrectly returned PASS. That operational result
+does not qualify mathematical fidelity. Raw response bytes were not retained, so the
+origin of the controls cannot be resolved before the recorded model submission.
+The original result and all attempts remain under `runs/release-3.0.0/codex/`,
+with their interpretation in `qualification-addendum.json`.
 
-Pi revision `d4d74eb19be9` passed the locked Bun 1.4.2 checks on 2026-09-30:
-108 tests and 1,494 assertions. All five artifacts matched across two clean
-builds, and all 16 patched installed files matched fresh patch application.
-
-The gateway smoke completed four Luna/max calls across two concurrent workers,
-including cached WebSocket continuation, then reopened without another call.
-Native Anthropic completed two Opus 5.5/max subscription requests, preserving
-the exact tool result, measured usage, records, and database bytes across reopens.
-These checks qualify transport and lifecycle behavior, not a full mathematical
-solver campaign. Source hashes and receipts are under
-`runs/pi-upgrade-20260930-d4d74eb/` and
-`runs/codex-lb-2026-09-30T21-11-45-790Z/`.
-
-### Lab lifecycle qualification
-
-On 2026-10-01, Xean `d76728f` and Lab `abf3f13` completed two supervised
-campaigns on Jupiter with identical task, settings, and source, using direct
-and inductive guidance. One campaign received SIGINT after its first durable
-note; the other was paused through the active owner. Both resumed in a second
-Nomad generation, retained notes and frozen inputs, and reached acceptance.
-They recorded 16 and 11 calls respectively. Observe inspection and accepted
-argument exports passed. Independent review packets were created separately.
-
-The 26 measured gateway requests totalled $0.0215228. One cancelled request had
-unknown usage and price, so this is a subtotal. Lab `6127523` subsequently fixed
-Linux RSS units and passed image qualification with zero provider calls.
-Original resource artifacts retain their inflated child RSS fields; measured
-cgroup allocation peaks were about 257 MB and 255 MB, with no OOM kills.
-Receipts are in `jupiter:/srv/xean-lab/deployments/issue6-20261001/` and campaigns
-in `jupiter:/srv/xean-lab/runs/issue6-20261001/`. These receipts qualify their
-recorded source revisions, not every later change.
-
-### Source distribution qualification
-
-On 2026-10-01, clean archives of Xean `bb053d1` and Lab `1696814` passed on
-macOS ARM64 and Linux x64 with Fleet's locked Bun 1.4.2. Xean passed 113 tests
-and 1,509 assertions. Lab passed 93 tests and 524 assertions, plus the shared
-zero-call CLI integration smoke. CLI help/version, README initialization/status,
-and deterministic completion and reopening also passed. The clean macOS check
-exposed a source-path alias bug in Lab, fixed by resolving `XEAN_SOURCE` before
-Nix filters the source tree.
-
-The Git archive SHA-256 checksums are:
-
-| Source         | SHA-256                                                            |
-| -------------- | ------------------------------------------------------------------ |
-| Xean `bb053d1` | `70f647736e0ec6e94f905c1bafafe51f9afb89bc7f06bf542310bdd575b1ea0d` |
-| Lab `1696814`  | `fbe80f8f7301ba05c6bff458dbe7c3ef8ea2634f288a837667a00ac85ecb07c8` |
-
-A supervised Jupiter job exercised these sources in the retained worker image
-with Bun 1.4.2 and Codex CLI 0.153.4. The shared integration smoke passed, then
-four Luna/max gateway calls completed across two concurrent workers with cached
-WebSocket continuation. Reopening supplied no provider key and made no
-additional calls. The process still inherited the gateway environment variable.
-Two independent Codex reviews of the earlier accepted Lab packets returned
-PASS, using one admitted Luna/max invocation each. The original campaigns and
-packet bytes remained unchanged. These reviews qualify the recorded review path
-and the exact elementary task, with no external sources required.
-
-Gateway accounting measured eight successful requests, including Codex's
-internal requests, at $0.0080742 API-equivalent cost. Observe rendered both
-completed campaigns and their separate PASS receipts using public reports from
-the original runtime and the snapshot API checked in that qualification.
-Browser screenshots are under `output/playwright/issue6/`.
-
-The earlier receipts establish live guidance, pause, interruption, and resume at
-their recorded revisions. Checks on those source archives cover the later
-integration, observation, transport, and review changes. This qualification used
-mounted source archives in a retained image. It did not replace the production
-coordinator or upgrade existing campaigns. Historical subscription-provider
-receipts retain their original scope.
-
-Receipts and archives are under `runs/issue6-8-qualification-20261001/`, with
-live evidence at
-`jupiter:/srv/xean-lab/runs/_xean/issue68-qualification-20261001-r02/`.
-The preceding `r01` attempt failed during dependency installation before any
-model calls. The new attempt moved Bun's install cache from bounded scratch
-space to its mounted run directory.
+Source `29f0d1d` rejects non-whitespace ASCII controls through Pi's native tool
+validation and tells extraction to retain the note's application result. The
+locked check passed 143 tests and 1,993 assertions, including rejection and
+correction of the malformed submission before it reaches the blind prover.
+A fresh reconstruction reused the exact prior correctness/source evidence and
+passed in three live Pi calls. Its statement retained both the permitted theorem
+and the conclusion of 16 trees on the fixed four-label set, with no control
+characters. The proof checked the hypotheses and arithmetic. Credentialless
+reopening preserved records and database bytes. This was an isolated
+reconstruction check with seeded earlier evidence, not a fresh source assessment.
+Its receipt is `runs/release-3.0.0/codex/reconstruction-2026-10-02T10-04-53-679Z/complete.json`.
 
 ### ChatGPT Web
 
-Source `994dc7f` passed the production Responses smoke on 2026-09-30 using
-`codex-chatgpt-web` v6.1.1 at upstream commit
-`a13cd09950969f43e3b7e25c71fa43efaf5446c5`, the local answer-source patch, and
-Fleet's pinned portable Bun 1.4.2. The authenticated production browser and
-native daemon ran on mercury. Xean connected through an SSH loopback forward.
+One built-in Explorer request through the separately managed
+`codex-chatgpt-web` 6.1.1 service on mercury published a note. The request
+selected `chatgpt-web/gpt-6-pro` at max reasoning. Read-only and credentialless
+owning reopens preserved records and database bytes with no replay.
 
-Three Pro requests completed in about 101 seconds: a two-response generic Pi
-tool round trip and one built-in Explorer submission. The tool returned a random
-nonce, a newline, and mathematical text whose backslashes survived exactly.
-Explorer published an unverified candidate proof note. Both campaigns retained
-identical records and database bytes after read-only and credentialless owning
-reopens. The smoke made no retries and did not establish mathematical acceptance.
-
-The deployed HTTP bridge reports opaque Responses IDs and no explicit served-model
-identity or measured usage. Xean preserves those unknowns. Long responses,
-concurrent browser use, login expiry, subscription exhaustion, and stopping remote
-generation were not exercised by this smoke. Cancellation, invalid envelopes,
-and no-replay recovery also have deterministic fixture coverage.
-Private artifacts are in `runs/issue2-responses-live-20260930/`.
+This qualifies a structured Explorer submission and completed reopening.
+Mathematical acceptance, served-model identity, measured usage, and subscription
+billing were not established. The receipt is
+`runs/release-3.0.0/providers/chatgpt/verification.json`.
 
 ### Native Anthropic
 
-On 2026-09-30, Pi's native Anthropic provider passed a two-request subscription
-smoke on saturn with Fleet Bun 1.4.2 and `claude-opus-5-5` at `max` reasoning.
-Both requests used bearer OAuth without an API key and returned HTTP 200. A Pi
-tool returned a random nonce, newline, and LaTeX, preserved exactly by the next
-response. Native terminal events attested the model, and measured token usage
-was retained. No retry occurred. Read-only and completed owning reopens preserved
-records and database bytes without another request.
+An ordinary built-in Explorer math submission with `claude-opus-5-5` completed
+through native Anthropic subscription OAuth, then reopened without credentials
+or another request. This qualifies that submission and reopening, without
+mathematical acceptance. The receipt is
+`runs/release-3.0.0/anthropic-math/qualification.json`.
 
-The [settings example](../examples/claude-settings.json) uses this native provider.
-Private evidence is under `runs/native-anthropic-20260930/`. Credentials were
-supplied in memory and checked absent from saved artifacts. OAuth refresh,
-large contexts, quota exhaustion, and mathematical acceptance were not exercised
-by this transport smoke. Pi's API-rate cost estimates are not subscription bills.
+An earlier nonce-tool smoke authenticated and received HTTP 200 but was refused
+before executing the tool. Its failed campaign and unchanged credentialless
+reopen remain under `runs/release-3.0.0/providers/anthropic/`. The earlier
+`providers/qualification.json` predates the successful math submission.
+The refused nonce-tool round trip remains unqualified on this candidate.
 
-### Historical Claude Code
+### Other provider limits
 
-On 2026-09-30, the now-removed CLI-backed provider passed on saturn with Claude
-Code 2.1.280, Fleet Bun 1.4.2, and `claude-opus-5-5` at `max` reasoning.
+Pi's native `openai-responses` path completed one `gpt-6-astra` call and an
+unchanged credentialless reopen through the `codex-lb/v1` gateway. This was
+not a request to the public OpenAI API. Its receipt is under
+`runs/release-3.0.0/macos/xean/runs/native-openai-2026-10-02T09-14-16-236Z/`.
 
-An algebra campaign reached acceptance after 11 recorded calls, including one
-Explorer interrupted after native initialization. Reopening recovered that
-worker. Explorer read a full imported note before submitting its proof, and
-correctness, requirements, and blind reconstruction passed. The completed
-campaign reopened with identical records and database bytes.
+The public OpenAI endpoint, Anthropic API-key path, and Gemini were not live
+tested for this candidate. Subscription qualification excludes OAuth refresh,
+login expiry, quota exhaustion, large contexts, and browser cancellation.
+Pi catalog cost estimates are not subscription bills.
 
-Private artifacts, source hashes, and the smoke script are under
-`runs/issue1-claude-20260930/`, including historical checks of the removed Claude
-research backend. Native model, usage, cleanup, and reopening records passed
-independent artifact review. Anthropic API credential routing and failure paths
-have deterministic coverage. This smoke used the Claude subscription, not the
-Anthropic API, and did not exercise login expiry or quota exhaustion.
+## Historical provenance
+
+Earlier Pi upgrades, source archives, Lab lifecycle runs, and provider smokes
+retain their source-bound receipts in local run artifacts and
+[Git history](https://github.com/chaoxu/xean/blob/b1515e787a327f9fbe950705c7b597fddbaf6a42/docs/kernel-smoke.md).
+They qualify their recorded revisions. Private artifacts are outside the source
+distribution. Model execution, solver acceptance, independent mathematical
+review, and catalog closure remain distinct evidence.

@@ -21,7 +21,7 @@
     },
     "packages/cli": {
       "name": "xean-cli",
-      "version": "3.0.0-dev.0",
+      "version": "3.0.0",
       "bin": {
         "xean": "./src/index.ts",
       },
@@ -33,7 +33,7 @@
     },
     "packages/core": {
       "name": "xean",
-      "version": "3.0.0-dev.0",
+      "version": "3.0.0",
       "dependencies": {
         "@earendil-works/chord": "catalog:",
         "@earendil-works/pi-ai": "catalog:",
@@ -45,7 +45,7 @@
     },
     "packages/observe": {
       "name": "xean-observe",
-      "version": "3.0.0-dev.0",
+      "version": "3.0.0",
       "bin": {
         "xean-observe": "./src/server.ts",
         "xean-observe-publish": "./src/publish.ts",
