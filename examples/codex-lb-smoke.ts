@@ -6,8 +6,13 @@ import {
   createModels,
   envApiKeyAuth,
 } from "@earendil-works/pi-ai";
-import { convertToLlm, runAgentLoop } from "@earendil-works/pi-agent-core";
-import { getTelemetryContext } from "@earendil-works/pi-agent-core/harness/context";
+import {
+  AssistantEntry,
+  configure,
+  defineExtension,
+  GenerationTask,
+  hook,
+} from "@earendil-works/pi-durable";
 import { getOpenAICodexWebSocketDebugStats } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import {
@@ -91,41 +96,32 @@ const options: XeanOptions = {
         };
         workers.push(worker);
         peakActive = Math.max(peakActive, ++active);
-        try {
-          let turns = 0;
-          await runAgentLoop(
-            [
-              {
-                role: "user",
-                content: `What is ${value} squared?`,
-                timestamp: Date.now(),
-              },
-            ],
-            {
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "Return only the requested integer, without explanation.",
-                  timestamp: Date.now(),
+        const host = execution.durable!;
+        host.models.setProvider({
+          ...models.getProvider(model.provider)!,
+          getModels: () => [model],
+        });
+        let turns = 0;
+        const extension = defineExtension({
+          name: `xean.square.${host.taskId}`,
+          hooks: [
+            hook(GenerationTask, {
+              beforeRequest: () => ({
+                stream: auditedStream(models, execution.recorder),
+                options: {
+                  apiKey,
+                  sessionId: execution.attemptId,
+                  telemetryContext: execution.telemetry,
+                  reasoning: "max",
+                  transport: "websocket-cached",
+                  maxRetries: 0,
+                  headers: {
+                    "X-Codex-LB-Usage-Tag": usageTag,
+                    "X-Codex-LB-Required-Capability": "usage_tag_v1",
+                  },
                 },
-              ],
-              tools: [],
-            },
-            {
-              model,
-              convertToLlm,
-              apiKey,
-              sessionId: execution.attemptId,
-              telemetryContext: getTelemetryContext(context),
-              reasoning: "max",
-              transport: "websocket-cached",
-              maxRetries: 0,
-              headers: {
-                "X-Codex-LB-Usage-Tag": usageTag,
-                "X-Codex-LB-Required-Capability": "usage_tag_v1",
-              },
-              finishTurn({ message }) {
+              }),
+              afterResponse(message) {
                 assert.equal(
                   message.stopReason,
                   "stop",
@@ -133,28 +129,57 @@ const options: XeanOptions = {
                 );
                 assert.equal(message.usageReported, true);
                 assert.ok(message.usage.totalTokens > 0);
-                const answer = message.content
-                  .filter((part) => part.type === "text")
-                  .map((part) => part.text)
-                  .join("")
-                  .trim();
-                assert.equal(answer, String(value * value));
-                return { action: ++turns === 2 ? "end" : "continue" };
+                turns++;
               },
-              prepareNextTurn: () => ({
-                messages: [
-                  {
-                    role: "user",
-                    content: "Repeat that same integer.",
-                    timestamp: Date.now(),
-                  },
-                ],
-              }),
-            },
-            () => {},
-            context.abortSignal,
-            auditedStream(models, execution.recorder),
-          );
+            }),
+          ],
+        });
+        host.registry.install(extension);
+        try {
+          const id = await host.commit(async (tx) => {
+            const conversation = await tx.createConversation({
+              ownership: { kind: "task", taskId: host.taskId },
+            });
+            await configure(tx, conversation.id, {
+              model: { provider: model.provider, modelId: model.id },
+              thinkingLevel: "max",
+              extensions: [extension],
+              tools: [],
+              instructions:
+                "Return only the requested integer, without explanation.",
+            });
+            return conversation.id;
+          }, context);
+          const conversation = (await host.conversation(id, context))!;
+          let answer = "";
+          for (const [index, content] of [
+            `What is ${value} squared?`,
+            "Repeat that same integer.",
+          ].entries()) {
+            const settled = await (
+              await conversation.submit(
+                {
+                  type: "input",
+                  requestId: String(index),
+                  content,
+                },
+                context,
+              )
+            ).wait(context);
+            assert.equal(settled.status, "done");
+            const entry = await host.commit(
+              (tx) => tx.entry(AssistantEntry, settled.answer!),
+              context,
+            );
+            const message = entry?.model?.[0];
+            assert.ok(message && message.role === "assistant");
+            answer = message.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("")
+              .trim();
+            assert.equal(answer, String(value * value));
+          }
           assert.equal(turns, 2);
           worker.websocket = getOpenAICodexWebSocketDebugStats(
             execution.attemptId,
@@ -164,8 +189,9 @@ const options: XeanOptions = {
           assert.equal(worker.websocket?.connectionsReused, 1);
           assert.equal(worker.websocket?.deltaRequests, 1);
           assert.equal(worker.websocket?.fullContextRequests, 1);
-          return value * value;
+          return Number(answer);
         } finally {
+          host.registry.uninstall(extension);
           worker.finishedAt = new Date().toISOString();
           active--;
           cleanupSessionResources(execution.attemptId);

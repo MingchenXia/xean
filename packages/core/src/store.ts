@@ -5,7 +5,6 @@ import {
   Harness,
   ROOT_CONVERSATION_ID,
   type Cursor,
-  type DocumentId,
   type EntryId,
   type EntryRecord,
   type HarnessOptions,
@@ -16,11 +15,10 @@ import {
   type TaskId,
   type TaskRecord,
   type TaskRuntime,
-  type TaskState,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { json } from "./json.ts";
-import { campaignVersion } from "./types.ts";
+import { campaignVersion, UninitializedCampaignError } from "./types.ts";
 import type {
   CampaignState,
   JsonValue,
@@ -45,18 +43,14 @@ export const initialAttempt = (): AttemptState => ({
   error: null,
 });
 export type Input = WorkRequest | Omit<Signal, "id">;
-// Opaque Xean roles do not spawn native child tasks or enter waiting/completing states.
-export type PiTask = TaskRecord<Input, AttemptState, JsonValue> & {
-  readonly state: Exclude<
-    TaskState<AttemptState, JsonValue>,
-    { status: "waiting" | "completing" }
-  >;
-};
+export type PiTask = TaskRecord<Input, AttemptState, JsonValue>;
 export type TerminalState = Extract<PiTask["state"], { status: "terminal" }>;
 type Definition = Task<Input, AttemptState, JsonValue, object>;
 export type Runtime = TaskRuntime<Input, AttemptState, JsonValue, object>;
 export const WORKER = "xean.worker";
 export const COORDINATOR = "xean.coordinator";
+export const isXeanTask = (task: { kind: string }): boolean =>
+  task.kind === WORKER || task.kind === COORDINATOR;
 export const campaignAddress = {
   kind: "xean.campaign",
   scope: { kind: "session" as const },
@@ -112,7 +106,7 @@ export class Store {
   ) {
     this.session.subscribeCommits(({ changes }) => {
       for (const change of changes)
-        if (change.type === "task")
+        if (change.type === "task" && isXeanTask(change.value))
           this.tasks.set(change.value.id, resident(change.value as PiTask));
     });
   }
@@ -123,33 +117,30 @@ export class Store {
     runtime?: HarnessOptions,
     validate?: (state: CampaignState, tasks: readonly PiTask[]) => void,
   ): Promise<Store> {
-    let documentId = (
+    const documentId = (
       await storage.findDocument(campaignAddress, "current", context)
     )?.id;
+    const saved =
+      documentId === undefined
+        ? undefined
+        : await storage.document(documentId, "current", context);
     if (documentId === undefined) {
-      if (!initial) throw new Error("A new Xean campaign requires a task");
-      if (await storage.conversation(ROOT_CONVERSATION_ID, context)) {
+      if (
+        (await storage.scanConversations({}, 1, undefined, context)).items
+          .length ||
+        (
+          await storage.scanDocuments(
+            { scope: campaignAddress.scope, at: "current" },
+            1,
+            undefined,
+            context,
+          )
+        ).items.length
+      ) {
         throw new Error("Storage already contains a non-Xean session");
       }
-      documentId = await storage.mintId<DocumentId>();
-      await storage.commit(
-        [
-          { type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
-          {
-            type: "document.create",
-            record: { ...campaignAddress, id: documentId },
-            content: {
-              kind: "base",
-              version: campaignVersion,
-              value: initial,
-            },
-          },
-        ],
-        context,
-      );
-    }
-    const saved = await storage.document(documentId, "current", context);
-    if (
+      if (!initial || !runtime) throw new UninitializedCampaignError();
+    } else if (
       saved?.version !== campaignVersion ||
       saved.value.version !== campaignVersion
     )
@@ -159,27 +150,42 @@ export class Store {
     do {
       const page = await storage.scanTasks({}, 256, cursor, context);
       for (const task of page.items) {
-        if (task.version !== 1 || ![WORKER, COORDINATOR].includes(task.kind)) {
+        if (!isXeanTask(task)) continue;
+        if (task.version !== 1) {
           throw new Error(`Unsupported Xean task ${task.kind}@${task.version}`);
         }
         tasks.set(task.id, resident(task as PiTask));
       }
       cursor = page.next;
     } while (cursor);
-    validate?.(saved.value as CampaignState, [...tasks.values()]);
+    const state = (saved?.value as CampaignState | undefined) ?? initial!;
+    validate?.(state, [...tasks.values()]);
     const session = runtime
       ? await Harness.open(storage, runtime, context)
       : createSession(storage);
-    // Harness owns recovery. Refresh only records it may have changed before
-    // the post-open subscription can observe them.
-    if (runtime)
-      for (const task of tasks.values())
-        if (task.state.status === "running")
-          tasks.set(
-            task.id,
-            resident((await storage.task(task.id, context)) as PiTask),
-          );
-    return new Store(storage, tasks, session, runtime?.registry);
+    try {
+      if (documentId === undefined)
+        await (session as Harness).root(context, {
+          async init(tx) {
+            await tx.doc(
+              defineDoc({ ...campaign.definition, initial: () => state }),
+            );
+          },
+        });
+      // Harness owns recovery. Refresh only records it may have changed before
+      // the post-open subscription can observe them.
+      if (runtime)
+        for (const task of tasks.values())
+          if (task.state.status === "running")
+            tasks.set(
+              task.id,
+              resident((await storage.task(task.id, context)) as PiTask),
+            );
+      return new Store(storage, tasks, session, runtime?.registry);
+    } catch (error) {
+      await session.close(context).catch(() => {});
+      throw error;
+    }
   }
 
   get harness(): Harness {

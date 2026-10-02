@@ -22,7 +22,7 @@ import {
 import { createRoles } from "../packages/core/src/solve/roles.ts";
 import { offlineResearch } from "../scripts/bounded-solve.ts";
 import { project } from "../packages/core/src/solve/notes.ts";
-import { ask } from "../packages/core/src/solve/pi.ts";
+import { ask, invoke } from "./fixtures/pi.ts";
 
 const profiles = {
   default: { provider: "openai", model: "gpt-6-astra" },
@@ -239,7 +239,8 @@ test("direct browser roles cannot enable readers or repeat an invalid submission
     literature: false,
   });
   await expect(
-    roles.explorer(
+    invoke(
+      roles.explorer,
       {
         task: { problem: "Fixture", completionCriteria: "Fixture" },
         notes: [],
@@ -257,7 +258,6 @@ test("direct browser roles cannot enable readers or repeat an invalid submission
           }),
         },
       },
-      BACKGROUND_CONTEXT,
     ),
   ).rejects.toThrow("exhausted its responses without a valid result");
   expect(calls).toBe(1);

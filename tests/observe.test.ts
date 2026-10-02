@@ -7,13 +7,18 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import { declarationVersion } from "xean/solve";
 import { readSnapshot, snapshot } from "../packages/observe/src/snapshot.ts";
 import { observe, publish } from "../packages/observe/src/publish.ts";
-import { readRun, type Run } from "../packages/observe/src/read.ts";
+import {
+  observationInterval,
+  readRun,
+  type Run,
+} from "../packages/observe/src/read.ts";
 import { api, readSources } from "../packages/observe/src/server.ts";
 
 async function fakeNomad(
@@ -89,8 +94,25 @@ if (args[0] === "job") {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as string[]);
-    const [first, concurrent] = await Promise.all([read(), read()]);
+    const [first, concurrent, compact] = await Promise.all([
+      read(),
+      read(),
+      handle(new Request("http://127.0.0.1/api/runs/first?view=status")).then(
+        (response) => response.json(),
+      ),
+    ]);
     expect(concurrent).toEqual(first);
+    expect(compact.heartbeat).toEqual({ rounds: 0 });
+    expect(compact.process).toEqual({
+      job: "pool",
+      task: "solver",
+      allocation: "allocation",
+      status: "running",
+      observedAt: first[0]?.process?.observedAt,
+    });
+    expect(compact.error).toStartWith("ExecaError: Command failed");
+    expect(compact.error).toEndWith("…");
+    expect(compact.error).toHaveLength(500);
     expect((await commands()).filter((args) => args[0] === "job")).toHaveLength(
       2,
     );
@@ -233,7 +255,7 @@ test("the external observer reads coherent live snapshots without changing a loc
       ...after.snapshot,
       observedAt: published.observedAt,
     });
-    expect(published.schema).toBe("xean-observe/v3");
+    expect(published.schema).toBe("xean-observe/v4");
     expect(after.snapshot?.notes[0]?.id).toBe("work/n1");
     expect(after.snapshot?.notes[0]?.detailedSummary).toContain("twice $2n$");
     const history = await engine.inspect();
@@ -276,7 +298,12 @@ test("the external observer reads coherent live snapshots without changing a loc
     expect(readback.error).toBeUndefined();
     expect(readback.kind).toBe("snapshot");
     expect(readback.snapshot).toEqual(published);
+    const invalidUsage = structuredClone(published);
+    invalidUsage.status.calls.byModel[0].reportedUsage = {
+      proof: "Extra saved proof",
+    };
     for (const invalid of [
+      { ...published, schema: "xean-observe/v3" },
       { ...published, task: { label: "Invalid snapshot" } },
       { ...published, notes: [{ ...published.notes[0], support: undefined }] },
       { ...published, notes: [{ ...published.notes[0], text: undefined }] },
@@ -287,6 +314,8 @@ test("the external observer reads coherent live snapshots without changing a loc
           calls: { ...published.status.calls, byModel: [null] },
         },
       },
+      { ...published, status: { ...published.status, error: "x".repeat(501) } },
+      invalidUsage,
     ]) {
       await writeFile(observationFile, JSON.stringify(invalid));
       const unavailable = await exportedRun();
@@ -345,11 +374,27 @@ test("the external observer reads coherent live snapshots without changing a loc
       errorLog: "worker stopped\n",
     });
     await fakeNomad(directory);
+    const saved = structuredClone(published);
+    saved.status.argument = "Extra saved proof";
+    saved.status.calls.privateBody = "Extra saved proof";
+    await writeFile(observationFile, JSON.stringify(saved));
+    const receipt = {
+      reviewer: "Independent reviewer",
+      reviewedAt: "2026-10-01T00:00:00Z",
+      verdict: "PASS" as const,
+      report: "Private review prose",
+    };
+    await writeFile(join(exported, "review.json"), JSON.stringify(receipt));
     const handle = api(
       [
         { id: "fixture", directory },
         { id: "missing", directory: join(directory, "missing") },
-        { id: "exported", directory: exported, job: "fixture-job" },
+        {
+          id: "exported",
+          directory: exported,
+          job: "fixture-job",
+          review: "review.json",
+        },
       ],
       directory,
     );
@@ -357,6 +402,8 @@ test("the external observer reads coherent live snapshots without changing a loc
     const rows = (await response.json()) as Run[];
     expect(rows[0]?.snapshot?.notes).toHaveLength(1);
     expect(rows[1]?.error).toBeString();
+    expect(rows[2]?.snapshot?.status).toEqual(published.status);
+    expect(rows[2]?.review?.receipt).toEqual(receipt);
     const clock = spyOn(Date, "now").mockReturnValue(Date.now());
     const refresh = async () => {
       clock.mockReturnValue(Date.now() + 10_001);
@@ -367,6 +414,39 @@ test("the external observer reads coherent live snapshots without changing a loc
     try {
       await writeFile(observationFile, "{invalid JSON");
       await fakeNomad(directory, undefined, "solver", "new-work");
+      // Both views reuse the same evidence, even after its source changes.
+      const compact = await (
+        await handle(new Request("http://127.0.0.1/api/runs?view=status"))
+      ).json();
+      const single = await (
+        await handle(
+          new Request("http://127.0.0.1/api/runs/exported?view=status"),
+        )
+      ).json();
+      expect(single).toEqual(compact[2]);
+      expect(single.observedAt).toBe(published.observedAt);
+      expect(single.stale).toBe(false);
+      expect(single.snapshot).toEqual({
+        status: published.status,
+        usageAvailable: true,
+      });
+      expect(single.review).toEqual({
+        state: "reviewed",
+        receipt: {
+          reviewer: receipt.reviewer,
+          reviewedAt: receipt.reviewedAt,
+          verdict: receipt.verdict,
+        },
+      });
+      for (const text of [
+        "unsafe()",
+        "twice $2n$",
+        "worker output",
+        "worker stopped",
+        "Extra saved proof",
+        receipt.report,
+      ])
+        expect(JSON.stringify(compact)).not.toContain(text);
       for (let i = 0; i < 2; i++) {
         const failed = await refresh();
         expect(failed[2]).toMatchObject({
@@ -381,6 +461,14 @@ test("the external observer reads coherent live snapshots without changing a loc
         expect(failed[1]?.snapshot).toBeUndefined();
         expect(failed[1]).not.toHaveProperty("stale");
       }
+      const stale = await (
+        await handle(
+          new Request("http://127.0.0.1/api/runs/exported?view=status"),
+        )
+      ).json();
+      expect(stale.stale).toBe(true);
+      expect(stale.observedAt).toBe(single.observedAt);
+      expect(stale.snapshot).toEqual(single.snapshot);
       const recovered = { ...published, notes: [] };
       await writeFile(observationFile, JSON.stringify(recovered));
       await fakeNomad(directory, "stderr");
@@ -535,6 +623,7 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
       ["/api/runs/unknown", 404],
       ["/api/runs/", 404],
       ["/api/runs/%", 400],
+      ["/api/runs/known?view=stats", 400],
     ] as const)
       expect(
         (await handle(new Request(`http://127.0.0.1${path}`))).status,
@@ -605,6 +694,118 @@ test("source refresh reloads membership and retains stale evidence only for the 
     await rm(directory, { recursive: true });
   }
 });
+
+test("stalled observation processes do not block individual reads or configuration recovery", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-observe-stalled-"));
+  const path = process.env.PATH;
+  const clock = spyOn(Date, "now").mockReturnValue(Date.now());
+  let collection: Promise<Response> | undefined;
+  let repeated: Promise<Response> | undefined;
+  try {
+    await mkdir(join(directory, "bin"));
+    await writeFile(
+      join(directory, "task.json"),
+      JSON.stringify({
+        problem: "Healthy local task",
+        completionCriteria: "Proof",
+      }),
+    );
+    for (const name of ["ssh", "fleet-nomad"]) {
+      await writeFile(
+        join(directory, "bin", name),
+        `#!${process.execPath}
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(join(directory, `${name}-started`))}, "ready");
+process.on("SIGTERM", () => {
+  writeFileSync(${JSON.stringify(join(directory, `${name}-stopped`))}, "stopped");
+  process.exit(0);
+});
+while (!existsSync(${JSON.stringify(join(directory, "release"))})) await Bun.sleep(10);
+if (existsSync(${JSON.stringify(join(directory, "fail"))})) { console.error("fixture failure"); process.exit(1); }
+console.log(JSON.stringify({artifacts:{kind:"heartbeat",at:"2026-10-01T00:00:00Z",value:{task:{problem:"Remote task",completionCriteria:"Proof"},rounds:1}}}));
+`,
+        { mode: 0o700 },
+      );
+    }
+    process.env.PATH = `${join(directory, "bin")}:${path ?? ""}`;
+    const local = { id: "local", directory };
+    const remote = {
+      id: "remote",
+      directory: "/fixture",
+      host: "jupiter",
+      runtime: process.execPath,
+    };
+    let sources = [local, remote, { id: "process", directory, job: "fixture" }];
+    const handle = api(async () => sources, directory);
+    const request = (suffix = "") =>
+      handle(new Request(`http://127.0.0.1/api/runs${suffix}`));
+    collection = request();
+    for (const name of ["ssh", "fleet-nomad"])
+      while (!existsSync(join(directory, `${name}-started`)))
+        await Bun.sleep(10);
+
+    const healthy = (await (await request("/local")).json()) as Run;
+    expect(healthy.heartbeat?.task.problem).toBe("Healthy local task");
+    expect(existsSync(join(directory, "ssh-stopped"))).toBe(false);
+    clock.mockReturnValue(Date.now() + observationInterval + 1);
+    repeated = request("/remote");
+    await Bun.sleep(20);
+    expect(await Bun.file(join(directory, "ssh-started")).text()).toBe("ready");
+    sources = [local];
+    clock.mockReturnValue(Date.now() + observationInterval + 1);
+    expect((await (await request()).json()).map((run: Run) => run.id)).toEqual([
+      "local",
+    ]);
+    expect((await request("/remote")).status).toBe(404);
+    expect(existsSync(join(directory, "ssh-stopped"))).toBe(false);
+
+    const completed = (await (await collection).json()) as Run[];
+    expect(completed[0]?.error).toBeUndefined();
+    expect(completed[1]?.error).toContain("timed out");
+    expect(completed[2]?.error).toContain("timed out");
+    expect(completed[2]?.heartbeat?.task.problem).toBe("Healthy local task");
+    expect(await (await repeated).json()).toEqual(completed[1]);
+    for (const name of ["ssh", "fleet-nomad"])
+      expect(existsSync(join(directory, `${name}-stopped`))).toBe(true);
+
+    await rm(join(directory, "ssh-started"));
+    await rm(join(directory, "ssh-stopped"));
+    const stop = new AbortController();
+    const cancelled = readRun(remote, directory, undefined, stop.signal);
+    while (!existsSync(join(directory, "ssh-started"))) await Bun.sleep(10);
+    stop.abort();
+    expect((await cancelled).error).toContain("canceled");
+    expect(existsSync(join(directory, "ssh-stopped"))).toBe(true);
+
+    await rm(join(directory, "ssh-started"));
+    sources = [local, remote];
+    clock.mockReturnValue(Date.now() + observationInterval + 1);
+    repeated = request("/remote");
+    while (!existsSync(join(directory, "ssh-started"))) await Bun.sleep(10);
+    clock.mockReturnValue(Date.now() + observationInterval + 1);
+    await request("/local");
+    await writeFile(join(directory, "release"), "done");
+    const late = await (await repeated).json();
+    expect(late.heartbeat?.task.problem).toBe("Remote task");
+    await writeFile(join(directory, "fail"), "bad");
+    clock.mockReturnValue(Date.now() + observationInterval + 1);
+    const retained = await (await request("/remote")).json();
+    expect(retained).toMatchObject({
+      heartbeat: late.heartbeat,
+      observedAt: late.observedAt,
+      stale: true,
+    });
+    expect(retained.error).toContain("fixture failure");
+  } finally {
+    await writeFile(join(directory, "release"), "done");
+    await collection;
+    await repeated;
+    clock.mockRestore();
+    if (path === undefined) delete process.env.PATH;
+    else process.env.PATH = path;
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
 
 test("explicit external receipts refresh independently of campaign evidence locally and through one SSH read", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-observe-review-"));

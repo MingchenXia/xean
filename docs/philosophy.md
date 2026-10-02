@@ -29,8 +29,8 @@ and obstacles for later work. Pi supplies standard execution and storage behavio
    Imported supporting theorems remain assumptions during reconstruction.
    Their declared dependencies still need the same checks as other dependencies.
    Imported solution candidates still need requirements and reconstruction
-   checks for acceptance. Explorer
-   and literature notes establish correctness and sources through verification.
+   checks for acceptance. Explorer, literature, and Codex notes establish
+   correctness and sources through verification.
    A failed claim invalidates dependent claims, and the record preserves the
    failure for diagnosis.
 
@@ -47,9 +47,9 @@ and obstacles for later work. Pi supplies standard execution and storage behavio
    inputs, and execution records survive interruptions. A worker publishes its
    complete result together with the signal that tells Coordinator it is ready.
    Failures also reach Coordinator, which decides what work to request next.
-   Running workers retain their frozen inputs. Current recovery repeats an
-   interrupted worker as a whole. Resuming private progress remains deferred,
-   and any future implementation must preserve atomic shared publication.
+   Running workers retain their frozen inputs. Pi resumes private model and
+   tool progress after interruption; Codex subprocesses retain whole-worker
+   recovery. Shared publication remains atomic.
 
 6. **Keep the framework small and judge it by mathematical results.** Pi and
    maintained libraries supply standard runtime behavior. Xean supplies campaign

@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
-import { withTelemetryContext } from "@earendil-works/pi-agent-core/harness/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
+  AgentDoc,
   createRegistry,
   defineTask,
   ROOT_CONVERSATION_ID,
@@ -14,7 +14,10 @@ import {
   type Storage,
   type TaskId,
   type TaskOutcome,
+  type TaskRecord,
+  type Registry,
 } from "@earendil-works/pi-durable";
+import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { NOOP_TELEMETRY_CONTEXT } from "@earendil-works/pi-telemetry";
 import { Check } from "typebox/value";
 import { errorText, json } from "./json.ts";
@@ -32,6 +35,7 @@ import {
   Store,
   WORKER,
   initialAttempt,
+  isXeanTask,
   type Input,
   type Runtime,
   type AttemptState,
@@ -92,7 +96,7 @@ function work(task: PiTask): Work {
     status:
       s.status === "pending"
         ? "queued"
-        : s.status === "running"
+        : s.status !== "terminal"
           ? "active"
           : outcome?.status === "completed"
             ? "completed"
@@ -163,8 +167,8 @@ function terminal(
       ...outcome,
       result: {
         output: outcome.result ?? null,
-        attempts: task.state.checkpoint.attempts,
-        attemptId: task.state.checkpoint.attemptId,
+        attempts: task.state.checkpoint!.attempts,
+        attemptId: task.state.checkpoint!.attemptId,
         publicationId,
       },
     };
@@ -183,6 +187,8 @@ export class Xean {
   private constructor(
     private readonly store: Store,
     private readonly options: XeanOptions,
+    private readonly registry: Registry,
+    private readonly models: MutableModels,
   ) {}
 
   static async open(storage: Storage, options: XeanOptions): Promise<Xean> {
@@ -190,6 +196,8 @@ export class Xean {
       throw new Error("Storage already has a Xean owner");
     owners.add(storage);
     let store: Store | undefined;
+    const initialized = Promise.withResolvers<void>();
+    initialized.promise.catch(() => {});
     try {
       const names = new Set<string>();
       for (const role of options.roles) {
@@ -236,12 +244,19 @@ export class Xean {
           }),
         ),
       });
+      const models = createModels();
       const runtime: HarnessOptions = {
-        models: createModels(),
+        models,
         registry,
+        settings: {
+          compaction: { enabled: false },
+          retry: { enabled: false },
+          toolExecution: "sequential",
+        },
         admitTasks: (tx, candidates, active) =>
-          xean.reserve(tx, candidates as PiTask[], active),
+          xean.reserve(tx, candidates, active),
         onTaskRecovery: async (tx, task) => {
+          if (!isXeanTask(task)) return;
           await tx.appendEntry(ROOT_CONVERSATION_ID, {
             kind: "xean.attempt.interrupted",
             data: {
@@ -251,6 +266,8 @@ export class Xean {
           });
         },
         onTaskFailure: async (tx, task, outcome) => {
+          if (!isXeanTask(task)) return false;
+          await initialized.promise;
           await xean.failTask(
             await xean.store.transaction(tx),
             task as PiTask,
@@ -288,7 +305,8 @@ export class Xean {
             );
         }
       });
-      xean = new Xean(store, options);
+      xean = new Xean(store, options, registry, models);
+      initialized.resolve();
       await xean.mutate(async (tx) => {
         if (tx.tasks.length === 0)
           await tx.newTask(COORDINATOR, { kind: "start", value: null });
@@ -296,6 +314,7 @@ export class Xean {
       });
       return xean;
     } catch (error) {
+      initialized.reject(error);
       await (store ? store.close() : storage.close(BACKGROUND_CONTEXT)).catch(
         () => {},
       );
@@ -414,27 +433,58 @@ export class Xean {
 
   private async reserve(
     native: Tx,
-    candidates: readonly PiTask[],
+    candidates: readonly TaskRecord<JsonValue, JsonValue, JsonValue>[],
     activeIds: readonly TaskId[],
   ) {
     const tx = await this.store.transaction(native);
-    if (this.closing || this.fault || tx.state.status !== "running") return [];
+    if (this.closing || this.fault) return [];
     const active = new Set(activeIds);
+    const out: { id: TaskId; checkpoint: JsonValue }[] = [];
+    // Native descendants retain their checkpoints and finish inside the admitted
+    // owner's slot, including during pause, blocking, and call-cap draining.
+    // Pi excludes terminal/completing candidates, so each has a checkpoint.
+    for (const candidate of candidates) {
+      if (candidate.abortRequested) {
+        out.push({ id: candidate.id, checkpoint: candidate.state.checkpoint! });
+        continue;
+      }
+      if (isXeanTask(candidate)) continue;
+      let owner: typeof candidate | undefined = candidate;
+      while (owner && !isXeanTask(owner)) {
+        const parent: TaskId | undefined =
+          owner.owner ??
+          (await native.conversation(owner.conversationId))?.owner?.taskId;
+        owner = parent === undefined ? undefined : await native.task(parent);
+      }
+      if (!owner || !active.has(owner.id)) continue;
+      const agent = await native.doc(AgentDoc, candidate.conversationId);
+      if (
+        (Array.isArray(agent.extensions)
+          ? agent.extensions
+          : (agent.extensions?.add ?? [])
+        ).every((name) => this.registry.snapshot().extension(name))
+      )
+        out.push({ id: candidate.id, checkpoint: candidate.state.checkpoint! });
+    }
+    if (tx.state.status !== "running") return out;
+    const roots = candidates.filter(
+      (task) => isXeanTask(task) && !task.abortRequested,
+    ) as PiTask[];
     const selected: PiTask[] = [];
     const coordinatorRunning = tx.tasks.some(
       (t) => t.kind === COORDINATOR && active.has(t.id),
     );
-    if (!coordinatorRunning) {
-      const next = candidates.find(
-        (t) => t.kind === COORDINATOR && t.state.status === "pending",
-      );
-      if (next) selected.push(next);
-    }
+    const coordinator = coordinatorRunning
+      ? undefined
+      : roots.find(
+          (t) => t.kind === COORDINATOR && t.state.status === "pending",
+        );
+    if (coordinator) selected.push(coordinator);
     const occupied = tx.tasks.filter(
       (t) => t.kind === WORKER && active.has(t.id),
     ).length;
     selected.push(
-      ...candidates
+      ...roots
         .filter(
           (t) =>
             !tx.state.callLimitReached &&
@@ -445,25 +495,48 @@ export class Xean {
     );
     const exhausted = selected.find(
       (task) =>
-        task.state.status !== "terminal" &&
+        task.state.checkpoint &&
         task.state.checkpoint.attempts >= tx.state.limits.attempts,
     );
     if (exhausted) {
-      await this.failTask(
-        tx,
-        exhausted,
-        `Attempt limit reached for task ${exhausted.id}`,
-      );
-      return [];
+      // A recovered owner may still have private descendants. Pi cancels and
+      // joins them before the domain failure hook publishes its receipt.
+      tx.writeTask({
+        ...exhausted,
+        memos: undefined,
+        state: {
+          status: "completing",
+          checkpoint: exhausted.state.checkpoint!,
+          outcome: {
+            status: "faulted",
+            error: {
+              message: `Attempt limit reached for task ${exhausted.id}`,
+            },
+          },
+        },
+      });
+      return out;
     }
-    const out: { id: TaskId; checkpoint: AttemptState }[] = [];
+    // Read frozen Coordinator views before the first table write in the batch.
+    let frozen: ViewReference | undefined;
+    const previous = coordinator?.state.checkpoint;
+    if (
+      previous?.inputId !== undefined &&
+      previous.error === null &&
+      (await native.scanConversations({ ownerTaskId: coordinator!.id }, 1))
+        .items.length
+    ) {
+      const entry = await native.entry(previous.inputId);
+      frozen = (entry!.data as { snapshot: ViewReference }).snapshot;
+    }
     for (const task of selected) {
-      if (task.state.status === "terminal") continue;
+      if (!task.state.checkpoint) continue;
       const attemptId = crypto.randomUUID();
       const checkpoint: AttemptState = {
         ...task.state.checkpoint,
         attempts: task.state.checkpoint.attempts + 1,
         attemptId,
+        error: null,
         callDenied: false,
       };
       const inputId = await tx.entry(
@@ -473,7 +546,7 @@ export class Xean {
           attempt: checkpoint.attempts,
           ...(task.kind === COORDINATOR
             ? {
-                snapshot: reference(view(tx)),
+                snapshot: frozen ?? reference(view(tx)),
               }
             : {}),
         },
@@ -529,11 +602,28 @@ export class Xean {
           },
         },
         async (span) => {
-          const context = withTelemetryContext(span, active.context);
+          const context = active.context;
           const execution: Execution = {
             attemptId: item.attemptId,
             attempt,
             recorder: this.recorder(item, context, calls),
+            telemetry: span,
+            durable: {
+              taskId: runtime.taskId,
+              conversation: runtime.conversation,
+              snapshot: runtime.snapshot,
+              context: runtime.context,
+              registry: this.registry,
+              models: this.models,
+              async commit(change, context) {
+                let result: Awaited<ReturnType<typeof change>>;
+                await runtime.commit(async (tx) => {
+                  result = await change(tx);
+                  return undefined;
+                }, context);
+                return result!;
+              },
+            },
           };
           let result: JsonValue;
           if (item.task.kind === WORKER) {
@@ -555,6 +645,7 @@ export class Xean {
               ),
             );
           }
+          await this.joinOwned(runtime.taskId, context);
           if (calls.failure) throw calls.failure;
           if (calls.pending.size > 0)
             throw new Error("Role returned with unsettled provider calls");
@@ -582,8 +673,9 @@ export class Xean {
       await Promise.all(calls.pending);
       if (this.store.failure) throw error;
       if (this.closing || nativeContext.abortSignal?.aborted) return;
+      await this.joinOwned(runtime.taskId, BACKGROUND_CONTEXT, true);
       await this.store.mutateTask(runtime, async (tx, task) => {
-        if (task.state.status === "terminal") return;
+        if (task.state.status !== "running") return;
         const message = errorText(error);
         await tx.entry(
           "xean.attempt.failed",
@@ -605,8 +697,34 @@ export class Xean {
     } finally {
       active.cancel();
     }
-    if (await this.store.mutate((tx) => stopped(tx.state.status)))
-      this.store.harness.pause({ interrupt: true });
+  }
+
+  /** Pi owns descendant joins and aborts; shared publication waits for them. */
+  private async joinOwned(
+    taskId: TaskId,
+    context: Context,
+    abort = false,
+  ): Promise<void> {
+    const graph = await this.store.harness.taskGraph(context);
+    const conversations = graph.value.tasks[taskId]?.conversations ?? [];
+    const children = Object.values(graph.value.tasks).filter(
+      (task) => task.owner === taskId,
+    );
+    graph.dispose();
+    await Promise.all([
+      ...conversations.map(async (id) => {
+        const conversation = (await this.store.harness.conversation(
+          id,
+          context,
+        ))!;
+        if (abort) await conversation.abort(context, { background: true });
+        else await conversation.waitForIdle(context);
+      }),
+      ...children.map(async (child) => {
+        if (abort) await this.store.harness.abortTask(child.id, context);
+        await this.store.harness.waitForTask(child.id, context);
+      }),
+    ]);
   }
 
   private async failTask(
@@ -624,6 +742,10 @@ export class Xean {
     message: string,
   ): Promise<TerminalState | undefined> {
     if (task.state.status === "terminal") return;
+    if (!task.state.checkpoint)
+      throw new Error("Xean failure lost its attempt checkpoint");
+    if (stopped(tx.state.status))
+      return terminal(task, { status: "aborted", reason: tx.state.status });
     const outcome = { status: "failed" as const, error: { message } };
     if (task.kind === WORKER) return this.finishWorker(tx, task, outcome);
     if (tx.state.callLimitReached || task.state.checkpoint.callDenied) {
@@ -821,8 +943,7 @@ export class Xean {
       if (task.state.status !== "terminal" && task.id !== except) {
         tx.writeTask({
           ...task,
-          memos: undefined,
-          state: terminal(task, { status: "aborted", reason: status }),
+          abortRequested: true,
         });
       }
   }
@@ -832,8 +953,9 @@ export class Xean {
       if (tx.state.status !== "cancelled" && tx.state.status !== "completed")
         this.halt(tx, "cancelled", "Cancelled by user");
     });
-    this.store.harness.pause({ interrupt: true });
+    this.store.harness.resume();
     await this.store.harness.waitForQuiescence(BACKGROUND_CONTEXT);
+    this.store.harness.pause();
     return this.inspect();
   }
 
@@ -876,6 +998,7 @@ export class Xean {
                 ...task.state.checkpoint,
                 attempts: 0,
                 attemptId: null,
+                inputId: undefined,
                 error: null,
               },
             },

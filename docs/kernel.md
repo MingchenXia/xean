@@ -1,20 +1,19 @@
 # Xean kernel
 
 Xean coordinates durable work over Pi's storage and execution APIs. The current
-foundation pins matching packages from one tested Pi main commit and uses the
+foundation pins matching packages to the Pi 1.0.0 release commit and uses the
 public `pi-durable` storage contract.
 The [glossary](glossary.md) defines the shared terminology and code spellings.
 
 ## Responsibilities
 
-| Component       | Responsibility                                                                                                         |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `pi-ai`         | Models, providers, request conversion, streaming, authentication options, and transport retries                        |
-| `pi-agent-core` | Agent and tool loops chosen by a role                                                                                  |
-| Chord           | Native invocation context, cooperative cancellation, and prepared immutable campaign-state changes                     |
-| `pi-durable`    | Task dispatch, cancellation, joining, recovery, records, IDs, atomic storage batches, and the SQLite schema            |
-| `pi-telemetry`  | Optional native spans supplied through `XeanOptions.telemetry`                                                         |
-| Xean            | Concurrent admission, sequential Coordinator decisions, whole-worker publication, campaign limits, and recovery policy |
+| Component      | Responsibility                                                                                                         |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `pi-ai`        | Models, providers, request conversion, streaming, authentication options, and transport retries                        |
+| Chord          | Native invocation context, cooperative cancellation, and prepared immutable campaign-state changes                     |
+| `pi-durable`   | Conversations, model and tool tasks, dispatch, cancellation, joining, recovery, records, atomic batches, and SQLite    |
+| `pi-telemetry` | Optional native spans supplied through `XeanOptions.telemetry`                                                         |
+| Xean           | Concurrent admission, sequential Coordinator decisions, whole-worker publication, campaign limits, and recovery policy |
 
 Pi Harness executes tasks through the [local controls](pi-alignment.md#durable-integration)
 that let Xean supply admission and publication policy. The kernel introduces no workflow language or plugin sandbox.
@@ -48,14 +47,25 @@ A role supplies a `name` and `run(input, execution, context)`, which returns JSO
 `execution` supplies the attempt ID, one-based `attempt` ordinal, and call recorder.
 Roles can use the ordinal to reject unsafe whole-worker replay. `context` is Chord's
 native `Context`, with cancellation on `context.abortSignal`. Xean always
-supplies that signal. Pi's public `getTelemetryContext(context)` helper from
-`@earendil-works/pi-agent-core/harness/context` retrieves the attempt's telemetry
-span. Pass these values directly to Pi's model and agent APIs.
+supplies that signal. `execution.telemetry` supplies the native Pi attempt span.
+Pass it as `telemetryContext` to Pi's model and agent APIs.
 Each role chooses its execution implementation, models, and tools. Pi-backed
-roles use Pi's native loop, while research functions invoke Codex with its own
-tools. The kernel has no campaign-wide model setting. A tool and a scheduled
+solver roles use Pi Durable conversations, while research and the solver's
+[Codex worker](solver.md#codex-worker) invoke Codex with its own tools.
+The kernel has no campaign-wide model setting. A tool and a scheduled
 role may call the same async function. Scheduling through the kernel supplies
 the durable request and atomic publication boundary.
+
+`execution.durable` exposes the owning task ID, invocation-bound `commit`,
+`conversation`, `snapshot`, and `context` operations, and the host's native
+Registry and Models collection. A role installs its extension and creates a
+conversation owned by that task, selecting the extension in the creating
+transaction. On recovery, native descendants wait until the owner is active
+and every selected extension is installed. The role removes its extension when
+the invocation ends. Pi retains the conversation and its checkpoints in storage.
+The kernel's Harness disables automatic compaction and generation retries and
+executes tool rounds sequentially. Roles select their own models and use the
+call recorder for every provider request.
 
 Coordinator implements `run(signal, view, execution, context)`, receiving a
 committed campaign view and the same execution and Chord context types.
@@ -74,8 +84,10 @@ same logical work, including its completed result. Reusing its ID with different
 content rejects the whole decision. Repeating a failed work ID retains its
 failure. Coordinator uses a new ID when it chooses to try that work again.
 
-Worker attempts use their original immutable input. Coordinator attempts receive
-a snapshot of committed state at the start of each attempt. The attempt-start
+Worker attempts use their original immutable input. A new Coordinator invocation
+receives a snapshot of committed state. Recovery that resumes its private
+conversation retains the original snapshot. An explicit retry of a blocked
+Coordinator starts with a fresh view. The attempt-start
 entry records enough information to recover that exact input before invocation.
 Worker inputs and completed results remain in their Pi task records.
 Coordinator checkpoints retain their attempt-start entry ID. These entries freeze mutable view fields and reference those immutable
@@ -123,6 +135,11 @@ responses, attempts, and usage, remain inspectable.
 Completed work exposes its `publicationId`, which orders that commit against
 external input receipts. The solver uses this order when projecting corrections.
 
+Private conversations commit their transcripts, tool results, and documents as
+they run. The kernel joins owned work before publishing the role's result.
+These private commits leave the shared campaign result unchanged. On failure,
+Pi aborts and joins descendants before Xean publishes the failure receipt.
+
 A Coordinator decision commits its next state, consumes its pending signal,
 and admits all new work together. A failed decision admits no partial work
 batch. Coordinator attempts run sequentially while workers continue concurrently.
@@ -141,9 +158,10 @@ may be repeated after interruption.
 A role returns logical outcomes as JSON, including unsuccessful outcomes that
 Coordinator should consider. Only an explicitly thrown `TransientError` opts
 into automatic retry for a known temporary execution failure. Close or crash
-recovery also retries interrupted attempts. These retries repeat the whole
-worker or Coordinator invocation within `limits.attempts`, which counts the
-initial attempt too. Pi retains its transport retries inside each logical
+recovery also reenters interrupted invocations within `limits.attempts`, which
+counts the initial invocation too. A role using private conversations resumes
+their committed progress, including completed tool results. Other roles repeat
+their invocation. Pi retains its transport retries inside each logical
 provider call. Roles may also use its bounded assistant-call recovery through
 `auditedStream`, retaining the current invocation while repeating one response.
 
@@ -154,6 +172,8 @@ An ordinary Coordinator exception or exhausted Coordinator allowance records
 `blocked` rejects new input. Explicit `resume()` renews the failed Coordinator
 signal's attempt allowance and records its previous checkpoint, preserving the
 signal ID, accepted input receipts, completed work, and immutable attempt history.
+The retry receives a fresh Coordinator view. Roles distinguish resuming private
+work from starting another request after a terminal failure.
 Call caps remain in force. If a concurrent worker reaches the call cap while
 the campaign is blocked, add calls with `extendCalls()` before `resume()`.
 During provider-call draining,
@@ -192,16 +212,19 @@ acceptance policy.
 | `close()`                  | Interrupts active execution, waits for it to settle, and closes storage without cancelling the logical campaign |
 
 Pause preserves queued work and completion signals for resumption. An active
-Coordinator can finish registering work that remains queued. Cancellation
-uses cooperative abort signals. Roles and their tools must honor
+Coordinator can finish registering work that remains queued. Native descendants
+of admitted work continue during pause and call-cap draining. They occupy their
+owner's concurrency slot. Cancellation marks the ownership tree and Pi aborts
+it from the leaves upward. Roles and their tools must honor
 those signals for prompt shutdown. Xean rejects a late result after cancellation
 even if its role ignores the signal. `cancel()` and `close()` wait for active
 execution to settle. A role that ignores cancellation can therefore keep them
 waiting. Forceful process termination belongs to the supervising application.
 
 An attempt remains active until its admitted provider calls finish settlement.
-A failure cancels sibling calls and joins their accounting before releasing the
-attempt. Returning with a pending admission or unsettled call fails the worker.
+A failure cancels sibling calls and joins their accounting and private work
+before releasing the attempt. Returning with a pending admission or unsettled
+call fails the worker.
 A settlement error also prevents success, even if the role handles that error.
 `auditedStream` owns settlement on all response and error paths. Direct recorder
 users must settle every successful admission, including after `recordRequest()`
@@ -326,15 +349,17 @@ That error reaches the caller after rollback and leaves the instance usable;
 it does not automatically retry the operation. Other commit errors remain fatal.
 Unchanged state requires no document write. The document's `checkpointWhen`
 keeps full bases as the persistence format.
-The internal `PiTask` type represents those task records. Their native
-`checkpoint` field stores `AttemptState` for whole-attempt recovery. Private
-execution checkpoints remain deferred.
+The internal `PiTask` type represents Xean worker and Coordinator records.
+Their native `checkpoint` field stores `AttemptState`. Pi's generation and tool
+tasks retain their own checkpoints and stay outside the campaign's work and
+signal projection. Private transcripts and documents remain available through
+Pi's conversation APIs.
 
-Xean's campaign state and campaign document use format version 9. Earlier formats
+Xean's campaign state and campaign document use format version 11. Earlier formats
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 9. The durable patch
+version 1. Solver declarations independently use version 12. The durable patch
 adds Harness policy hooks, pause, and quiescence, exposes native task-record
 mutation for atomic domain transitions, and retains entry attribution. The
 [alignment notes](pi-alignment.md#durable-integration) describe these local extensions.
@@ -372,9 +397,17 @@ as Pi pages are read. Returning `undefined` omits that record. Status retains on
 call identity and usage through this callback. Full inspection remains the default.
 Separate calls to `inspect()` and `records()` do not provide that guarantee.
 The CLI's `inspect`, `status`, and `export` use independent read-only connections.
+`inspect --allow-uninitialized` returns `{ "campaign": null }` when SQLite is
+empty or Pi storage exists before campaign initialization commits. The library
+reports this state with `UninitializedCampaignError`. Missing files, foreign
+sessions, corruption, and incompatible versions remain errors.
 Lifecycle and solver input commands use the running owner's local Unix socket;
-without an owner, those commands acquire ownership. Opening an interrupted
-campaign for execution or mutation can write recovery records; reading it cannot.
+without an owner, those commands acquire ownership. Runners can assign
+`--owner-id ID` when starting execution and use `--expected-owner-id ID` on
+live commands. The serving owner checks the ID before mutation. Conditional
+commands fail if that owner has ended or been replaced, with no offline fallback.
+Opening an interrupted campaign for execution or mutation can write recovery
+records. Reading it cannot.
 `:memory:` is supported for isolated runs and tests without a sidecar lock.
 Keep the database and retained `-wal` and `-shm` files together for read-only
 inspection. Live backups must include SQLite's committed WAL data. Copying the
@@ -394,6 +427,9 @@ configured. Power-loss behavior has not been tested.
 The local checks also exercise concurrent workers, both reactive and
 group-waiting Coordinators, failed decisions, pause, cancellation, limits,
 acceptance, and provider accounting with offline fixtures. An end-to-end test
-runs Pi's native provider parser and tool loop through file-backed storage,
-interrupts a provider call, and verifies settlement and whole-worker recovery.
+runs Pi Durable conversations through file-backed storage and interrupts a
+provider call after a completed tool. It checks settlement before close and
+private recovery without repeating that tool.
+Native-child fixtures cover checkpoint recovery, frozen Coordinator inputs,
+exhausted attempt allowances, cancellation, pause, and call-cap draining.
 No paid campaign is required to validate the foundation.

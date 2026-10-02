@@ -6,7 +6,6 @@
       "name": "xean",
       "dependencies": {
         "@earendil-works/chord": "catalog:",
-        "@earendil-works/pi-agent-core": "catalog:",
         "@earendil-works/pi-ai": "catalog:",
         "@earendil-works/pi-durable": "catalog:",
         "@earendil-works/pi-telemetry": "catalog:",
@@ -37,7 +36,6 @@
       "version": "3.0.0-dev.0",
       "dependencies": {
         "@earendil-works/chord": "catalog:",
-        "@earendil-works/pi-agent-core": "catalog:",
         "@earendil-works/pi-ai": "catalog:",
         "@earendil-works/pi-durable": "catalog:",
         "@earendil-works/pi-telemetry": "catalog:",
@@ -62,22 +60,20 @@
     },
   },
   "patchedDependencies": {
-    "@earendil-works/pi-ai@vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-ai-0.99.2.tgz": "patches/@earendil-works%2Fpi-ai@0.99.2.patch",
-    "@earendil-works/pi-durable@vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-durable-0.99.2.tgz": "patches/@earendil-works%2Fpi-durable@0.99.2.patch",
+    "@earendil-works/pi-ai@vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-ai-1.0.0.tgz": "patches/@earendil-works%2Fpi-ai@1.0.0.patch",
+    "@earendil-works/pi-durable@vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-durable-1.0.0.tgz": "patches/@earendil-works%2Fpi-durable@1.0.0.patch",
   },
   "overrides": {
     "@earendil-works/chord": "catalog:",
-    "@earendil-works/pi-agent-core": "catalog:",
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-durable": "catalog:",
     "@earendil-works/pi-telemetry": "catalog:",
   },
   "catalog": {
-    "@earendil-works/chord": "file:vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-chord-0.99.2.tgz",
-    "@earendil-works/pi-agent-core": "file:vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-agent-core-0.99.2.tgz",
-    "@earendil-works/pi-ai": "file:vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-ai-0.99.2.tgz",
-    "@earendil-works/pi-durable": "file:vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-durable-0.99.2.tgz",
-    "@earendil-works/pi-telemetry": "file:vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-telemetry-0.99.2.tgz",
+    "@earendil-works/chord": "file:vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-chord-1.0.0.tgz",
+    "@earendil-works/pi-ai": "file:vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-ai-1.0.0.tgz",
+    "@earendil-works/pi-durable": "file:vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-durable-1.0.0.tgz",
+    "@earendil-works/pi-telemetry": "file:vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-telemetry-1.0.0.tgz",
     "execa": "10.0.1",
     "typebox": "1.3.27",
   },
@@ -124,15 +120,13 @@
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 
-    "@earendil-works/chord": ["@earendil-works/chord@vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-chord-0.99.2.tgz", { "dependencies": { "esbuild": "0.28.2" } }, "sha512-a3a39Y2h7Ku9EPYf1qigR2GTPijtL3zgbv0KQmVXTI468OsGfWF5+S3I4tapI6PCp9zEGlCKEhgiFqywxjYppg=="],
+    "@earendil-works/chord": ["@earendil-works/chord@vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-chord-1.0.0.tgz", { "dependencies": { "esbuild": "0.28.2" } }, "sha512-Ha3ERGwE/kbImM0bakEMaVzsjpDe/nE+A3GmU7gG6Wh7AzGb3UfsxfWzu2k1nNdW73zjsMt1TAjB/5nG0SGhVg=="],
 
-    "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-agent-core-0.99.2.tgz", { "dependencies": { "@earendil-works/chord": "^0.99.2", "@earendil-works/pi-ai": "^0.99.2", "@earendil-works/pi-telemetry": "^0.99.2", "diff": "8.0.4", "ignore": "7.0.8", "typebox": "1.3.27", "yaml": "2.9.0" } }, "sha512-ZKiXxzDz8deCzyEAjphB87x2V81soaWqmXnn+rBbnI40dEtNEJlKu7+2MWNE90CuD7ewLqo6kBA9Rjeg8h4V5Q=="],
+    "@earendil-works/pi-ai": ["@earendil-works/pi-ai@vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-ai-1.0.0.tgz", { "dependencies": { "@anthropic-ai/sdk": "0.124.0", "@aws-sdk/client-bedrock-runtime": "3.1127.0", "@earendil-works/pi-telemetry": "^1.0.0", "@google/genai": "2.21.0", "@smithy/node-http-handler": "4.12.1", "http-proxy-agent": "9.1.0", "https-proxy-agent": "9.1.0", "openai": "7.19.0", "partial-json": "0.1.7", "typebox": "1.3.27" }, "bin": { "pi-ai": "dist/cli.js" } }, "sha512-29LeQNctYL1I9MJDTSsKxwvDyyh5vjBY004wuMszslDtCWmb1bQO6E+ARcSa4wQhltFaH0N7imDkY6kwWBq+oQ=="],
 
-    "@earendil-works/pi-ai": ["@earendil-works/pi-ai@vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-ai-0.99.2.tgz", { "dependencies": { "@anthropic-ai/sdk": "0.124.0", "@aws-sdk/client-bedrock-runtime": "3.1127.0", "@earendil-works/pi-telemetry": "^0.99.2", "@google/genai": "2.21.0", "@smithy/node-http-handler": "4.12.1", "http-proxy-agent": "9.1.0", "https-proxy-agent": "9.1.0", "openai": "7.19.0", "partial-json": "0.1.7", "typebox": "1.3.27" }, "bin": { "pi-ai": "dist/cli.js" } }, "sha512-4BFpYbhD0dhvfSJH4Wn6n/szGjdhUwz///LJJxLRWHwsd0oIfTiwZNz4TIOLHHrie4qZxBZUcE40xT+dklgTrA=="],
+    "@earendil-works/pi-durable": ["@earendil-works/pi-durable@vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-durable-1.0.0.tgz", { "dependencies": { "@earendil-works/chord": "^1.0.0", "@earendil-works/pi-ai": "^1.0.0", "diff": "8.0.4", "typebox": "1.3.27" } }, "sha512-xVUbeJPz1kkba9HtuLiZMFphRZwhr6jvrF+B4cfy7ZIW4OvgpGNLp822ZKLy9CafqbgxsIH4xw4awZxQlJkODA=="],
 
-    "@earendil-works/pi-durable": ["@earendil-works/pi-durable@vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-durable-0.99.2.tgz", { "dependencies": { "@earendil-works/chord": "^0.99.2", "@earendil-works/pi-ai": "^0.99.2", "diff": "8.0.4", "typebox": "1.3.27" } }, "sha512-sGRcFFRqJmpuixv1ql9BKCAp9n5Q+Gr9B+DI7QtSd/YMu2tvOFMMzCFCPXvHU7SyUFeU8I7NdMvfh5gb4oY3MA=="],
-
-    "@earendil-works/pi-telemetry": ["@earendil-works/pi-telemetry@vendor/pi/8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d/earendil-works-pi-telemetry-0.99.2.tgz", {}, "sha512-Cz7WGl2DQWGAlBp5gH3ouDOMDhDevwbB2hwESmO2HWRu7/XV8vHnJCE72JMsGBRO1WSrejQpICR85NhtqnHI9w=="],
+    "@earendil-works/pi-telemetry": ["@earendil-works/pi-telemetry@vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-telemetry-1.0.0.tgz", {}, "sha512-b5aqwRbBHHGs4S29y0TyeDBJd7eRCMyToj69DzqsVgCZgokJPUepVNw9FNjEmSUDYvpgKUrJZmSICS7c0gxRwQ=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.28.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ=="],
 
@@ -324,8 +318,6 @@
 
     "human-signals": ["human-signals@8.0.1", "", {}, "sha512-eKCa6bwnJhvxj14kZk5NCPc6Hb6BdsU9DZcOnmQKSnO1VKrfV0zCvtttPZUsBvjmNDn8rpcJfpwSYnHBjc95MQ=="],
 
-    "ignore": ["ignore@7.0.8", "", {}, "sha512-YYNsSlXBjMk92SKnkwvB5LOVSa6OznlFUGcsvrFgNJbJCd0M1XKeFVRc8ZByeCqz32FivYNHJVooLmdqrmvp/Q=="],
-
     "is-plain-obj": ["is-plain-obj@4.1.0", "", {}, "sha512-+Pgi+vMuUNkJyExiMBt5IlFoMyKnr5zhJ4Uspz58WOhBF5QoIZkFyNHIbBAtHwzVAgk5RtndVNsDRN61/mmDqg=="],
 
     "is-stream": ["is-stream@4.0.1", "", {}, "sha512-Dnz92NInDqYckGEUJv689RbRiTSEHCQ7wOVeALbkOz999YpqT46yMRIGtSNl2iCL1waAZSx40+h59NV/EwzV/A=="],
@@ -405,8 +397,6 @@
     "xean-cli": ["xean-cli@workspace:packages/cli"],
 
     "xean-observe": ["xean-observe@workspace:packages/observe"],
-
-    "yaml": ["yaml@2.9.0", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="],
 
     "yoctocolors": ["yoctocolors@2.2.0", "", {}, "sha512-xYqdZFUK/VYazNl/oCDYN+3WloWQwMfZxBoiNt6qNyk+xfOdi598muWE42rNZFp1kNOiqW936q5RhUdnpqElSg=="],
 

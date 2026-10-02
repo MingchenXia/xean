@@ -129,6 +129,7 @@ export function codexResearch(
   options: CodexOptions = { model: "gpt-6-astra" },
   usagePrefix?: string,
 ): Research {
+  options = { ...options, workspace: undefined };
   return {
     retrieval: true,
     async source(input, execution, context) {

@@ -1,4 +1,3 @@
-import { getTelemetryContext } from "@earendil-works/pi-agent-core/harness/context";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,10 +11,13 @@ import {
 } from "@earendil-works/pi-ai";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import {
-  convertToLlm,
-  runAgentLoop,
-  type AgentTool,
-} from "@earendil-works/pi-agent-core";
+  AssistantEntry,
+  configure,
+  defineExtension,
+  defineTool,
+  GenerationTask,
+  hook,
+} from "@earendil-works/pi-durable";
 import { InMemoryTelemetryContext } from "@earendil-works/pi-telemetry";
 import {
   Xean,
@@ -43,7 +45,7 @@ function response(item: object): Response {
   );
 }
 
-test("native Pi tools wait for settlement and survive close as one retried worker", async () => {
+test("native private recovery retains completed tools and waits for provider settlement", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-agent-"));
   const path = join(directory, "campaign.sqlite");
   const telemetry = new InMemoryTelemetryContext();
@@ -110,67 +112,98 @@ test("native Pi tools wait for settlement and survive close as one retried worke
   });
   const options: XeanOptions = {
     task: "Add 1 and 2 with a tool",
-    limits: { attempts: 2, providerCalls: 4 },
+    limits: { attempts: 2, providerCalls: 3 },
     telemetry,
     roles: [
       {
         name: "agent",
         async run(input, execution, context) {
-          const add: AgentTool<typeof parameters> = {
+          const host = execution.durable!;
+          host.models.setProvider({
+            ...models.getProvider(model.provider)!,
+            getModels: () => [model],
+          });
+          const add = defineTool({
             name: "add",
-            label: "Add",
             description: "Add two integers",
             parameters,
-            execute: async (_id, values) =>
-              getTelemetryContext(context).startSpan(
-                { name: "fixture.add" },
-                () => {
-                  toolAttempts.push(execution.attemptId);
-                  return {
-                    content: [
-                      {
-                        type: "text" as const,
-                        text: String(values.left + values.right),
-                      },
-                    ],
-                    details: null,
-                  };
-                },
-              ),
-          };
-          try {
-            const messages = await runAgentLoop(
-              [{ role: "user", content: String(input), timestamp: 0 }],
-              { messages: [], tools: [add] },
-              {
-                model,
-                convertToLlm,
-                apiKey: "offline-fixture-key",
-                fetch: fixtureFetch,
-                maxRetries: 0,
-                sessionId: execution.attemptId,
-                telemetryContext: getTelemetryContext(context),
-              },
-              () => {},
-              context.abortSignal,
-              auditedStream(models, {
-                async begin(identity) {
-                  const call = await execution.recorder.begin(identity);
-                  return {
-                    recordRequest: call.recordRequest,
-                    async settle(message, usage) {
-                      await call.settle(message, usage);
-                      if (requests.length === 1) {
-                        settled.resolve();
-                        await releaseSettlement.promise;
-                      }
+            replay: "safe",
+            execute: async (values) =>
+              execution.telemetry!.startSpan({ name: "fixture.add" }, () => {
+                toolAttempts.push(execution.attemptId);
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: String(values.left + values.right),
                     },
-                  };
-                },
+                  ],
+                  details: null,
+                };
               }),
-            );
+          });
+          const extension = defineExtension({
+            name: `fixture.agent.${host.taskId}`,
+            tools: [add],
+            hooks: [
+              hook(GenerationTask, {
+                beforeRequest: () => ({
+                  options: {
+                    apiKey: "offline-fixture-key",
+                    fetch: fixtureFetch,
+                    maxRetries: 0,
+                    sessionId: execution.attemptId,
+                    telemetryContext: execution.telemetry,
+                  },
+                  stream: auditedStream(models, {
+                    async begin(identity) {
+                      const call = await execution.recorder.begin(identity);
+                      return {
+                        recordRequest: call.recordRequest,
+                        async settle(message, usage) {
+                          await call.settle(message, usage);
+                          if (requests.length === 1) {
+                            settled.resolve();
+                            await releaseSettlement.promise;
+                          }
+                        },
+                      };
+                    },
+                  }),
+                }),
+              }),
+            ],
+          });
+          host.registry.install(extension);
+          try {
+            const id = await host.commit(async (tx) => {
+              const prior = (
+                await tx.scanConversations({ ownerTaskId: host.taskId }, 1)
+              ).items[0];
+              if (prior) return prior.id;
+              const conversation = await tx.createConversation({
+                ownership: { kind: "task", taskId: host.taskId },
+              });
+              await configure(tx, conversation.id, {
+                model: { provider: model.provider, modelId: model.id },
+                extensions: [extension],
+              });
+              return conversation.id;
+            }, context);
+            const conversation = (await host.conversation(id, context))!;
+            const completed = await (
+              await conversation.submit(
+                { type: "input", requestId: "add", content: String(input) },
+                context,
+              )
+            ).wait(context);
             context.abortSignal!.throwIfAborted();
-            const last = messages.at(-1);
+            expect(completed.status).toBe("done");
+            const entry = await host.commit(
+              (tx) => tx.entry(AssistantEntry, completed.answer!),
+              context,
+            );
+            const last = entry?.model?.[0];
             if (last?.role !== "assistant" || last.stopReason !== "stop")
               throw new Error("Agent did not finish successfully");
             return last.content
@@ -178,6 +211,7 @@ test("native Pi tools wait for settlement and survive close as one retried worke
               .map((part) => part.text)
               .join("");
           } finally {
+            host.registry.uninstall(extension);
             cleanupSessionResources(execution.attemptId);
           }
         },
@@ -242,7 +276,7 @@ test("native Pi tools wait for settlement and survive close as one retried worke
     expect(completed).toMatchObject({
       status: "completed",
       result: "3",
-      providerCalls: 4,
+      providerCalls: 3,
       pendingSignals: 0,
     });
     expect(completed.work[0]).toMatchObject({
@@ -254,14 +288,12 @@ test("native Pi tools wait for settlement and survive close as one retried worke
       requests.map((body) =>
         body.input.some((item) => item.type === "function_call_output"),
       ),
-    ).toEqual([false, true, false, true]);
-    // Whole-worker recovery repeats the deterministic tool, not just the last call.
-    expect(new Set(toolAttempts).size).toBe(2);
-    expect(toolAttempts).toHaveLength(2);
+    ).toEqual([false, true, true]);
+    expect(toolAttempts).toHaveLength(1);
     const records = await engine.records();
     expect(
       records.filter((record) => record.kind === "xean.call.settled"),
-    ).toHaveLength(4);
+    ).toHaveLength(3);
     expect(
       records.filter(
         (record) =>
@@ -272,22 +304,22 @@ test("native Pi tools wait for settlement and survive close as one retried worke
 
     const spans = telemetry.getSpans();
     const workers = spans.filter((span) => span.name === "xean.worker");
-    expect(workers.map((span) => span.attributes["xean.attempt"])).toEqual(
-      toolAttempts,
-    );
+    expect(workers).toHaveLength(2);
+    expect(workers[0]!.attributes["xean.attempt"]).toBe(toolAttempts[0]);
+    expect(workers[1]!.attributes["xean.attempt"]).not.toBe(toolAttempts[0]);
     expect(
       spans
         .filter((span) => span.name === "fixture.add")
         .map((span) => span.parentId),
-    ).toEqual(workers.map((span) => span.id));
+    ).toEqual([workers[0]!.id]);
     expect(spans.every((span) => span.settled)).toBe(true);
 
     await engine.close();
     engine = await Xean.open(await openXeanStorage(path), options);
     expect(await engine.run()).toEqual(completed);
     expect(await engine.records()).toEqual(records);
-    expect(requests).toHaveLength(4);
-    expect(toolAttempts).toHaveLength(2);
+    expect(requests).toHaveLength(3);
+    expect(toolAttempts).toHaveLength(1);
   } finally {
     releaseSettlement.resolve();
     await engine?.close();

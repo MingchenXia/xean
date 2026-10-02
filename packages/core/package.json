@@ -14,7 +14,6 @@
     "@earendil-works/pi-durable": "catalog:",
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-telemetry": "catalog:",
-    "@earendil-works/pi-agent-core": "catalog:",
     "execa": "catalog:",
     "typebox": "catalog:"
   }

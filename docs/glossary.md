@@ -21,18 +21,20 @@ Pi names when referring to Pi APIs. Historical artifacts keep their original nam
 
 `PiTask` is the internal Pi task record for work or a Coordinator signal.
 Its native `checkpoint` field contains Xean's `AttemptState`: attempt count,
-identity, error, call-denial state, and the Coordinator's frozen input reference. Resuming private worker progress from a
-checkpoint remains deferred. `recordRequest()` only records a call payload.
+identity, error, call-denial state, and the Coordinator's frozen input reference.
+Pi generation and tool checkpoints recover private execution. Conversation
+documents retain accepted submissions and consumed reads. `recordRequest()`
+only records a call payload.
 
-Chord's native `Tracker` owns campaign-state revisions. A draft is its private
-mutable view; a prepared change is an immutable candidate that Store adopts only
-after the SQL commit succeeds. These describe state ownership, not another work
-or scheduling concept.
+Pi's `Session` owns campaign-document drafts, prepares changes with Chord, and
+adopts them after the SQL commit succeeds. A draft is a private mutable view,
+and a prepared change is an immutable candidate for that commit.
 
-A Pi storage session groups campaign records. A Pi model session holds a
-conversation and provider resources for a call sequence. Neither changes a
-campaign's lifetime. Native history entries record operations, while signals
-also carry an obligation for Coordinator to process them.
+A Pi storage session groups campaign records. A durable conversation retains
+the private transcript and model/tool progress. A provider transport session
+holds invocation-local connection resources. These lifetimes are distinct from
+the campaign's lifetime. Native history entries record operations, while
+signals also carry an obligation for Coordinator to process them.
 
 A round in a bounded solver experiment is one Coordinator planning invocation
 and its dispatched work. Handling a signal without planning consumes no round.
@@ -46,10 +48,13 @@ This distinguishes the experiment's search allowance from its model-call count.
 | Note and support       | A note draft becomes shared mathematical memory on publication. The projected `Note` adds its durable ID and verification state. Its `support` lists notes whose results it uses. Reading alone creates no dependency. `summary` is the index view, `detailedSummary` preserves claims, conditions, and gaps, and `text` is the authoritative full note.                            |
 | Imported note          | A note supplied by a caller through `submit`. Its projected `imported` flag establishes correctness and sources by caller trust, with verified support still required. This distinguishes trusted input from generated mathematics without inventing verifier checks.                                                                                                               |
 | Premises and evidence  | `premises` lists external claims requiring source checks. Explicit hypothetical antecedents remain in the conditional claim, not this list. `ResearchReport.passages` records the current bindings. Reusable `SourceEvidence` preserves a quotation and its original premise as `statement`.                                                                                        |
-| Candidate              | A claimed solution awaiting verification. `candidate: true` marks the last note in an Explorer or external submission batch. The flag grants no verification or acceptance.                                                                                                                                                                                                         |
+| Candidate              | A claimed solution awaiting verification. `candidate: true` marks the last note in an Explorer, Codex worker, or external submission batch. The flag grants no verification or acceptance.                                                                                                                                                                                          |
 | Verdict and acceptance | A check returns PASS, FAIL, or INCONCLUSIVE. A note is verified when checks or caller import establish correctness and sources over verified support. Acceptance also requires requirements PASS and reconstruction PASS for the result and its generated dependency chain. Trusted imported support remains an assumption. An accepted solution completes the mathematical search. |
 
 `Settings` holds configuration. `PiRuntime` supplies resolved models and profiles.
+The [Codex worker](solver.md#codex-worker) is the optional `codex` role for
+implementation assignments. Its workspace retains files outside the campaign
+database, while its published notes enter the ordinary verification process.
 Reconstruction proves a set of exact statements independently in one batch. Statement extraction preserves claims and definitions while withholding proof methods. Each successful check retains its statement, permitted external premises, and proof for reuse. Export assembles the accepted
 notes into an argument. Source checking evaluates external premises, while
 independent review audits the whole argument separately.

@@ -122,6 +122,11 @@ if (import.meta.main) {
   );
   if (offline) {
     assert.notEqual(settings.literature, true);
+    assert.equal(
+      settings.codex,
+      undefined,
+      "Codex worker cannot enforce closed-book execution",
+    );
     assert.notEqual(
       settings.profiles.explorer?.provider,
       chatGptWebProviderId,
@@ -134,7 +139,7 @@ if (import.meta.main) {
     settings,
     offline
       ? offlineResearch
-      : (ready) => codexResearch(settings.research, ready.usagePrefix),
+      : codexResearch(settings.research, settings.usagePrefix),
   );
   const rounds = limitRounds(solver, directory, allowance);
   const options: XeanOptions = {

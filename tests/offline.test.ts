@@ -120,6 +120,18 @@ test("closed-book runner honors omitted literature defaults and reopens without 
     expect(rejected.stderr.toString()).toContain(
       "ChatGPT Web cannot enforce closed-book execution",
     );
+    await writeFile(
+      join(directory, "settings.json"),
+      JSON.stringify({
+        profiles: { default: { provider: "openai", model: "unavailable" } },
+        codex: { model: "unused", workspace: directory },
+      }),
+    );
+    const codexRejected = invoke();
+    expect(codexRejected.exitCode).not.toBe(0);
+    expect(codexRejected.stderr.toString()).toContain(
+      "Codex worker cannot enforce closed-book execution",
+    );
   } finally {
     await rm(directory, { recursive: true });
   }

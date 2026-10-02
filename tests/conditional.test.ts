@@ -2,14 +2,13 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { Execution, JsonValue } from "../packages/core/src/types.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
 import type { Note, Source } from "../packages/core/src/solve/contracts.ts";
 import { refresh } from "../packages/core/src/solve/notes.ts";
 import { codexResearch } from "../packages/core/src/solve/research.ts";
-import { fixtureRuntime } from "./fixtures/pi.ts";
+import { invoke, fixtureRuntime } from "./fixtures/pi.ts";
 
 test("conditional hypotheses remain claims while external results require sources and acceptance requires the exact task", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-conditional-"));
@@ -198,14 +197,17 @@ test("conditional hypotheses remain claims while external results require source
         environment: { HOME: directory, PATH: process.env.PATH },
       }),
     );
-    const result = await solver.functions.verifier(
+    const result = await invoke(
+      solver.functions.verifier,
       {
         task,
         notes,
-        targets: notes.map(({ id }) => ({ id, through: "reconstruction" })),
+        targets: notes.map(({ id }) => ({
+          id,
+          through: "reconstruction" as const,
+        })),
       },
       execution,
-      BACKGROUND_CONTEXT,
     );
     if (result.kind !== "verification")
       throw new Error("Expected verification");
@@ -231,10 +233,10 @@ test("conditional hypotheses remain claims while external results require source
       { verified: false, dead: true, accepted: false },
       { verified: true, dead: false, accepted: false },
     ]);
-    const reconstructed = await solver.functions.reconstruct(
+    const reconstructed = await invoke(
+      solver.functions.reconstruct,
       { task, notes, targets: ["n1"] },
       execution,
-      BACKGROUND_CONTEXT,
     );
     expect(reconstructed.checks[0]!.reconstruction).toMatchObject({
       verdict: "PASS",
@@ -398,10 +400,10 @@ test("reconstruction uses unchanged source premises, rejects extractor replaceme
     attempt: 1,
     recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
   };
-  const verified = await solver.functions.verifier(
+  const verified = await invoke(
+    solver.functions.verifier,
     { task, notes: [note], targets: [{ id: "n1", through: "requirements" }] },
     execution,
-    BACKGROUND_CONTEXT,
   );
   if (verified.kind !== "verification")
     throw new Error("Expected verification");
@@ -409,10 +411,10 @@ test("reconstruction uses unchanged source premises, rejects extractor replaceme
   expect(calls).toEqual(["correctness", "source", "requirements"]);
   calls.length = 0;
   const reconstruct = (notes: Note[], target = "n1") =>
-    solver.functions.reconstruct(
+    invoke(
+      solver.functions.reconstruct,
       { task, notes, targets: [target] },
       execution,
-      BACKGROUND_CONTEXT,
     );
   for (const verdict of [undefined, "FAIL", "INCONCLUSIVE"] as const) {
     const blocked = structuredClone(note);

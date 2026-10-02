@@ -20,13 +20,12 @@ import { auditedStream, reportedPiUsage } from "../packages/core/src/pi";
 import type { CallIdentity, CallRecorder } from "../packages/core/src/calls";
 import { piRuntime, readSettings } from "../packages/core/src/solve/config.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
-import { ask } from "../packages/core/src/solve/pi.ts";
 import { createRoles } from "../packages/core/src/solve/roles.ts";
 import { validateNotes } from "../packages/core/src/solve/notes.ts";
 import { offlineResearch } from "../scripts/bounded-solve.ts";
 import type { Note, Plan } from "../packages/core/src/solve/contracts.ts";
 import { Xean, type Limits } from "../packages/core/src/index.ts";
-import { fixtureRuntime, model } from "./fixtures/pi.ts";
+import { ask, invoke, fixtureRuntime, model } from "./fixtures/pi.ts";
 const context = {
   messages: [{ role: "user" as const, content: "Test", timestamp: 0 }],
 };
@@ -425,12 +424,14 @@ function recording() {
 
 test("roles recover missing submissions once without accepting prose or bypassing response limits", async () => {
   const prose = fauxAssistantMessage('{"answer":7}');
-  const valid = fauxAssistantMessage([
-    fauxToolCall("submit_result", { answer: 7 }),
-  ]);
-  const invalid = fauxAssistantMessage([
-    fauxToolCall("submit_result", { answer: "not a number" }),
-  ]);
+  const valid = fauxAssistantMessage(
+    [fauxToolCall("submit_result", { answer: 7 })],
+    { stopReason: "toolUse" },
+  );
+  const invalid = fauxAssistantMessage(
+    [fauxToolCall("submit_result", { answer: "not a number" })],
+    { stopReason: "toolUse" },
+  );
   for (const { replies, calls, maxResponses, error } of [
     { replies: [prose, invalid, valid], calls: 3 },
     {
@@ -486,8 +487,12 @@ test("roles recover missing submissions once without accepting prose or bypassin
 test("roles hand off valid private submissions and never continue a rejected one", async () => {
   const state = recording();
   const replies = [
-    fauxAssistantMessage([fauxToolCall("submit_result", { answer: 1 })]),
-    fauxAssistantMessage([fauxToolCall("submit_result", { answer: 7 })]),
+    fauxAssistantMessage([fauxToolCall("submit_result", { answer: 1 })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage([fauxToolCall("submit_result", { answer: 7 })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("No further progress."),
   ];
   let turn = 0;
@@ -741,7 +746,6 @@ test("Responses preserves cache boundaries and tool definitions when reading end
           tools: [
             {
               name: "read_notes",
-              label: "Read notes",
               description: "Read complete notes by ID",
               parameters: Type.Object({ ids: Type.Array(Type.String()) }),
               async execute() {
@@ -931,7 +935,10 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     throw new Error("Oversized input must not reach the provider");
   };
   const runtime = fixtureRuntime((input) => respond(input));
-  const explore = (input: unknown, options: Parameters<typeof ask>[7] = {}) =>
+  const explore = (
+    input: unknown,
+    options: Parameters<typeof ask<typeof schema>>[7] = {},
+  ) =>
     ask(
       runtime,
       "explorer",
@@ -943,6 +950,9 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
       options,
     );
   await expect(explore("x".repeat(100_000))).rejects.toThrow("context");
+  runtime.profiles.explorer.options = { deferred: true };
+  await expect(explore({})).rejects.toThrow("Deferred model requests");
+  runtime.profiles.explorer.options = undefined;
   expect(state.calls).toHaveLength(0);
   let submissions = 0;
   respond = () => {
@@ -1027,6 +1037,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
         String(input.messages.find((m) => m.role === "user")!.content),
       );
       expect(prompt.capabilities).toEqual({
+        codex: false,
         literature: false,
         sourceRetrieval: false,
       });
@@ -1080,7 +1091,8 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     literature: true,
   });
   expect(
-    await roles.coordinator(
+    await invoke(
+      roles.coordinator,
       {
         task: { problem: "P", completionCriteria: "Prove P" },
         notes: [note, imported, rejected],
@@ -1089,13 +1101,41 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
         literatureUsed: false,
       },
       execution,
-      BACKGROUND_CONTEXT,
     ),
   ).toEqual(plan);
   expect(state.calls).toHaveLength(7);
-  await expect(
-    roles.literature(null!, execution, BACKGROUND_CONTEXT),
-  ).rejects.toThrow("disabled");
+  await expect(invoke(roles.literature, null!, execution)).rejects.toThrow(
+    "disabled",
+  );
+});
+
+test("Responses recovery uses HTTP status instead of transient words in terminal errors", async () => {
+  for (const [status, message, expectedCalls] of [
+    [400, "Unsupported timeout parameter", 1],
+    [404, "Model custom-500 is not available", 1],
+    [503, "Provider temporarily unavailable", 2],
+  ] as const) {
+    const state = recording();
+    let requests = 0;
+    const models = fixtureModels(() => {
+      requests++;
+      return new Response(
+        JSON.stringify({ error: { type: "fixture_error", message } }),
+        { status, headers: { "content-type": "application/json" } },
+      );
+    });
+    const result = await auditedStream(models, state.recorder, {
+      enabled: true,
+      maxRetries: 1,
+      baseDelayMs: 0,
+    })({ ...model, api: "openai-responses" }, context).result();
+    expect(result.stopReason).toBe("error");
+    expect(requests).toBe(expectedCalls);
+    expect(state.calls).toHaveLength(expectedCalls);
+    expect(
+      state.calls.every((call) => call.message?.stopReason === "error"),
+    ).toBe(true);
+  }
 });
 
 test("turn recovery stops at its allowance, refused admission, cancellation, and invalid requests", async () => {

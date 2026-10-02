@@ -6,6 +6,7 @@ import { Database, constants } from "bun:sqlite";
 import type { Storage } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { UninitializedCampaignError } from "./types.ts";
 
 /** Pi supplies statements, transactions, and records; Xean configures owned connections. */
 export async function openXeanStorage(
@@ -50,6 +51,8 @@ export async function openXeanStorage(
     cleanup.defer(database.close.bind(database));
     if (readOnly) {
       await database.exec("BEGIN");
+      if (!(await database.get("SELECT 1 FROM sqlite_schema LIMIT 1")))
+        throw new UninitializedCampaignError();
     } else {
       // Read-only WAL connections need these files after the owner closes.
       if (

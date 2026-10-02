@@ -1,7 +1,8 @@
 # Mathematical solver
 
-Xean's solver runs Explorer, Coordinator, literature, and verification over the
-existing kernel. The task contains only `problem` and `completionCriteria`.
+Xean's solver runs Explorer, Coordinator, verification, and optional literature
+and Codex workers over the existing kernel. The task contains only `problem`
+and `completionCriteria`.
 Settings and the exact task are frozen in the CLI campaign declaration.
 Private requester and catalog metadata stay outside the solver payload.
 The [philosophy](philosophy.md) states the research principles and trust model.
@@ -17,6 +18,9 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
   returns. A `candidate` claim, an empty submission, prose after a valid
   submission, or `maxExplorerResponses` ends the worker. Every completed response
   counts toward that limit, and each follow-up states how many remain.
+  Notes should help continue the exact task. Task-permitted background may be
+  reused with its hypotheses stated and uncertain claims or sources flagged for
+  checking. Background proofs are useful when they advance that task.
 - Coordinator chooses work and supplies guidance to Explorer. It may dispatch
   several independent workers, with at most one Explorer in the built-in
   implementation. It waits for that group before choosing more work.
@@ -44,6 +48,10 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
   or source gap, rather than a general survey. Task-granted assumptions and
   self-contained arguments need no survey. The startup setting remains the
   authority for availability. This search limit belongs to the built-in Coordinator.
+- The optional [Codex worker](#codex-worker) implements assignments with native
+  shell and file tools. Coordinator supplies the assignment and selects note IDs.
+  The worker returns ordinary unverified notes and may nominate a candidate.
+  It chooses its own implementation and tools.
 
 A supporting note becomes verified when its correctness and sources are
 established over verified support, through checks or caller import. A later
@@ -231,9 +239,10 @@ proposals. Immutable worker results and call records retain the original payload
 ## Research
 
 Pi roles use role-specific system instructions, JSON user messages, and a typed
-`submit_result` tool. Explorer continuation stays in the same Pi conversation;
-each verification check starts its own conversation. Prompts preserve Xean's
-exact-task, dependency, and independent-proof principles in shorter form.
+`submit_result` tool. Explorer continuation stays in the same Pi conversation.
+Each Pi verification stage has its own conversation, reused during recovery.
+Prompts preserve Xean's exact-task, dependency, and independent-proof principles
+in shorter form.
 If a response ends without a tool call, Xean requests the missing submission
 once in the same conversation and session. A second omission fails the invocation.
 After a valid submission, a response without a tool call hands off the submitted
@@ -266,9 +275,22 @@ consume the completed-response allowance. Completed encrypted reasoning from
 OpenAI Responses and Codex Responses survives an interrupted response. Failed
 text, unfinished reasoning, and tool calls are omitted from the retry input.
 Exhaustion, insufficient context, or refused admission fails the
-invocation and publishes no partial mathematical result. This recovery is local
-to a live invocation. Reopening after process death restarts the worker, except
-that a recovered ChatGPT Web worker fails before sending another browser request.
+invocation and publishes no partial mathematical result. This response recovery
+is local to a live invocation. Across process restarts, Pi resumes the role's
+private conversation: completed generations and tool results remain in its
+transcript, accepted submissions and consumed reads remain in its document, and
+the response allowance is derived from the transcript. An interrupted request
+may run again and requires a new call admission. ChatGPT Web fails before
+resending an interrupted browser request.
+
+Each Pi stage has a private conversation owned by the worker or Coordinator.
+Reopening a composite verifier reuses successful Pi stages and resumes the
+unfinished stage with its original input. A logical retry of a terminal failure
+gets a fresh conversation. The worker still publishes one complete result and
+one Coordinator signal together. Pi role functions require the execution context
+supplied by a campaign. Standalone CLI role commands use this same path. Library
+callers can use Pi's `MemoryStorage` for an ephemeral campaign; only persistent
+storage survives process restarts. Codex subprocesses retain whole-worker recovery.
 
 Codex research uses developer instructions, JSON stdin, and an output schema.
 Its source/review schema requires `correction`, with `null` meaning no edit;
@@ -293,7 +315,7 @@ next request: the invocation fails, and a Coordinator failure blocks the campaig
 The estimate is conservative, and Codex Responses does not enforce an output
 token cap on the wire. An oversized task and complete note index require a
 larger-context model. No mathematical text is silently truncated,
-and this adds neither a spending budget nor private checkpoint recovery.
+and no token or dollar budget is imposed.
 
 Codex implements literature, source verification, and independent full-proof
 review. It owns the search and reading tools used inside those functions. Pi
@@ -374,6 +396,47 @@ remain distinct from Pi's usage structure, and no price is invented.
 The [verification procedure](kernel-smoke.md) separates execution and accounting
 checks from evidence about difficult mathematical judgments.
 
+### Codex worker
+
+Configure `settings.codex` to let Coordinator request implementation work:
+
+```json
+{
+  "kind": "codex",
+  "assignment": "Implement and check the construction in the selected note.",
+  "notes": ["w3-1/n1"]
+}
+```
+
+The library freezes the exact task, assignment, and full selected notes with
+their transitive support. An empty `notes` array is allowed. Dead notes remain
+available for diagnosis and cannot supply mathematical support. The worker
+uses the ordinary note schema and dependency validation. Its notes must state
+the findings, relevant program and output evidence, reasoning, and limitations
+needed for verification. Execution success supplies no mathematical verdict.
+
+Each invocation creates a fresh retained directory below `codex.workspace`,
+writes its frozen input to `input.json`, and runs Codex there with native shell
+tools and the `workspace-write` sandbox. Native web search is disabled for this
+role. Codex uses its native project-instruction loading and configuration for
+its tools and execution environment. Literature, source checking, and review
+retain their separate read-only invocation settings.
+
+The result's `workspace` field and each full note record the artifact directory.
+Artifact filenames and rerun commands belong in note text, while `support`
+contains mathematical note IDs. Keep the artifact tree with the campaign and
+restore its recorded paths when moving a run. Files remain external to SQLite:
+verification reads the evidence in notes, and argument export includes note
+text without collecting artifact files. Directories survive failed and
+cancelled invocations too. Recovery starts a fresh directory and repeats the
+whole worker under the [kernel recovery contract](kernel.md#results-and-execution-failures).
+
+Operators provide any supervised tools needed for resource-heavy execution.
+The worker is instructed to report missing facilities instead of launching heavy
+work locally. Xean uses its existing admission, call accounting, cancellation,
+and atomic note publication. Files and remote effects follow the kernel's
+[external-effect contract](kernel.md#atomic-publication).
+
 ### Closed-book experiments
 
 The [bounded runner](../scripts/bounded-solve.ts) accepts
@@ -384,7 +447,8 @@ statement, hypotheses, and application. Forbidden black boxes remain defects.
 Uncertain or otherwise unresolved external premises stay INCONCLUSIVE until
 proved in notes. This uses the existing correctness batch and adds no model call.
 Mathematical roles have no browsing, shell, or filesystem tools. Model inference
-still uses the configured endpoint.
+still uses the configured endpoint. The runner rejects `settings.codex` and
+ChatGPT Web Explorer because those paths do not enforce closed-book execution.
 
 These campaigns use `xean.solve.offline` and require the same runner and flag
 when reopening for execution. CLI inspection and accepted-argument export
@@ -443,12 +507,8 @@ export, offline input commands, and reopening completed work do not construct
 the Pi model runtime. `inspect`, `status`, and `export` use independent read-only
 database connections, including while a campaign is running. `inspect --records`
 returns campaign state and journal records from the same SQLite snapshot.
-`status` uses the same coherent snapshot for a shorter JSON report: campaign
-state, work counts, pending signals, note progress, call allowance, and usage by
-provider/model/API. Native numeric usage fields retain their names; overlapping
-fields are not combined into a new token total. Settled calls without counts and
-unsettled calls are counted separately. Price estimates and complete provider-bill
-reconciliation are outside this report.
+`status` supplies the [compact report](#checking-status) from the same coherent
+snapshot.
 
 `pause` stops new admission and waits for admitted work to finish. `run` leaves a
 paused campaign paused; use `resume` to continue it. `cancel` interrupts active
@@ -480,6 +540,66 @@ Luna at max reasoning and forty logical calls. It saves
 the campaign and accepted argument under ignored `runs/`, then reopens without
 a credential and checks that no work or records change. The failed-attempt
 artifacts are also retained.
+
+### Checking status
+
+Use the source checkout and Bun runtime recorded by the run's launcher. For a
+frozen run, invoke those paths explicitly:
+
+```sh
+/path/to/frozen/bun --no-install --no-env-file /path/to/frozen/xean/packages/cli/src/index.ts status /path/to/run/campaign.sqlite
+```
+
+For a remote run, execute the same command on its host through SSH or in its
+recorded worker allocation. Runtime discovery belongs to the launcher or
+operator. Historical campaigns keep their original readers and report fields.
+Opening them with current `main` is not an upgrade procedure.
+
+The CLI report includes `observedAt`, campaign state, work counts, pending
+signals, imported and generated note counts, and `acceptedNoteId`. A solver
+campaign is internally accepted only when `status` is `completed`. Standalone
+role and review campaigns can complete with a FAIL or INCONCLUSIVE result.
+
+`verification` counts each note's effective committed verdict at each stage.
+`trusted` identifies imported trust without a model verdict. `unchecked` means
+no verdict or import trust at that stage, including checks not required for
+that note. These counts differ from fully verified notes, which also require
+verified dependencies. Earlier judgments remain in the full inspection.
+
+`activity` shows active work before queued work, with each worker's ID, role,
+status, and attempt count. Use `inspect` for its frozen input. Results become
+shared only when the worker publishes its complete result. `failures` lists
+failed work in reverse request order. Each work list contains at most ten items with an
+explicit `omitted` count. Diagnostics are previews of at most 500 characters,
+ending in an ellipsis when shortened. Full proofs, prompts, and logs stay out
+of this report.
+
+Call totals include unsettled calls and settled calls without measured usage.
+`calls.byModel` retains native numeric field names and shows at most ten groups,
+with `byModelOmitted` for the remainder. Overlapping usage fields are not added
+into a new token total. Price estimates and provider-bill reconciliation remain
+outside this report.
+
+Library callers use the same projection:
+
+```ts
+import { inspectCampaign } from "xean";
+import { statusReport, usageRecord } from "xean/report";
+
+const report = statusReport(await inspectCampaign(path, usageRecord));
+```
+
+Use `inspect CAMPAIGN` for an explicit detailed read, `inspect --records` for
+execution evidence, and `export CAMPAIGN` for the accepted argument. Capture
+large output to a file before selecting the needed detail.
+
+For repeated observation, use the existing
+[Observe publisher and compact API](../packages/observe/README.md#compact-status):
+the publisher's `--watch` updates snapshots while the caller or observer owns
+any completion notification. Read a snapshot's observation time and `stale`
+flag before reporting it as current. Campaign acceptance, process state, and
+an independent-review receipt are separate evidence. Observe supplies the
+latter two alongside the compact campaign report.
 
 ## External notes, guidance, and corrections
 
@@ -772,7 +892,7 @@ reasoning, add:
 
 The `research` object requires `model` when present. Its optional `command`
 selects another executable or launcher. Relative launcher paths resolve against
-the calling directory before execution enters its temporary directory; bare
+the calling directory before execution enters its working directory. Bare
 command names use `PATH`. The optional `profile` selects
 a native Codex profile. Codex resolves login and provider settings normally from
 `CODEX_HOME` or `~/.codex`. Ordinary Pi role credentials remain separate.
@@ -780,6 +900,24 @@ Current Codex profiles use `$CODEX_HOME/NAME.config.toml` with top-level setting
 The retired `[profiles.NAME]` layout is rejected by the deployed CLI. Follow the
 [native profile documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles)
 and smoke-test the configured research path before a long run.
+
+To enable the [Codex worker](#codex-worker), add a separate configuration:
+
+```json
+{
+  "codex": {
+    "model": "gpt-6-astra",
+    "reasoning": "max",
+    "workspace": "/absolute/path/to/campaign-artifacts"
+  }
+}
+```
+
+`codex` requires `model` and an absolute `workspace` directory. Its optional
+`command`, `profile`, and `reasoning` use the same native Codex configuration
+described above. Omit `codex` to disable the worker. The workspace is created
+only during execution. Qualify the configured tools and workspace in the
+deployed environment before a long run.
 
 With `usagePrefix`, the role sets `XEAN_CODEX_USAGE_TAG` to the recorded attempt
 tag. Configure the native gateway provider to forward it. Xean does not rewrite
@@ -796,14 +934,20 @@ X-Codex-LB-Required-Capability = "usage_tag_v1"
 The `xean/solve` export provides `createSolver`, `createRoles`, the native Pi
 runtime configuration, and note projection. Roles remain ordinary functions.
 The selected `Research` implementation declares its `retrieval` capability.
-Coordinator sees whether source retrieval and literature are available. A
-disabled external capability cannot be delegated to Explorer. Its reader
+Coordinator sees whether source retrieval, literature, and the Codex worker are
+available. A disabled external capability cannot be delegated to Explorer. Its reader
 only accesses internal frozen notes. Codex failures expose stderr as their
 diagnostic, while the journal retains the complete process output.
+
 `createSolver` and `campaignOptions` accept either a `PiRuntime` or a factory
-`() => PiRuntime`. A supplied factory runs once, on the first role invocation.
-Opening, inspecting, validating commands, and exporting committed work do not
-invoke it.
+`() => PiRuntime`. A supplied factory runs once, when a role first needs a Pi
+model. Codex workers, literature, and review run without constructing Pi profiles
+or requiring their credentials. Opening, inspecting, validating commands, and
+exporting committed work also leave the factory unused. Supply a `Research`
+object to `createSolver`, using `codexResearch(options, usagePrefix)` for Codex
+attribution. `campaignOptions` accepts an optional third argument to override
+Codex attribution without changing frozen settings.
+
 `createSolver` returns kernel options whose `task` is a versioned solver
 declaration. Its `task.task` holds the mathematical task. Direct library campaigns
 therefore enforce the same format boundary as CLI campaigns when reopened or
@@ -813,14 +957,14 @@ projected. Keep older campaigns on their original runtime.
 
 Library callers can replace implementations before opening a campaign:
 
-| Replace                                                 | Public entry point                                                                        | What remains built in                                                                  |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Explorer, Verifier, literature                          | Assign `solver.functions.explorer`, `.verifier`, or `.literature` after `createSolver`    | Group scheduling, publication, note projection, and acceptance                         |
-| Planning                                                | Assign `solver.functions.coordinator`, accepting `CoordinationInput` and returning `Plan` | Signal handling and group scheduling                                                   |
-| Signal handling and scheduling                          | Supply `XeanOptions.coordinator`                                                          | Kernel admission, durable publication, lifecycle, and the selected acceptance callback |
-| Literature, source checking, independent review backend | Supply a `Research` object or factory to `createSolver`                                   | Built-in role procedures                                                               |
-| Models and providers                                    | Supply `PiRuntime` profiles and native Pi providers                                       | Built-in role procedures                                                               |
-| Standalone reconstruction or review                     | Call or replace `.reconstruct` or `.review` on the returned function set                  | Kernel publication when wrapped as a role                                              |
+| Replace                                                 | Public entry point                                                                               | What remains built in                                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Explorer, Verifier, literature, Codex                   | Assign `solver.functions.explorer`, `.verifier`, `.literature`, or `.codex` after `createSolver` | Group scheduling, publication, note projection, and acceptance                         |
+| Planning                                                | Assign `solver.functions.coordinator`, accepting `CoordinationInput` and returning `Plan`        | Signal handling and group scheduling                                                   |
+| Signal handling and scheduling                          | Supply `XeanOptions.coordinator`                                                                 | Kernel admission, durable publication, lifecycle, and the selected acceptance callback |
+| Literature, source checking, independent review backend | Supply a `Research` object to `createSolver`                                                     | Built-in role procedures                                                               |
+| Models and providers                                    | Supply `PiRuntime` profiles and native Pi providers                                              | Built-in role procedures                                                               |
+| Standalone reconstruction or review                     | Call or replace `.reconstruct` or `.review` on the returned function set                         | Kernel publication when wrapped as a role                                              |
 
 Replacing a planning function also replaces its validation policy, including the
 single-Explorer restriction. Replacement functions are trusted code and must
@@ -845,11 +989,16 @@ Standalone execution invokes those same functions:
 bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts role explorer INPUT.json ROLE.sqlite SETTINGS.json
 ```
 
-The role name may also be `coordinator`, `verifier`, `reconstruct`, or `literature`. Its input
-uses the exported TypeScript contract and includes `task`. A completed standalone
+The role name may also be `coordinator`, `verifier`, `reconstruct`, `literature`, or
+`codex`. Its input uses the exported TypeScript contract and includes `task`. A completed standalone
 role campaign records successful execution, not acceptance of a mathematical
 solution. Solver acceptance, a separate review of the full proof, and catalog
 closure remain distinct.
+
+For standalone Codex work, use `bun run xean role codex INPUT.json ROLE.sqlite SETTINGS.json`.
+Its `CodexInput` contains `{task, assignment, notes}`, where `notes` holds full
+note objects and their support, rather than the IDs in a Coordinator request.
+It requires `settings.codex` and uses the same retained-workspace procedure.
 
 `reconstruct` takes `ReconstructionInput`: `{task, notes, targets: string[]}`.
 It uses the same function as final verification and returns reconstruction checks
@@ -877,14 +1026,14 @@ The library is in `packages/core`, and the optional `xean-cli` app is in
 library APIs, including shared status reports from `xean/report`. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 11, with distinct solver, standalone-role, and review kinds. Only this
+version 12, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the
-campaign format. A read-only artifact reader remains future work.
+campaign format.
 
-Private checkpoints remain deferred. An interrupted composite verifier may repeat
-its unpublished calls. Completed worker results and checks survive restart.
+Completed Pi stages survive interruption before shared publication. Codex source
+checks inside a composite verifier may repeat until the whole worker publishes.
 
 ## Current verification
 

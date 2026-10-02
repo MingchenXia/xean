@@ -29,6 +29,7 @@ const declarationSchema = Type.Union([
       "verifier",
       "reconstruct",
       "literature",
+      "codex",
     ] as const),
     input: Type.Record(Type.String(), Type.Unknown()),
   }),
@@ -70,6 +71,7 @@ export async function loadDeclaration(storage: Storage): Promise<Declaration> {
 export function campaignOptions(
   value: Declaration,
   runtime: PiRuntime | (() => PiRuntime),
+  usagePrefix = value.settings.usagePrefix,
 ): XeanOptions {
   const declaration = readDeclaration(value);
   const settings = declaration.settings;
@@ -78,10 +80,11 @@ export function campaignOptions(
     runtime,
     {
       ...settings,
+      usagePrefix,
       chatGptSingleShot:
         settings.profiles.explorer?.provider === chatGptWebProviderId,
     },
-    (ready) => codexResearch(settings.research, ready.usagePrefix),
+    codexResearch(settings.research, usagePrefix),
   );
   const options: XeanOptions = {
     ...solver,

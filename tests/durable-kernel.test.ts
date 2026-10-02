@@ -1,0 +1,260 @@
+import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  awaitWithContext,
+  BACKGROUND_CONTEXT,
+} from "@earendil-works/chord/context";
+import {
+  configure,
+  defineTask,
+  ROOT_CONVERSATION_ID,
+  MemoryStorage,
+  type Extension,
+  type Task,
+} from "@earendil-works/pi-durable";
+import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import type { Execution, XeanOptions } from "../packages/core/src/types.ts";
+import type { Context } from "@earendil-works/chord";
+
+const latch = () => Promise.withResolvers<void>();
+
+async function privateWork<S extends { phase: string }>(
+  execution: Execution,
+  extension: Extension & { tasks: readonly Task<null, S, null, object>[] },
+  context: Context,
+) {
+  const api = execution.durable!;
+  api.registry.install(extension);
+  const id = await api.commit(async (tx) => {
+    const prior = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1))
+      .items[0];
+    if (prior) return prior.id;
+    const conversation = await tx.createConversation({
+      ownership: { kind: "task", taskId: api.taskId },
+    });
+    await configure(tx, conversation.id, { extensions: [extension] });
+    await tx.createTask(extension.tasks![0]!, null, {
+      conversationId: conversation.id,
+      ownership: { kind: "conversation" },
+    });
+    return conversation.id;
+  }, context);
+  return (await api.conversation(id, context))!;
+}
+
+for (const attempts of [1, 2])
+  test(`native private recovery preserves checkpoints, frozen input, and ${attempts} attempt allowance`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "xean-durable-"));
+    const path = join(directory, "campaign.sqlite");
+    const entered = latch();
+    const register = latch();
+    let recovering = false;
+    let preparations = 0;
+    let finishes = 0;
+    const views: unknown[] = [];
+    const extension = {
+      name: "private-fixture",
+      tasks: [
+        defineTask<null, { phase: "prepare" | "finish" }, null>({
+          name: "fixture.private",
+          version: 1,
+          initial: () => ({ phase: "prepare" }),
+          phases: {
+            async prepare(_task, runtime, context) {
+              preparations++;
+              await runtime.commit(
+                () => ({ status: "running", checkpoint: { phase: "finish" } }),
+                context,
+              );
+            },
+            async finish(_task, runtime, context) {
+              if (!recovering) {
+                entered.resolve();
+                await awaitWithContext(latch().promise, context);
+              }
+              finishes++;
+              await runtime.commit(
+                () => ({
+                  status: "terminal",
+                  outcome: { status: "completed", result: null },
+                }),
+                context,
+              );
+            },
+          },
+          async abort(_task, runtime, context) {
+            await runtime.commit(
+              () => ({ status: "terminal", outcome: { status: "aborted" } }),
+              context,
+            );
+          },
+        }),
+      ],
+    } satisfies Extension;
+    const options: XeanOptions = {
+      task: "frozen",
+      limits: { attempts },
+      roles: [],
+      coordinator: {
+        name: "private coordinator",
+        async run(signal, view, execution, context) {
+          if (signal.kind !== "start") return { state: view.state };
+          views.push(view.inputs);
+          if (recovering) await register.promise;
+          const conversation = await privateWork(execution, extension, context);
+          await conversation.waitForIdle(context);
+          execution.durable!.registry.uninstall(extension);
+          return { state: "finished" };
+        },
+      },
+    };
+    let engine = await Xean.open(await openXeanStorage(path), options);
+    try {
+      const first = engine.run();
+      await entered.promise;
+      await engine.input("arrived after the frozen prompt");
+      await engine.close();
+      await first;
+      recovering = true;
+      engine = await Xean.open(await openXeanStorage(path), options);
+      const second = engine.run();
+      if (attempts === 1) {
+        expect((await second).status).toBe("blocked");
+        expect(views).toEqual([[]]);
+        expect(finishes).toBe(0);
+        return;
+      }
+      while (views.length < 2)
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      expect(finishes).toBe(0);
+      register.resolve();
+      const result = await second;
+      expect(result.state).toBe("finished");
+      expect(result.pendingSignals).toBe(0);
+      expect(views).toEqual([[], []]);
+      expect(preparations).toBe(1);
+      expect(finishes).toBe(1);
+      expect(
+        (await engine.records()).filter(
+          (entry) => entry.kind === "xean.attempt.interrupted",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      register.resolve();
+      await engine.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+for (const stop of ["pause", "cancel", "limit"] as const) {
+  test(`${stop} joins native descendants before returning`, async () => {
+    const entered = latch();
+    const release = latch();
+    let aborted = 0;
+    let published = false;
+    const storage = new MemoryStorage();
+    const extension = {
+      name: "join-fixture",
+      tasks: [
+        defineTask<null, { phase: "run" }, null>({
+          name: "fixture.child",
+          version: 1,
+          initial: () => ({ phase: "run" }),
+          phases: {
+            async run(_task, runtime, context) {
+              entered.resolve();
+              await awaitWithContext(release.promise, context);
+              await runtime.commit(
+                () => ({
+                  status: "terminal",
+                  outcome: { status: "completed", result: null },
+                }),
+                context,
+              );
+            },
+          },
+          async abort(_task, runtime, context) {
+            aborted++;
+            await runtime.commit(
+              () => ({ status: "terminal", outcome: { status: "aborted" } }),
+              context,
+            );
+          },
+        }),
+      ],
+    } satisfies Extension;
+    const engine = await Xean.open(storage, {
+      task: "join",
+      limits: { providerCalls: stop === "limit" ? 0 : null },
+      roles: [
+        {
+          name: "worker",
+          async run(_input, execution, context) {
+            if (stop === "limit")
+              await expect(
+                execution.recorder.begin({
+                  provider: "fixture",
+                  id: "denied",
+                  api: "fixture",
+                }),
+              ).rejects.toThrow("Provider call limit reached");
+            if (stop === "pause") {
+              const api = execution.durable!;
+              api.registry.install(extension);
+              await api.commit(
+                (tx) =>
+                  tx.createTask(extension.tasks[0]!, null, {
+                    conversationId: ROOT_CONVERSATION_ID,
+                    ownership: { kind: "task", taskId: api.taskId },
+                  }),
+                context,
+              );
+            } else await privateWork(execution, extension, context);
+            // The kernel joins private work even if the role has its answer already.
+            return "private result";
+          },
+        },
+      ],
+      coordinator: {
+        name: "join coordinator",
+        run(signal) {
+          if (signal.kind === "completed") published = true;
+          return {
+            state: null,
+            ...(signal.kind === "start"
+              ? { dispatch: [{ id: "work", role: "worker", input: null }] }
+              : {}),
+          };
+        },
+      },
+    });
+    try {
+      const running = engine.run();
+      await entered.promise;
+      expect((await engine.inspect()).work[0]!.result).toBeNull();
+      const stopping = stop === "limit" ? running : engine[stop]();
+      if (stop !== "cancel") release.resolve();
+      const result = await stopping;
+      await running;
+      expect(result.work[0]!.status).toBe(
+        stop === "cancel" ? "cancelled" : "completed",
+      );
+      expect(aborted).toBe(stop === "cancel" ? 1 : 0);
+      expect(published).toBe(stop === "limit");
+      if (stop === "limit") expect(result.status).toBe("limited");
+      const tasks = (
+        await storage.scanTasks({}, 100, undefined, BACKGROUND_CONTEXT)
+      ).items;
+      expect(
+        tasks
+          .filter((task) => task.kind === "fixture.child")
+          .every((task) => task.state.status === "terminal"),
+      ).toBe(true);
+    } finally {
+      release.resolve();
+      await engine.close();
+    }
+  });
+}

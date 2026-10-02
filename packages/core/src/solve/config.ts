@@ -22,6 +22,7 @@ import {
   type Profile,
   type ProfileName,
 } from "./pi.ts";
+import { isAbsolute } from "node:path";
 const reasoning = Type.Optional(
   StringEnum(["minimal", "low", "medium", "high", "xhigh", "max"] as const),
 );
@@ -57,6 +58,12 @@ export const settingsSchema = object({
   maxExplorerReads: Type.Optional(positiveIntegerSchema),
   literature: Type.Optional(Type.Boolean()),
   research: Type.Optional(researchSchema),
+  codex: Type.Optional(
+    object({
+      ...researchSchema.properties,
+      workspace: Type.String({ minLength: 1 }),
+    }),
+  ),
   usagePrefix: Type.Optional(
     Type.String({
       pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.:/@+-]*$",
@@ -70,6 +77,8 @@ export const settingsSchema = object({
 export type Settings = Static<typeof settingsSchema>;
 export function readSettings(value: unknown): Settings {
   const settings = decode(settingsSchema, value);
+  if (settings.codex && !isAbsolute(settings.codex.workspace))
+    throw new Error("codex.workspace must be an absolute directory");
   // The scarce browser subscription must never become a fallback or verifier.
   for (const [name, profile] of Object.entries(settings.profiles)) {
     if (name !== "explorer" && profile?.provider === chatGptWebProviderId)

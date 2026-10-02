@@ -1,8 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import {
+  Type,
+  fauxAssistantMessage,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   Xean,
@@ -23,6 +27,15 @@ import {
   decode,
   type ResearchReport,
 } from "../packages/core/src/solve/contracts.ts";
+import {
+  campaignOptions,
+  createSolver,
+  declarationVersion,
+  project,
+  submitCommand,
+  type CodexInput,
+} from "../packages/core/src/solve/index.ts";
+import { fixtureRuntime } from "./fixtures/pi.ts";
 
 async function fixture(directory: string): Promise<CodexOptions> {
   const command = join(directory, "codex");
@@ -49,7 +62,13 @@ const schema = Type.Object(
   { answer: Type.Number() },
   { additionalProperties: false },
 );
-test("Codex native results and invalid-answer usage survive completed SQLite reopen", async () => {
+test.each(["research", "workspace"])(
+  "Codex %s results and invalid-answer usage survive completed SQLite reopen",
+  codexLifecycle,
+  15_000,
+);
+
+async function codexLifecycle(mode: string) {
   const directory = await mkdtemp(join(process.cwd(), ".xean-codex-test-"));
   const path = join(directory, "campaign.sqlite");
   const codex = await fixture(directory);
@@ -77,9 +96,13 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
               ),
             ).toMatchObject([{ noteId: "self", result: { verdict: "PASS" } }]);
           }
+          const workspace =
+            mode === "workspace"
+              ? await mkdtemp(join(directory, "workspace-"))
+              : undefined;
           return (
             await askCodex(
-              codex,
+              { ...codex, workspace },
               schema,
               "Return the answer",
               { mode: input },
@@ -302,26 +325,212 @@ test("Codex native results and invalid-answer usage survive completed SQLite reo
         kind: "codex-exec",
         model: "xean-fixture",
         reasoning: "max",
+        workspace: expect.any(String),
+        sandbox: mode === "workspace" ? "workspace-write" : "read-only",
+        shell: mode === "workspace",
+        webSearch: mode === "workspace" ? "disabled" : "live",
         prompt: JSON.stringify({ mode: "success" }),
       },
     });
     const calls = await readFile(join(directory, "invocations.jsonl"), "utf8");
-    const invocations = calls.trim().split("\n");
-    expect(invocations.map((line) => JSON.parse(line))).toEqual(
+    const invocations = calls
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(invocations).toEqual(
       result.work.map((work) => ({
         mode: work.id,
         profile: "fixture-profile",
         reasoning: 'model_reasoning_effort="max"',
-        shell: "features.shell_tool=false",
+        shell: `features.shell_tool=${mode === "workspace"}`,
+        webSearch: `web_search="${mode === "workspace" ? "disabled" : "live"}"`,
+        sandbox: mode === "workspace" ? "workspace-write" : "read-only",
+        workspace: expect.any(String),
+        schema: expect.any(String),
         codexHome: codex.environment!.CODEX_HOME,
         marker: "unchanged",
         usageTag: `xean-tests/${work.attemptId}`,
       })),
     );
+    for (const invocation of invocations) {
+      await expect(access(invocation.schema)).rejects.toThrow();
+      if (mode === "workspace") {
+        expect(
+          await readFile(join(invocation.workspace, "program.ts"), "utf8"),
+        ).toBe("console.log(25);\n");
+        expect(
+          await readFile(join(invocation.workspace, "output.txt"), "utf8"),
+        ).toBe(invocation.mode);
+      } else await expect(access(invocation.workspace)).rejects.toThrow();
+    }
     await engine.close();
     engine = await Xean.open(await openXeanStorage(path), options);
     expect(await engine.run()).toEqual(result);
     expect(await engine.records()).toEqual(records);
+    expect(await readFile(join(directory, "invocations.jsonl"), "utf8")).toBe(
+      calls,
+    );
+  } finally {
+    await engine.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test("Coordinator Codex work freezes support and publishes only valid unverified drafts", async () => {
+  const directory = await mkdtemp(join(process.cwd(), ".xean-codex-worker-"));
+  const codex = {
+    ...(await fixture(directory)),
+    workspace: join(directory, "artifacts"),
+  };
+  const task = {
+    problem: "Prove P",
+    completionCriteria: "Give a complete proof",
+  };
+  const draft = {
+    id: "n1",
+    summary: "Finite evidence",
+    detailedSummary: "P held in this finite test",
+    text: "program.ts produced output.txt; the general case remains open",
+    support: ["input/seed/n3"],
+  };
+  const replies = [
+    { notes: [draft], candidate: true },
+    { notes: [{ ...draft, support: ["missing"] }], candidate: false },
+    { notes: [], candidate: true },
+  ];
+  let plans = 0;
+  const solver = createSolver(
+    task,
+    fixtureRuntime((context, _options, selected) => {
+      expect(selected.id).toBe("coordinator");
+      const input = JSON.parse(
+        String(
+          context.messages.find((message) => message.role === "user")!.content,
+        ),
+      );
+      expect(input.capabilities.codex).toBe(true);
+      plans++;
+      return fauxAssistantMessage(
+        [
+          fauxToolCall("submit_result", {
+            work: replies.map((reply) => ({
+              kind: "codex",
+              assignment: JSON.stringify(reply),
+              notes: ["input/seed/n3"],
+            })),
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    }),
+    { codex },
+  );
+  let engine = await Xean.open(
+    await openXeanStorage(join(directory, "campaign.sqlite")),
+    { ...solver, limits: { providerCalls: 4 } },
+  );
+  try {
+    await submitCommand(engine, {
+      kind: "submit",
+      id: "seed",
+      candidate: false,
+      notes: ["base", "middle", "selected", "unrelated"].map((text, index) => ({
+        id: `n${index + 1}`,
+        summary: text,
+        detailedSummary: `Detail: ${text}`,
+        text: `Full argument: ${text}`,
+        support: index === 1 || index === 2 ? [`n${index}`] : [],
+      })),
+    });
+    const frozen = project(await engine.inspect()).slice(0, 3);
+    const result = await engine.run();
+    expect(plans).toBe(1);
+    expect(result.result).toBeNull();
+    expect(result.work.map((work) => work.status)).toEqual([
+      "completed",
+      "failed",
+      "failed",
+    ]);
+    expect(result.work[1]!.error).toContain(
+      "Unknown, dead, or forward support: missing",
+    );
+    expect(result.work[2]!.error).toContain(
+      "A solution claim needs a new note",
+    );
+    const generated = project(result).filter((note) => !note.imported);
+    expect(generated).toHaveLength(1);
+    expect(generated[0]).toMatchObject({
+      id: `${result.work[0]!.id}/n1`,
+      support: draft.support,
+      candidate: true,
+      verified: false,
+      accepted: false,
+      checks: [],
+    });
+    expect(generated[0]!.text).toContain(draft.text);
+    const invocations = (
+      await readFile(join(directory, "invocations.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as CodexInput & { workspace: string });
+    expect(new Set(invocations.map(({ workspace }) => workspace)).size).toBe(3);
+    for (const invocation of invocations) {
+      const input = { task, notes: frozen, assignment: invocation.assignment };
+      expect(invocation.notes).toEqual(frozen);
+      expect(
+        JSON.parse(
+          await readFile(join(invocation.workspace, "input.json"), "utf8"),
+        ),
+      ).toEqual(input);
+      expect(
+        await readFile(join(invocation.workspace, "program.ts"), "utf8"),
+      ).toBe("console.log(25);\n");
+      expect(
+        await readFile(join(invocation.workspace, "output.txt"), "utf8"),
+      ).toBe(invocation.assignment);
+      if (invocation.assignment === JSON.stringify(replies[0])) {
+        expect(result.work[0]!.result).toMatchObject({
+          workspace: invocation.workspace,
+        });
+        expect(generated[0]!.text).toContain(
+          `Artifacts: ${invocation.workspace}`,
+        );
+      }
+    }
+    await engine.close();
+    const standalone = campaignOptions(
+      {
+        kind: "xean.role",
+        version: declarationVersion,
+        role: "codex",
+        task,
+        input: { task, notes: frozen, assignment: JSON.stringify(replies[0]) },
+        settings: {
+          profiles: { default: { provider: "openai", model: "unused" } },
+          codex: {
+            model: codex.model,
+            command: codex.command,
+            workspace: codex.workspace,
+          },
+        },
+      },
+      () => {
+        throw new Error("Standalone Codex must not initialize Pi");
+      },
+    );
+    const path = join(directory, "standalone.sqlite");
+    engine = await Xean.open(await openXeanStorage(path), standalone);
+    const completed = await engine.run();
+    expect(completed).toMatchObject({
+      status: "completed",
+      providerCalls: 1,
+      result: { kind: "notes", candidate: true },
+    });
+    const calls = await readFile(join(directory, "invocations.jsonl"), "utf8");
+    await engine.close();
+    engine = await Xean.open(await openXeanStorage(path), standalone);
+    expect(await engine.run()).toEqual(completed);
     expect(await readFile(join(directory, "invocations.jsonl"), "utf8")).toBe(
       calls,
     );
@@ -420,6 +629,7 @@ test("close kills a Codex launcher and its resistant descendant and preserves ca
   const directory = await mkdtemp(join(tmpdir(), "xean-codex-cancel-"));
   const path = join(directory, "campaign.sqlite");
   const codex = await fixture(directory);
+  codex.workspace = await mkdtemp(join(directory, "workspace-"));
   const options: XeanOptions = {
     task: "cancel Codex",
     roles: [
@@ -476,6 +686,8 @@ test("close kills a Codex launcher and its resistant descendant and preserves ca
       await readFile(join(directory, "invocations.jsonl"), "utf8"),
     );
     expect(invocation.usageTag).toBe("caller-tag");
+    expect(invocation.shell).toBe("features.shell_tool=true");
+    expect(invocation.sandbox).toBe("workspace-write");
     await engine.close();
     await running;
     for (const pid of processes) {
@@ -489,7 +701,19 @@ test("close kills a Codex launcher and its resistant descendant and preserves ca
     const records = await engine.records();
     expect(
       records.find((entry) => entry.kind === "xean.call.request")!.data,
-    ).toMatchObject({ payload: { usageTag: "caller-tag" } });
+    ).toMatchObject({
+      payload: {
+        usageTag: "caller-tag",
+        workspace: codex.workspace,
+        sandbox: "workspace-write",
+        shell: true,
+        webSearch: "disabled",
+      },
+    });
+    expect(await readFile(join(codex.workspace, "output.txt"), "utf8")).toBe(
+      "wait",
+    );
+    await expect(access(invocation.schema)).rejects.toThrow();
     const settlements = records.filter(
       (entry) => entry.kind === "xean.call.settled",
     );

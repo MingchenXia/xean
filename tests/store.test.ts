@@ -3,8 +3,11 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
   createRegistry,
+  createSession,
+  defineDoc,
   defineTask,
   MemoryStorage,
+  ROOT_CONVERSATION_ID,
   StorageRejected,
 } from "@earendil-works/pi-durable";
 import {
@@ -12,7 +15,86 @@ import {
   campaignAddress,
   initialAttempt,
 } from "../packages/core/src/store.ts";
-import { campaignVersion } from "../packages/core/src/types.ts";
+import {
+  campaignVersion,
+  UninitializedCampaignError,
+  type CampaignState,
+} from "../packages/core/src/types.ts";
+
+const initial: CampaignState = {
+  version: campaignVersion,
+  task: "prepared changes",
+  coordinator: "fixture",
+  status: "running",
+  state: { count: 1 },
+  limits: { concurrency: 1, attempts: 1, providerCalls: null },
+  providerCalls: 0,
+  callAllowance: null,
+  callLimitReached: false,
+  result: null,
+  error: null,
+};
+
+test("Store rejects foreign conversations and session documents without a root", async () => {
+  const foreign = defineDoc({
+    kind: "foreign",
+    scope: "session",
+    version: 1,
+    initial: () => ({ retained: true }),
+  });
+  for (const kind of ["conversation", "document"]) {
+    const storage = new MemoryStorage();
+    const session = createSession(storage);
+    try {
+      await expect(Store.open(storage)).rejects.toBeInstanceOf(
+        UninitializedCampaignError,
+      );
+      await session.commit(async (tx) => {
+        if (kind === "conversation")
+          await tx.createConversation({ ownership: { kind: "ownerless" } });
+        else await tx.doc(foreign);
+      }, context);
+      const commit = spyOn(storage, "commit");
+      await expect(Store.open(storage)).rejects.toThrow("non-Xean session");
+      expect(commit).not.toHaveBeenCalled();
+      commit.mockRestore();
+    } finally {
+      await session.close(context);
+    }
+  }
+});
+
+test("Store rejects invalid startup before recovery and closes failed native initialization", async () => {
+  for (const failure of ["validation", "initialization"]) {
+    const storage = new MemoryStorage();
+    const commit = spyOn(storage, "commit");
+    const close = spyOn(storage, "close");
+    const fail = () => {
+      throw new Error(failure);
+    };
+    try {
+      await expect(
+        Store.open(
+          storage,
+          initial,
+          {
+            models: createModels(),
+            registry: createRegistry(),
+            conversationCreated:
+              failure === "initialization" ? fail : undefined,
+          },
+          failure === "validation" ? fail : undefined,
+        ),
+      ).rejects.toThrow(failure);
+      expect(commit).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledTimes(failure === "initialization" ? 1 : 0);
+    } finally {
+      commit.mockRestore();
+      close.mockRestore();
+      await storage.close(context);
+    }
+  }
+});
 
 test("Store snapshots entries and keeps rejected commits separate from uncertain commits", async () => {
   const storage = new MemoryStorage();
@@ -29,27 +111,22 @@ test("Store snapshots entries and keeps rejected commits separate from uncertain
       }),
     ],
   });
-  const store = await Store.open(
-    storage,
-    {
-      version: campaignVersion,
-      task: "prepared changes",
-      coordinator: "fixture",
-      status: "running",
-      state: { count: 1 },
-      limits: {
-        concurrency: 1,
-        attempts: 1,
-        providerCalls: null,
-      },
-      providerCalls: 0,
-      callAllowance: null,
-      callLimitReached: false,
-      result: null,
-      error: null,
-    },
-    { models: createModels(), registry },
+  const commit = spyOn(storage, "commit");
+  const store = await Store.open(storage, initial, {
+    models: createModels(),
+    registry,
+  });
+  expect(commit).toHaveBeenCalledTimes(1);
+  expect(commit.mock.calls[0]![0]).toEqual(
+    expect.arrayContaining([
+      { type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
+      expect.objectContaining({
+        type: "document.create",
+        record: expect.objectContaining({ kind: campaignAddress.kind }),
+      }),
+    ]),
   );
+  commit.mockRestore();
   const address = await storage.findDocument(
     campaignAddress,
     "current",

@@ -9,6 +9,13 @@ import { usageRecord } from "xean/report";
 import { readEvidence, readReview } from "./artifacts.ts";
 import { readSnapshot, snapshot, type Snapshot } from "./snapshot.ts";
 
+// Only disposable observation subprocesses have this refresh timeout.
+export const observationInterval = 10_000;
+const observationProcess = {
+  timeout: observationInterval,
+  forceKillAfterDelay: 1_000,
+};
+
 const reviewReceipt = Type.Script(
   {
     Text: Type.String({ pattern: "\\S" }),
@@ -57,18 +64,23 @@ export type Run = {
   error?: string;
 };
 
+function recordError(target: Pick<Run, "error">, error: unknown) {
+  target.error = [target.error, String(error)].filter(Boolean).join("\n");
+}
+
 export async function readRun(
   source: Source,
   fleet: string,
-  processObservation = source.job ? readProcess(source, fleet) : undefined,
+  processObservation?: ReturnType<typeof readProcess>,
+  signal?: AbortSignal,
 ): Promise<Run> {
+  processObservation ??= source.job
+    ? readProcess(source, fleet, signal)
+    : undefined;
   const run: Run = {
     id: source.id,
     source: `${source.host ? `${source.host}:` : ""}${source.directory}`,
     observedAt: new Date().toISOString(),
-  };
-  const reportError = (error: unknown) => {
-    run.error = [run.error, String(error)].filter(Boolean).join("\n");
   };
   let review: Awaited<ReturnType<typeof readReview>>;
   try {
@@ -100,6 +112,8 @@ export async function readRun(
                   "-",
                 ],
                 {
+                  ...observationProcess,
+                  cancelSignal: signal,
                   input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nawait Bun.write(Bun.stdout, JSON.stringify(await readEvidence(${JSON.stringify(source.directory)}, ${JSON.stringify(source.review)})));`,
                 },
               )
@@ -124,7 +138,7 @@ export async function readRun(
       run.observedAt = artifacts.at;
     }
   } catch (error) {
-    reportError(error);
+    recordError(run, error);
   }
   if (!source.host) review = await readReview(source.directory, source.review);
   if (source.review !== undefined) {
@@ -146,7 +160,7 @@ export async function readRun(
   if (processObservation) {
     const observation = await processObservation;
     run.process = observation.process;
-    if (observation.error) reportError(observation.error);
+    if (observation.error) recordError(run, observation.error);
   }
   return run;
 }
@@ -155,17 +169,15 @@ export async function readRun(
 export async function readProcess(
   source: Pick<Source, "job" | "task">,
   fleet: string,
+  signal?: AbortSignal,
 ): Promise<Pick<Run, "process" | "error">> {
   const observation: Pick<Run, "process" | "error"> = {};
-  const reportError = (error: unknown) => {
-    observation.error = [observation.error, String(error)]
-      .filter(Boolean)
-      .join("\n");
-  };
   try {
     if (source.job) {
       const nomad = (args: string[]) =>
         execa(resolve(fleet, "bin/fleet-nomad"), args, {
+          ...observationProcess,
+          cancelSignal: signal,
           stdin: "ignore",
           stripFinalNewline: false,
         }).then(({ stdout }) => stdout);
@@ -198,7 +210,7 @@ export async function readProcess(
               source.task ?? "solver",
             ]);
           } catch (error) {
-            reportError(error);
+            recordError(observation, error);
             return "";
           }
         };
@@ -210,7 +222,7 @@ export async function readProcess(
       }
     }
   } catch (error) {
-    reportError(error);
+    recordError(observation, error);
   }
   return observation;
 }

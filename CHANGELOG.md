@@ -6,12 +6,53 @@ The main branch is the current distribution. Existing numbered releases and
 tags remain historical archives. Pin the source commit and runtime for each
 campaign.
 
+- Initialize campaigns through Pi's native root initializer and retain custom
+  models when multiple role runtimes share a provider. Align execution guidance
+  with Durable private recovery and distinguish transport sessions from
+  persisted conversations. Move the gateway smoke and provider integration test
+  to Durable conversations and remove the unused `pi-agent-core` dependency.
+- Run built-in Pi roles as private Durable conversations. Reuse completed
+  generations, tools, and private submissions after interruption; retain frozen
+  input and read/response allowances. Publish shared notes only with the complete
+  worker result. Native child tasks drain and cancel with their owner. Campaign
+  format is now 11; historical runs retain their original runtime. Model roles
+  use the campaign's execution context, including standalone CLI roles; the
+  implicit per-call in-memory Harness is removed.
+- Add an optional generic Codex worker for implementation assignments. Coordinator
+  selects notes and their support, Codex uses native tools in a retained workspace,
+  and its findings enter the ordinary unverified-note and candidate paths.
+  Standalone Codex work uses the same role without initializing Pi. Closed-book
+  experiments reject this worker. Solver declarations now use version 12.
+  Start fresh campaigns and preserve
+  historical runtimes.
+- Clarify Explorer prompts to relate intermediate work and continuation to the
+  exact task, and permit reuse of task-allowed background with explicit hypotheses.
+  Mathematical acceptance and note visibility are unchanged.
+- Extend compact status reports with note origins, accepted note identity,
+  published verification summaries, and bounded work details. Add Observe's
+  compact status view and document using each campaign's frozen reader.
+  Observer snapshots use `xean-observe/v4` with a shared compact-report contract.
+  Historical snapshots require their original observer.
+- Pin Pi/Chord to release `1.0.0` (`a13d35a742c6`), adopting native lifecycle fixes.
+  Roles pass native telemetry through `Execution.telemetry`. Rebuild the retained artifacts twice
+  against the frozen model catalog and rebase the retained patches. Campaign
+  storage and solver declaration formats are unchanged by this upgrade.
+- Preserve HTTP error status for Pi's retry classifier, so permanent Responses
+  errors do not retry because their messages contain transport words.
+- Initialize Pi only for roles that need it. Codex review and literature use
+  their own credentials and retain explicit usage attribution.
+- Add conditional CLI owner IDs to reject stale lifecycle commands, and expose
+  uninitialized inspection for interrupted startup recovery. Preserve exact
+  owner IDs and reject foreign Pi storage even without a root conversation.
+- Isolate Observe source reads and configuration reloads. Bound read-only SSH
+  and Nomad observations and cancel them when the observer shuts down. Retain
+  late observations when their source is unchanged across configuration refreshes.
 - Record external premises as exact standalone claims before source checking,
   keeping application and validation commentary in reports. Reconstruction
   receives the approved strings unchanged, with explicit source status for its
   judge. Remove extracted premise indices, normalization, and the second stored
   premise list. Statement extraction now returns only the note's claim.
-  This changes the persisted solver payload: solver declarations now use
+  This changed the persisted solver payload and introduced solver declaration
   version 11. Start fresh campaigns with this source and
   retain frozen runtimes for historical campaigns. No migration is provided.
 - Enable Gemini model profiles through Pi's native Google provider and
@@ -24,7 +65,7 @@ campaign.
   structured checks, worker publication links, and direct run, note, and work
   URLs. Read independent-review receipts separately from campaign evidence.
   Refresh source configuration without restarting and share Nomad process reads
-  among runs in the same pool. Snapshots now use `xean-observe/v3`.
+  among runs in the same pool. This introduced `xean-observe/v3` snapshots.
 - Integrate the separate Xean Lab runner through public CLI, inspection, and
   reporting APIs. Freeze task, settings, and optional guidance bytes, retain
   immutable attempt records, and resume with keyed provider-call grants.
@@ -73,7 +114,7 @@ process. Existing campaign and observation formats are unchanged by this split.
 Notes now require `summary`, `detailedSummary`, and authoritative full `text`.
 Harmless corrections replace all three together. This changes public note and
 correction APIs, CLI input files, and persisted solver inputs. Solver declarations
-use version 11 and observer exports use `xean-observe/v3`. Keep historical
+use version 12 and observer exports use `xean-observe/v4`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
 - Pin all Pi/Chord packages to upstream main commit `8ce69e9d2b17`, preserving the

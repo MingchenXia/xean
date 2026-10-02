@@ -86,9 +86,11 @@ bin/fleet-nix run .#fleet-run -- ../xean/packages/observe/src/server.ts /absolut
 
 Open <http://127.0.0.1:8797>. The listener is local, with a read-only JSON API at
 `/api/runs` and `/api/runs/RUN_ID`. Configured IDs are the only addressable runs.
-Collection requests share an in-flight read and a ten-second cache. The server
-reloads the configuration on refresh, so updating the source list requires no
-restart. Invalid configuration leaves the browser's last received view visible
+Each source shares its own in-flight read and ten-second cache. Individual run
+requests wait only for that source. Configuration reloads independently, so a
+stalled source cannot prevent its removal. SSH and Nomad observation subprocesses
+time out after ten seconds and are cancelled on server shutdown. These limits
+apply to read-only observation commands. Invalid configuration leaves the browser's last received view visible
 with an error. Removing a selected run makes its URL unavailable.
 Within each refresh, runs with the same Nomad job and task share one process
 observation. Failed process reads are retried on the next refresh.
@@ -103,10 +105,29 @@ for a malformed selected artifact. Each run displays the age and source of its e
 Nomad's process status is separate from the campaign's last observed state.
 An old snapshot saying `running` alone does not establish process liveness.
 
+### Compact status
+
+For routine agent checks, request a compact status for the selected run:
+
+```sh
+curl -fsS 'http://127.0.0.1:8797/api/runs/RUN_ID?view=status'
+```
+
+`/api/runs?view=status` returns the same view for every configured run. It reuses
+the full view's cached reads and includes campaign status, accepted note ID,
+note and verification counts, bounded worker activity and failures, and recorded
+usage. `usageAvailable` distinguishes missing usage records from zero calls.
+Evidence `observedAt` and `stale`, sampled process status, and external review
+verdict remain separate. Heartbeat-only sources provide a round count. Proofs,
+task text, logs, and review reports are omitted, and diagnostics are clipped.
+Remove `?view=status` when those details are needed. Check a long run on request
+or at a suitable interval, such as ten minutes, rather than reading every refresh.
+Use the run's matching source checkout and runtime for historical campaigns.
+
 Runs launched before snapshot publishing retain their original runner. Observe
 shows their task, round markers, and Nomad logs until a result export appears.
 Detailed in-flight notes require an owner endpoint or an observation snapshot.
-Snapshots use `xean-observe/v3` and include committed index and detailed summaries,
+Snapshots use `xean-observe/v4` and include committed index and detailed summaries,
 full note text and checks, worker outcomes and note links, and native
 usage counts. Private model reasoning and complete request bodies stay in the
 campaign journal. Exported results without embedded records show usage as

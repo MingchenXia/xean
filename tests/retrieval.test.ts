@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { getDeclaredTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { Execution } from "../packages/core/src/types.ts";
 import type { Note } from "../packages/core/src/solve/contracts.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
 import { readSettings } from "../packages/core/src/solve/config.ts";
-import { fixtureRuntime } from "./fixtures/pi.ts";
+import { invoke, fixtureRuntime } from "./fixtures/pi.ts";
 
 const task = { problem: "Exact task", completionCriteria: "Complete proof" };
 const execution: Execution = {
@@ -69,10 +68,10 @@ test("Explorer receives automatic summaries and keeps its prefix stable across r
     const solver = createSolver(task, runtime, { maxExplorerReads });
     expect(solver.options.maxExplorerResponses).toBe(maxExplorerReads + 4);
     expect(
-      await solver.functions.explorer(
+      await invoke(
+        solver.functions.explorer,
         { task, notes, guidance: "Continue" },
         execution,
-        BACKGROUND_CONTEXT,
       ),
     ).toEqual({ kind: "notes", notes: [draft], candidate: true });
   }
@@ -99,6 +98,8 @@ test("Explorer receives automatic summaries and keeps its prefix stable across r
 
 test("retrieval freezes batched reads and rejects invalid IDs and dead dependencies", async () => {
   const notes = [note("live", "Live lemma"), note("dead", "Rejected lemma")];
+  const fullText = "FULL-live\n".repeat(6000);
+  notes[0]!.text = fullText;
   notes[1]!.dead = true;
   notes[1]!.verified = false;
   notes[1]!.checks = [
@@ -172,7 +173,7 @@ test("retrieval freezes batched reads and rejects invalid IDs and dead dependenc
       }
       case 3:
         expect(value("full").map(({ text }: Note) => text)).toEqual([
-          "FULL-live",
+          fullText,
           "FULL-dead",
         ]);
         for (const id of ["unknown", "late", "tooManyIds"])
@@ -205,13 +206,14 @@ test("retrieval freezes batched reads and rejects invalid IDs and dead dependenc
         throw new Error("Retrieval exceeded the four-response allowance");
     }
   });
-  const result = await createSolver(task, runtime, {
-    maxExplorerReads: 4,
-    maxExplorerResponses: 4,
-  }).functions.explorer(
+  runtime.profiles.explorer.model.contextWindow = 100_000;
+  const result = await invoke(
+    createSolver(task, runtime, {
+      maxExplorerReads: 4,
+      maxExplorerResponses: 4,
+    }).functions.explorer,
     { task, notes, guidance: "Continue" },
     execution,
-    BACKGROUND_CONTEXT,
   );
   expect(result).toEqual({ kind: "notes", notes: [draft], candidate: false });
   expect(responses).toBe(4);
@@ -266,10 +268,10 @@ test("read limits cover batched calls and the final response without changing to
       maxExplorerResponses: maximum,
     });
     expect(
-      await solver.functions.explorer(
+      await invoke(
+        solver.functions.explorer,
         { task, notes: [note("live", "Live lemma")], guidance: "Continue" },
         execution,
-        BACKGROUND_CONTEXT,
       ),
     ).toEqual({ kind: "notes", notes: [draft], candidate: true });
     expect(responses).toBe(2);

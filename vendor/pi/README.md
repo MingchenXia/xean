@@ -1,10 +1,10 @@
 # Pi artifacts
 
-Xean consumes the five packages listed in [provenance.json](provenance.json)
-from Pi commit `8ce69e9d2b171d173fe4b6b2b6256f1f4411e69d`.
+Xean consumes the packages listed in [provenance.json](provenance.json)
+from Pi commit `a13d35a742c6ef8462812a28fbe1d8c8b7431c32`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
-Pi's internal dependencies. Their upstream package version remains `0.99.2`.
+Pi's internal dependencies. Their upstream package version is `1.0.0`.
 The commit and artifact hashes identify this build.
 
 Normal installation uses Xean's existing locked Bun command, documented in the
@@ -37,7 +37,6 @@ npm --prefix packages/chord run build
 npm --prefix packages/telemetry run build
 npm --prefix packages/ai run build:offline
 npm --prefix packages/durable run build
-npm --prefix packages/agent run build
 ```
 
 In each package directory, run
@@ -63,7 +62,7 @@ allocation reduction. Retry listener cleanup covers both the Codex transport
 and `retryAssistantCall` backoffs. The assistant retry classifier also treats
 authentication, invalid-request, and explicit context-limit errors as terminal
 when their detail contains transient-looking text.
-Codex failures retain structured status, type, and code for the same native
+Codex and OpenAI Responses failures retain structured status, type, and code for the same native
 retry classifier. This permits bounded recovery for new server-error codes and
 activates the existing HTTP fallback after transient typed WebSocket failures.
 Quota and billing exhaustion remain terminal, including HTTP 429 responses.
@@ -85,7 +84,7 @@ the existing schema instead of running migrations, and rejects `commit` and
 Xean supplies the read-only SQLite connection and its snapshot transaction.
 The Harness extensions add transactional admission, recovery, and failure hooks,
 plus pause and quiescence controls. Harness owns dispatch, invocation cancellation,
-joining, and whole-worker recovery. Xean uses the hooks for campaign policy and
+joining, and private conversation recovery. Xean uses the hooks for campaign policy and
 atomic failure signals, and keeps Session accounting writable until interrupted
 invocations settle. The patch also exposes native `Tx.setTask()` and preserves
 explicit entry `byTaskId` outside a Harness invocation. Task creation uses the

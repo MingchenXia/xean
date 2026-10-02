@@ -1,5 +1,12 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
-import type { EntryRecord, TaskId } from "@earendil-works/pi-durable";
+import type {
+  EntryRecord,
+  Registry,
+  TaskId,
+  TaskRuntime,
+  ToolExecutionApi,
+} from "@earendil-works/pi-durable";
+import type { MutableModels } from "@earendil-works/pi-ai/models";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { Type, type Static } from "typebox";
 import type { CallRecorder } from "./calls.ts";
@@ -9,11 +16,19 @@ export type { JsonValue };
 /** Select or reduce detached records in Pi's newest-first scan order. */
 export type RecordProjection = (entry: EntryRecord) => EntryRecord | undefined;
 
-export const campaignVersion = 10;
+export const campaignVersion = 11;
 
 /** Opt in to whole-attempt recovery only for a known transient execution failure. */
 export class TransientError extends Error {
   override name = "TransientError";
+}
+
+/** No campaign initialization has committed; inspection remains read-only. */
+export class UninitializedCampaignError extends Error {
+  override name = "UninitializedCampaignError";
+  constructor() {
+    super("A new Xean campaign requires a task");
+  }
 }
 
 export type XeanStatus =
@@ -32,6 +47,17 @@ export interface Execution {
   readonly attempt: number;
   /** Shared call accounting for the chosen execution backend. */
   readonly recorder: CallRecorder;
+  /** Native Pi parent span for model and tool calls. */
+  readonly telemetry?: TelemetryContext;
+  /** Native, invocation-bound access to this task's private durable work. */
+  readonly durable?: Pick<
+    ToolExecutionApi,
+    "taskId" | "conversation" | "commit" | "snapshot"
+  > &
+    Pick<TaskRuntime<never, never, never, object>, "context"> & {
+      readonly registry: Registry;
+      readonly models: MutableModels;
+    };
 }
 
 export interface Role {

@@ -3,7 +3,9 @@
 Xean coordinates durable mathematical work over Pi. The kernel handles campaign
 admission, atomic publication, limits, and recovery policy. The solver adds notes,
 exploration, verification, and exact-task acceptance. Pi supplies model and tool
-execution, task dispatch, storage records, and atomic batches. Chord supplies
+execution, private conversation recovery, task dispatch, storage records, and
+atomic batches. Built-in model roles retain completed reads and submissions
+across restarts, while shared notes publish only with a complete worker result. Chord supplies
 invocation context and prepared state changes. Harness execution uses the
 local controls documented in [Pi alignment](docs/pi-alignment.md#durable-integration).
 
@@ -36,7 +38,7 @@ all three packages, with one dependency lock and aligned package versions.
 - [Changelog](CHANGELOG.md): changes and compatibility.
 - [Contributor rules](AGENTS.md): design priorities and repository boundaries.
 
-Matching Pi packages are pinned to one tested main commit in `package.json`.
+Matching Pi packages are pinned to the Pi 1.0.0 release commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
 build, frozen model data, and hashes. The `main` branch is the current
 distribution. Its three-view note format, updated Pi storage schema, and Harness
@@ -83,6 +85,10 @@ Anthropic provider with an operator-supplied subscription OAuth token in
 also covers mixed providers and Anthropic API credentials. Provider credentials
 stay outside task and settings files.
 
+The optional [Codex worker](docs/solver.md#codex-worker) implements assignments
+with native shell and file tools in a retained workspace. Enable it through
+`settings.codex`. Its findings enter the ordinary note verification process.
+
 ChatGPT Web uses a separately managed browser service. Supply its endpoint and
 optional service credential through the [solver settings](docs/solver.md#configuration-and-functions).
 Xean owns the Pi adapter and research workflow. The service operator owns browser
@@ -99,6 +105,16 @@ Campaigns live under `.xean/` by default. Only `campaign.status: "completed"`
 establishes an accepted argument. `export` requires that accepted result.
 See the [solver guide](docs/solver.md#running) for live guidance, pause/resume,
 cancellation, explicit database paths, and other model providers.
+
+For a status request, use the campaign's matching source checkout and runtime:
+
+```sh
+bun run xean status /absolute/run-directory/campaign.sqlite
+```
+
+This reads committed state without model calls or recovery. The compact report
+omits proofs and transcripts. See [checking status](docs/solver.md#checking-status)
+for frozen and remote runs, verification progress, and observation freshness.
 
 For supervised deployment, run `bun run xean run /data/campaign.sqlite` with a
 persistent writable data directory and the provider's credentials. Use one
@@ -185,9 +201,11 @@ bin/fleet-nix run .#fleet-run -- ../xean/scripts/codex-lb-smoke.ts codex-lb/xean
 
 The launcher verifies dependencies, reads the gateway key from OpenBao into
 memory, and passes it over stdin with the provisioned lab CA. Two concurrent
-Luna workers use max reasoning and Pi's cached WebSocket agent loop. The smoke
-checks results, usage, connection reuse, delta requests, and unchanged reopening
-in a second process without credentials.
+Luna workers use max reasoning and Pi Durable conversations over cached
+WebSocket transport. The smoke checks results, usage, connection reuse, delta
+requests, and unchanged reopening in a second process without credentials.
+This Durable smoke still requires live qualification. Historical gateway receipts
+retain their recorded scope.
 
 Campaigns and records remain under ignored `runs/`. Successful execution prints
 `completed` for both phases. JSON snapshots can also exist after assertion

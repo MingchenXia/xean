@@ -90,8 +90,8 @@ function reasoningId(
 }
 
 /**
- * A native Pi stream function with durable call accounting. It plugs directly
- * into runAgentLoop, Agent, or a Models collection used by AgentHarness.
+ * A native Pi stream function with durable call accounting, supplied to
+ * Pi Durable's generation hook or a caller's Models collection.
  * Pi owns request conversion, streaming, retry policy, and tools. Its options
  * pass through unchanged, including cancellation, authentication, and retries.
  * The caller owns the Pi session and cleanupSessionResources(sessionId).
@@ -188,8 +188,7 @@ export function auditedStream(
               )
                 completed.set(id, { ...block });
             }
-            // Pi's loop appends an assistant message on start. Retrying this
-            // turn must replace that partial message, not append another one.
+            // Response retries belong to one stream. Emit its start event once.
             if (event.type !== "start" || !started) output.push(event);
             if (event.type === "start") started = true;
           }

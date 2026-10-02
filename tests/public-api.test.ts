@@ -61,6 +61,12 @@ test.each(["completed", "failed"] as const)(
 );
 
 test("runtime construction validates profiles and never falls back from an explicit credential environment", () => {
+  expect(() =>
+    readSettings({
+      profiles: { default: { provider: "openai", model: "unused" } },
+      codex: { model: "unused", workspace: "relative" },
+    }),
+  ).toThrow("codex.workspace must be an absolute directory");
   const browser = {
     provider: "codex-chatgpt-web" as const,
     model: "chatgpt-web/gpt-6-pro",

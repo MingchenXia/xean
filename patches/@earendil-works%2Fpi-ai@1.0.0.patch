@@ -271,10 +271,10 @@ index 40014b3..1361b11 100644
 \ No newline at end of file
 +//# sourceMappingURL=openai-codex-responses.js.map
 diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
-index 3e3b48a..dd86660 100644
+index f413fe5..bbf6512 100644
 --- a/dist/api/openai-responses-shared.js
 +++ b/dist/api/openai-responses-shared.js
-@@ -437,6 +437,14 @@ export async function processResponsesStream(openaiStream, output, stream, model
+@@ -438,6 +438,14 @@ export async function processResponsesStream(openaiStream, output, stream, model
              output.responseId = response.id;
          }
          if (response?.usage) {
@@ -289,7 +289,7 @@ index 3e3b48a..dd86660 100644
              const inputDetails = response.usage.input_tokens_details;
              const cachedTokens = inputDetails?.cached_tokens || 0;
              const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
-@@ -642,8 +650,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
+@@ -643,8 +651,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
              throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
          }
          else if (event.type === "response.failed") {
@@ -299,6 +299,20 @@ index 3e3b48a..dd86660 100644
              const error = event.response?.error;
              const details = event.response?.incomplete_details;
              const msg = error
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 4d58c97..411839b 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -163,7 +163,8 @@ export const stream = (model, context, options) => {
+                 delete block.customInput;
+             }
+             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+-            const errorMessage = formatProviderError(normalizeProviderError(error), `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
++            output.providerError = normalizeProviderError(error);
++            const errorMessage = formatProviderError(output.providerError, `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
+             // Sign in with ChatGPT shares the subscription's usage limit with other apps.
+             output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
+                 ? `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`
 diff --git a/dist/types.d.ts b/dist/types.d.ts
 index 68aa055..721258a 100644
 --- a/dist/types.d.ts

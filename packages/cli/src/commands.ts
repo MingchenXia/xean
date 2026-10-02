@@ -2,7 +2,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { Xean, inspectCampaign, openXeanStorage } from "xean";
+import {
+  Xean,
+  inspectCampaign,
+  openXeanStorage,
+  UninitializedCampaignError,
+} from "xean";
 import {
   campaignOptions,
   declarationVersion,
@@ -11,6 +16,7 @@ import {
   piRuntime,
   readCommand,
   readDeclaration,
+  readSettings,
   type Declaration,
 } from "xean/solve";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
@@ -33,6 +39,8 @@ const program = new Command("xean")
   .version(version)
   .option("--campaign-dir <dir>", "Directory for named campaigns", ".xean")
   .option("--records", "Include durable call and attempt records")
+  .option("--owner-id <id>", "Identify this execution owner")
+  .option("--expected-owner-id <id>", "Require this live owner for a command")
   .option(
     "--usage-prefix <prefix>",
     "Attribute this execution without changing frozen settings",
@@ -42,11 +50,30 @@ const program = new Command("xean")
     "Read a provider credential when opening to run offline",
   )
   .configureHelp({ showGlobalOptions: true })
-  .hook("preAction", async () =>
-    verifyInstall(resolve(import.meta.dir, "../../..")),
-  );
+  .hook("preAction", async (_program, action) => {
+    await verifyInstall(resolve(import.meta.dir, "../../.."));
+    if (
+      program.opts<Flags>().expectedOwnerId !== undefined &&
+      ![
+        "resume",
+        "pause",
+        "cancel",
+        "submit",
+        "guide",
+        "correct",
+        "extend",
+      ].includes(action.name())
+    )
+      throw new Error("--expected-owner-id requires a live control command");
+  });
 
-type Flags = { records?: boolean; keyStdin?: boolean; usagePrefix?: string };
+type Flags = {
+  records?: boolean;
+  keyStdin?: boolean;
+  usagePrefix?: string;
+  ownerId?: string;
+  expectedOwnerId?: string;
+};
 const records = () => program.opts<Flags>().records === true;
 const read = (path: string) => Bun.file(resolve(path)).json();
 const readText = (path: string) => Bun.file(resolve(path)).text();
@@ -75,14 +102,14 @@ async function withCampaign(
   cleanup.defer(() => storage.close(BACKGROUND_CONTEXT));
   const declaration = options.declaration ?? (await loadDeclaration(storage));
   const usagePrefix = program.opts<Flags>().usagePrefix;
-  const kernelOptions = campaignOptions(declaration, () =>
-    piRuntime(
-      {
-        ...declaration.settings,
-        ...(usagePrefix === undefined ? {} : { usagePrefix }),
-      },
-      options.key,
-    ),
+  const settings = readSettings({
+    ...declaration.settings,
+    ...(usagePrefix === undefined ? {} : { usagePrefix }),
+  });
+  const kernelOptions = campaignOptions(
+    declaration,
+    () => piRuntime(settings, options.key),
+    usagePrefix,
   );
   const engine = await Xean.open(storage, kernelOptions);
   cleanup.defer(() => engine.close());
@@ -95,21 +122,29 @@ async function runCampaign(
   method: "run" | "resume" = "run",
 ) {
   // A runtime override requires this process to acquire execution ownership.
-  if (method === "resume" && program.opts<Flags>().usagePrefix === undefined) {
-    const receipt = await requestOwner(await realpath(campaignPath(target)), {
-      kind: "resume",
-      records: records(),
-    });
-    if (receipt !== undefined) {
-      await print(receipt);
-      return;
-    }
+  const { ownerId, expectedOwnerId, usagePrefix, keyStdin } =
+    program.opts<Flags>();
+  if (
+    method === "resume" &&
+    usagePrefix === undefined &&
+    ownerId === undefined
+  ) {
+    const receipt = await requestOwner(
+      await realpath(campaignPath(target)),
+      {
+        kind: "resume",
+        records: records(),
+      },
+      expectedOwnerId,
+    );
+    if (receipt !== undefined) return print(receipt);
   }
-  const { keyStdin } = program.opts<Flags>();
+  if (expectedOwnerId !== undefined)
+    throw new Error("Expected campaign owner is unavailable");
   const key = keyStdin ? (await Bun.stdin.text()).trim() : undefined;
   if (keyStdin && !key) throw new Error("Expected a credential on stdin");
   await withCampaign(target, { declaration, key }, async (engine, database) => {
-    const control = await serveControl(database, engine);
+    const control = await serveControl(database, engine, ownerId);
     let shutdown: Promise<unknown> | undefined;
     const interrupt = () => {
       shutdown ??= Promise.all([control.close(true), engine.close()]);
@@ -131,12 +166,15 @@ async function runCampaign(
 
 async function sendCommand(target: string, command: OwnerCommand) {
   const path = await realpath(campaignPath(target));
-  const receipt = await requestOwner(path, command);
-  if (receipt !== undefined) await print(receipt);
-  else
-    await withCampaign(path, {}, async (engine) => {
-      await print(await controlCommand(engine, command));
-    });
+  const receipt = await requestOwner(
+    path,
+    command,
+    program.opts<Flags>().expectedOwnerId,
+  );
+  if (receipt !== undefined) return print(receipt);
+  await withCampaign(path, {}, async (engine) => {
+    await print(await controlCommand(engine, command));
+  });
 }
 
 program
@@ -162,19 +200,33 @@ for (const kind of ["pause", "cancel"] as const)
     .action((campaign: string) =>
       sendCommand(campaign, { kind, records: records() }),
     );
-program.command("inspect <campaign>").action(async (campaign: string) => {
-  const snapshot = await inspectCampaign(campaignPath(campaign), records());
-  await print(
-    campaignReport(records() ? snapshot : { campaign: snapshot.campaign }),
-  );
-});
 program
-  .command("status <campaign>")
-  .action(async (campaign: string) =>
-    print(
-      statusReport(await inspectCampaign(campaignPath(campaign), usageRecord)),
-    ),
+  .command("inspect <campaign>")
+  .option(
+    "--allow-uninitialized",
+    "Report a campaign whose initialization has not committed as null",
+  )
+  .action(async (campaign: string, flags: { allowUninitialized?: boolean }) => {
+    try {
+      const snapshot = await inspectCampaign(campaignPath(campaign), records());
+      await print(
+        campaignReport(records() ? snapshot : { campaign: snapshot.campaign }),
+      );
+    } catch (error) {
+      if (
+        !flags.allowUninitialized ||
+        !(error instanceof UninitializedCampaignError)
+      )
+        throw error;
+      await print({ campaign: null });
+    }
+  });
+program.command("status <campaign>").action(async (campaign: string) => {
+  const report = statusReport(
+    await inspectCampaign(campaignPath(campaign), usageRecord),
   );
+  await print({ observedAt: new Date().toISOString(), ...report });
+});
 program
   .command("role <name> <input> <campaign> <settings>")
   .action(

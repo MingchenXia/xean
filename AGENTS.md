@@ -7,6 +7,9 @@ architecture, read the relevant [kernel](docs/kernel.md) or
 available APIs from deferred designs. Use [the glossary](docs/glossary.md) for
 canonical terminology. Reuse an existing term before defining and justifying a new one.
 
+For campaign-status requests, start with the [compact status workflow](docs/solver.md#checking-status)
+and the campaign's frozen reader. Read full inspection or proofs only when needed.
+
 ## Core priorities
 
 - Simplicity and correctness take precedence over feature count and speculative
@@ -25,6 +28,8 @@ canonical terminology. Reuse an existing term before defining and justifying a n
   machinery, inspect the pinned Pi/Chord implementation and record any missing
   guarantee in the alignment notes. Check ownership, publication, cleanup, and
   whether consumers retain histories despite native paging.
+- Express application semantics through native documents and tasks. Do not
+  rebuild Pi's lifecycle, ownership, recovery, or storage behavior.
 - Pin matching Pi packages to one tested commit with verified artifact hashes
   and frozen model data. Never use floating dependencies. Every patch needs a
   concrete reason and reassessment when upgrading.
@@ -66,9 +71,10 @@ canonical terminology. Reuse an existing term before defining and justifying a n
 - Coordinator owns scheduling, work requests, and logical retries. Workers
   return results, never proposed work requests. Processing a completion signal
   need not call a model. Pi owns transient provider retries.
-- Private-progress recovery is deferred. Retain whole-worker recovery until
-  suitable Pi support or a concrete workload justifies adopting it. Future
-  private resumption must preserve atomic shared publication.
+- Pi owns private conversation recovery. Reuse completed generations, tool
+  results, submissions, and frozen allowances without publishing partial notes.
+  Opaque non-Pi roles still recover the whole worker. External effects remain
+  role-owned and must be idempotent when replay is allowed.
 - Do not impose arbitrary wall-clock deadlines on campaigns, roles, experiments,
   or smoke runs. Keep existing dependency timeouts and tune them from measured
   run and provider data, distinguishing total duration from inactivity.
@@ -102,7 +108,9 @@ canonical terminology. Reuse an existing term before defining and justifying a n
   requester/catalog metadata outside solver tasks. Acceptance of the exact task,
   independent review, and catalog closure remain distinct.
 - Pi runs Coordinator, Explorer, and mathematical checks. Codex owns literature,
-  source verification, and independent review, including internal retrieval tools.
+  source verification, independent review, and optional implementation work,
+  using its native tools. The solver guide defines the
+  [Codex worker](docs/solver.md#codex-worker) and its artifact boundary.
   Self-contained source checks skip Codex. Actual capabilities govern scheduling.
 - Closed-book correctness may establish task-permitted background after checking
   exact statements and hypotheses. Forbidden black boxes fail. Uncertain premises

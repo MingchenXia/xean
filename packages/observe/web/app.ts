@@ -1,4 +1,4 @@
-import { html, render, type TemplateResult } from "lit-html";
+import { html, nothing, render, type TemplateResult } from "lit-html";
 import { keyed } from "lit-html/directives/keyed.js";
 import { repeat } from "lit-html/directives/repeat.js";
 import renderMath from "katex/contrib/auto-render";
@@ -435,6 +435,14 @@ function usageView(snapshot: Snapshot) {
                 }
               </article>`;
             })}
+            ${
+              calls.byModelOmitted
+                ? html`<p class="muted">
+                    ${count(calls.byModelOmitted)} additional model groups
+                    omitted. Totals include all groups.
+                  </p>`
+                : nothing
+            }
             <p class="muted">${snapshot.status.usageNote}</p>`
         : html`<p class="muted">
             Usage is unavailable: native call records were not included in this

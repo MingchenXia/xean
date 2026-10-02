@@ -1,5 +1,5 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { object, type Note } from "./contracts.ts";
 import { noteInfo } from "./notes.ts";
 
@@ -13,15 +13,15 @@ const readSchema = object({
 });
 
 /** Read from the caller's detached, frozen invocation snapshot. */
-export function noteReader(notes: Note[]): AgentTool<typeof readSchema> {
+export function noteReader(notes: Note[]): ToolRegistration<typeof readSchema> {
   const byId = new Map(notes.map((note) => [note.id, note]));
   return {
     name: "read_notes",
-    label: "Read notes",
+    replay: "safe",
     description:
       "Read detailed summaries or authoritative full notes by ID from the supplied index, with status and feedback. Batch up to 20 IDs. Dead notes are diagnostic only. Full notes retain support IDs for further reads.",
     parameters: readSchema,
-    async execute(_id, { ids, level }) {
+    async execute({ ids, level }) {
       const values = ids.map((id) => {
         const note = byId.get(id);
         if (!note) throw new Error(`Unknown note: ${id}`);

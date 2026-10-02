@@ -1,7 +1,14 @@
 #!/usr/bin/env bun
 import { resolve, dirname, isAbsolute } from "node:path";
 import { parseArgs } from "node:util";
-import { readProcess, readRun, type Source, type Run } from "./read.ts";
+import { statusText } from "xean/report";
+import {
+  observationInterval,
+  readProcess,
+  readRun,
+  type Source,
+  type Run,
+} from "./read.ts";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
 import index from "../web/index.html";
 
@@ -49,29 +56,69 @@ export function readSources(value: unknown, directory: string): Source[] {
   });
 }
 
+function runStatus(run: Run) {
+  const { snapshot, process, review, heartbeat } = run;
+  return {
+    id: run.id,
+    source: run.source,
+    kind: run.kind,
+    observedAt: snapshot?.observedAt ?? run.observedAt,
+    stale: run.stale ?? false,
+    snapshot: snapshot && {
+      status: snapshot.status,
+      usageAvailable: snapshot.usageAvailable,
+    },
+    process: process && {
+      job: process.job,
+      task: process.task,
+      allocation: process.allocation,
+      status: process.status,
+      observedAt: process.observedAt,
+    },
+    review: review && {
+      state: review.state,
+      receipt: review.receipt && {
+        reviewer: review.receipt.reviewer,
+        reviewedAt: review.receipt.reviewedAt,
+        verdict: review.receipt.verdict,
+      },
+      error: statusText(review.error) ?? undefined,
+    },
+    heartbeat: heartbeat && { rounds: heartbeat.rounds },
+    error: statusText(run.error) ?? undefined,
+  };
+}
+
 export function api(
   sources: Source[] | (() => Promise<Source[]>),
   fleet: string,
+  signal?: AbortSignal,
 ) {
   type Refresh = {
     sources: Promise<Source[]>;
-    runs?: Promise<Run[]>;
+    runs: Map<string, Promise<Run>>;
+    processes: Map<string, ReturnType<typeof readProcess>>;
     expiresAt: number;
   };
+  const identity = (source: Source) =>
+    JSON.stringify([source.id, source.host ?? null, source.directory]);
   let current: Refresh | undefined;
-  let previous = new Map<string, Run>();
+  let known = new Map<string, { fingerprint: string; run?: Run }>();
+  const inFlight = new Map<string, Promise<Run>>();
   const refresh = () => {
     if (current && Date.now() < current.expiresAt) return current;
     const batch: Refresh = {
       sources: Promise.resolve().then(() =>
         Array.isArray(sources) ? sources : sources(),
       ),
+      runs: new Map(),
+      processes: new Map(),
       expiresAt: Infinity,
     };
     current = batch;
     void batch.sources.then(
       () => {
-        batch.expiresAt = Date.now() + 10_000;
+        batch.expiresAt = Date.now() + observationInterval;
       },
       () => {
         if (current === batch) current = undefined;
@@ -79,43 +126,50 @@ export function api(
     );
     return batch;
   };
-  const read = async (configured: Source[]): Promise<Run[]> => {
-    const processes = new Map<string, ReturnType<typeof readProcess>>();
-    const entries = await Promise.all(
-      configured.map(async (source) => {
-        const identity = JSON.stringify([
-          source.id,
-          source.host ?? null,
-          source.directory,
+  const read = (source: Source, batch: Refresh): Promise<Run> => {
+    let pending = batch.runs.get(source.id);
+    if (pending) return pending;
+    const key = identity(source);
+    const fingerprint = known.get(key)!.fingerprint;
+    let observation = inFlight.get(fingerprint);
+    if (!observation) {
+      let processObservation;
+      if (source.job) {
+        const processKey = JSON.stringify([
+          source.job,
+          source.task ?? "solver",
         ]);
-        let observation;
-        if (source.job) {
-          const key = JSON.stringify([source.job, source.task ?? "solver"]);
-          observation = processes.get(key) ?? readProcess(source, fleet);
-          processes.set(key, observation);
-        }
-        const run = await readRun(source, fleet, observation);
-        const retained = previous.get(identity);
-        return [
-          identity,
-          run.error &&
-          !run.snapshot &&
-          !run.heartbeat &&
-          (retained?.snapshot || retained?.heartbeat)
-            ? {
-                ...run,
-                kind: retained.kind,
-                observedAt: retained.observedAt,
-                snapshot: retained.snapshot,
-                heartbeat: retained.heartbeat,
-                stale: true,
-              }
-            : run,
-        ] as const;
-      }),
-    );
-    previous = new Map(entries);
-    return [...previous.values()];
+        processObservation =
+          batch.processes.get(processKey) ?? readProcess(source, fleet, signal);
+        batch.processes.set(processKey, processObservation);
+      }
+      observation = readRun(source, fleet, processObservation, signal).finally(
+        () => inFlight.delete(fingerprint),
+      );
+      inFlight.set(fingerprint, observation);
+    }
+    pending = observation.then((run) => {
+      const state = known.get(key);
+      const retained = state?.run;
+      const result =
+        run.error &&
+        !run.snapshot &&
+        !run.heartbeat &&
+        (retained?.snapshot || retained?.heartbeat)
+          ? {
+              ...run,
+              kind: retained.kind,
+              observedAt: retained.observedAt,
+              snapshot: retained.snapshot,
+              heartbeat: retained.heartbeat,
+              stale: true,
+            }
+          : run;
+      if (state?.fingerprint === fingerprint) state.run = result;
+      return result;
+    });
+    batch.runs.set(source.id, pending);
+    return pending;
   };
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -137,6 +191,9 @@ export function api(
         return new Response("Invalid run ID", { status: 400 });
       }
     }
+    const view = url.searchParams.get("view");
+    if (view !== null && view !== "status")
+      return new Response("Unknown view", { status: 400 });
     const batch = refresh();
     let configured: Source[];
     try {
@@ -147,19 +204,28 @@ export function api(
         { status: 500 },
       );
     }
-    if (id !== undefined && !configured.some((source) => source.id === id))
+    const selected =
+      id === undefined
+        ? configured
+        : configured.filter((source) => source.id === id);
+    if (id !== undefined && selected.length === 0)
       return new Response("Not found", { status: 404 });
-    if (!batch.runs) {
-      batch.expiresAt = Infinity;
-      batch.runs = read(configured).finally(() => {
-        batch.expiresAt = Date.now() + 10_000;
-      });
+    if (batch.runs.size === 0) {
+      const next: typeof known = new Map();
+      for (const source of configured) {
+        const key = identity(source);
+        const fingerprint = JSON.stringify(source);
+        next.set(key, { fingerprint, run: known.get(key)?.run });
+      }
+      known = next;
     }
-    const runs = await batch.runs;
-    return Response.json(
-      id === undefined ? runs : runs.find((run) => run.id === id),
-      { headers: { "cache-control": "no-store" } },
+    const runs = await Promise.all(
+      selected.map((source) => read(source, batch)),
     );
+    const values = view === "status" ? runs.map(runStatus) : runs;
+    return Response.json(id === undefined ? values : values[0], {
+      headers: { "cache-control": "no-store" },
+    });
   };
 }
 
@@ -185,10 +251,14 @@ if (import.meta.main) {
     Bun.file(config)
       .json()
       .then((value) => readSources(value, dirname(config)));
+  const controller = new AbortController();
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: Number(values.port),
-    routes: { "/": index, "/api/*": api(sources, values.fleet!) },
+    routes: {
+      "/": index,
+      "/api/*": api(sources, values.fleet!, controller.signal),
+    },
     fetch(request) {
       if (request.method !== "GET")
         return new Response("Read-only", { status: 405 });
@@ -198,6 +268,7 @@ if (import.meta.main) {
   });
   console.log(`Xean Observe: ${server.url}`);
   const close = () => {
+    controller.abort();
     void server.stop(true);
   };
   process.once("SIGINT", close);

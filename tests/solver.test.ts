@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { getDeclaredTools } from "@earendil-works/pi-ai/utils/transcript";
+import {
+  getDeclaredTools,
+  getCurrentSystemPrompt,
+} from "@earendil-works/pi-ai/utils/transcript";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import { createSolver, project } from "../packages/core/src/solve/index.ts";
 import type {
@@ -23,7 +26,7 @@ import {
   bindCodex,
   codexResearch,
 } from "../packages/core/src/solve/research.ts";
-import { fixtureRuntime } from "./fixtures/pi.ts";
+import { invoke, fixtureRuntime } from "./fixtures/pi.ts";
 
 const content = (text: string) => ({
   summary: `Index: ${text}`,
@@ -341,14 +344,14 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
         },
       },
     };
-    const reused = await solver.functions.verifier(
+    const reused = await invoke(
+      solver.functions.verifier,
       {
         task: solver.task.task,
         notes,
         targets: [{ id: notes[1]!.id, through: "reconstruction" }],
       },
       noCalls,
-      BACKGROUND_CONTEXT,
     );
     expect(reused).toEqual({ kind: "verification", checks: [] });
     const invalid = structuredClone(result);
@@ -464,8 +467,7 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
     targets: [{ id: "dependent", through: "reconstruction" }],
     evidence: [],
   };
-  const verify = () =>
-    solver.functions.verifier(input, execution, BACKGROUND_CONTEXT);
+  const verify = () => invoke(solver.functions.verifier, input, execution);
   const first = await verify();
   if (first.kind !== "verification") throw new Error("Expected verification");
   expect(first.checks).toMatchObject([
@@ -486,10 +488,10 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
     quote: "New evidence",
   });
   expect(await verify()).toEqual({ kind: "verification", checks: [] });
-  const plan = await solver.functions.coordinator(
+  const plan = await invoke(
+    solver.functions.coordinator,
     { task, notes, failures: [], guidance: [], literatureUsed: false },
     execution,
-    BACKGROUND_CONTEXT,
   );
   expect(plan.work[0]!.kind).toBe("explorer");
   notes.push({
@@ -535,14 +537,11 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
     { system: unknown; tools: unknown; prompt: string }
   >();
   const runtime = fixtureRuntime((context, _options, selected) => {
-    const system = context.messages.find(
-      (message) => message.role === "system",
-    )!;
     const prompt = String(
       context.messages.find((message) => message.role === "user")!.content,
     );
     calls.set(selected.id, {
-      system: system.content,
+      system: getCurrentSystemPrompt(context.messages),
       tools: getDeclaredTools(context.messages),
       prompt,
     });
@@ -566,14 +565,14 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
       { stopReason: "toolUse" },
     );
   });
-  await createSolver(task, runtime).functions.verifier(
+  await invoke(
+    createSolver(task, runtime).functions.verifier,
     { task, notes, targets: [{ id: "n1", through: "reconstruction" }] },
     {
       attemptId: "prefix",
       attempt: 1,
       recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
     },
-    BACKGROUND_CONTEXT,
   );
   const requirements = calls.get("requirements")!;
   const reconstruction = calls.get("reconstruction")!;
@@ -727,16 +726,16 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     attempt: 1,
     recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
   };
-  const result = await solver.functions.verifier(
+  const result = await invoke(
+    solver.functions.verifier,
     {
       task,
       notes,
       targets: notes
         .slice(3, 8)
-        .map(({ id }) => ({ id, through: "reconstruction" })),
+        .map(({ id }) => ({ id, through: "reconstruction" as const })),
     },
     execution,
-    BACKGROUND_CONTEXT,
   );
   if (result.kind !== "verification") throw new Error("Expected verification");
   for (const check of result.checks)
@@ -778,19 +777,19 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     "reconstruction",
   ]);
   // A candidate's own PASS must not prevent scheduling its missing dependency.
-  const plan = await solver.functions.coordinator(
+  const plan = await invoke(
+    solver.functions.coordinator,
     { task, notes, failures: [], guidance: [], literatureUsed: false },
     execution,
-    BACKGROUND_CONTEXT,
   );
   expect(plan.work).toEqual([
     { kind: "verifier", notes: ["b"], through: "reconstruction" },
   ]);
   retry = true;
-  const resumed = await solver.functions.verifier(
+  const resumed = await invoke(
+    solver.functions.verifier,
     { task, notes, targets: [{ id: "b", through: "reconstruction" }] },
     execution,
-    BACKGROUND_CONTEXT,
   );
   if (resumed.kind !== "verification") throw new Error("Expected verification");
   expect(resumed.checks.map((check) => check.noteId)).toEqual(["s"]);
@@ -802,7 +801,8 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     "imported",
   ]);
   expect(
-    await solver.functions.reconstruct(
+    await invoke(
+      solver.functions.reconstruct,
       { task, notes, targets: ["a", "b"] },
       {
         attemptId: "reuse",
@@ -813,7 +813,6 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
           },
         },
       },
-      BACKGROUND_CONTEXT,
     ),
   ).toEqual({ kind: "verification", checks: [] });
   expect(calls.slice(-3)).toEqual(["statement", "proof", "reconstruction"]);

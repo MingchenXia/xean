@@ -48,10 +48,11 @@ bin/fleet-nix run .#fleet-run -- ../xean/scripts/codex-lb-smoke.ts codex-lb/xean
 bin/fleet-nix run .#fleet-run -- ../xean/scripts/solver-smoke.ts codex-lb/xean
 ```
 
-The gateway smoke checks concurrent workers, native usage, cached WebSocket
-continuation, and reopening in another process. The solver smoke checks the
-tree task through acceptance and unchanged reopening. Both use Luna at max
-reasoning with finite call allowances. The source-checking Codex path and
+The gateway smoke uses Pi Durable conversations to check concurrent workers,
+native usage, cached WebSocket continuation, and reopening in another process.
+Its Durable implementation still requires live qualification. The solver smoke
+checks the tree task through acceptance and unchanged reopening. Both use Luna
+at max reasoning with finite call allowances. The source-checking Codex path and
 subscription providers require separate checks when affected. Their setup is
 in the [solver guide](solver.md#configuration-and-functions).
 
@@ -64,7 +65,71 @@ original local run artifacts. Those private artifacts are not part of the source
 distribution. Model execution, internal acceptance, independent mathematical
 review, and catalog closure remain distinct evidence.
 
+### Codex worker
+
+On 2026-10-01, a frozen Xean source snapshot passed a Codex worker smoke on
+saturn with Bun 1.4.2, Codex CLI 0.153.4, and `gpt-5.6-luna` at max reasoning.
+A deterministic Coordinator dispatched one Codex worker, then the full built-in
+Verifier. Codex used its native `codex-lb` profile, workspace-write sandbox,
+and shell to write and run a TypeScript enumerator. It published an ordinary
+candidate note proving that the maximum of `3x + 5y`, for nonnegative integers
+with `2x + 3y <= 19`, is 31 at `(2, 5)`.
+
+Correctness, self-contained source checking, requirements, and blind
+reconstruction passed. The campaign accepted the note after one Codex invocation
+and five Pi calls. Both workers completed on their first attempt. A separate
+execution of the retained program reproduced the exact JSON result. Reopening
+in a second process without a supplied credential preserved the campaign,
+records, and database bytes and made no new calls. The accepted argument was
+exported separately.
+
+The frozen source passed the full locked check with 121 tests and 1,746
+assertions. Lab passed 97 tests and 573 assertions, including its zero-call
+CLI integration smoke against that snapshot. The artifact audit matched all
+48 recorded hashes of source and dependency inputs. Native Codex recorded a startup
+warning for the operator's enabled `context_management` feature and no failed
+turn. This qualification covers local computation and ordinary note verification
+on the recorded snapshot. It does not qualify later Pi migration changes.
+
+The frozen source, check logs, campaign, native records, program, rerun receipt,
+and source manifest are retained under `runs/issue4-codex-smoke/`. The campaign
+directory is `frozen/runs/issue4-codex-2026-10-01T21-32-06-092Z/` within that root.
+
+### Pi Durable conversations
+
+The 2026-10-01 migration passed the locked Bun 1.4.2 check: 127 tests and 1,809
+assertions. A subsequent focused regression for explicit Coordinator retry passed
+alongside the restart fixture (2 tests, 39 assertions). Lab passed 97 tests and
+573 assertions plus its zero-call CLI integration. Independent extraction and
+patch application matched all 1,226 installed Pi files.
+
+A live `openai-codex/gpt-5.6-luna` Explorer at max reasoning used exactly three
+calls: a full note read, a private intermediate submission, and a final submission
+after continuation. Pi retained three completed generations and three completed
+tool tasks. The full note and both submissions survived unchanged. A second
+process reopened the completed campaign without credentials, made zero calls,
+and preserved campaign, transcript, task records, and database bytes.
+
+This smoke qualified execution and persistence; it did not run mathematical
+verification. Offline fixtures cover interrupted private resumption, frozen
+input, consumed allowances, logical retry, large untruncated note reads,
+call-cap draining, cancellation, and one atomic shared publication. Deferred
+model polling is rejected because it bypasses call accounting.
+
+Source hashes, native records, and qualification receipts are retained in
+`runs/pi-durable-2026-10-01T21-53-42-358Z/`.
+
 ### Pi upgrade qualification
+
+Pi 1.0.0 revision `a13d35a742c6` passed the locked Bun 1.4.2 checks on 2026-10-01:
+119 tests and 1,657 assertions. Lab passed 97 tests and 573 assertions, plus
+its zero-call CLI integration smoke against the Xean snapshot checked for that
+upgrade. All five artifacts matched across two clean builds using the previous
+frozen model catalog, and all 17 installed patched files matched independent
+extraction and patch application. The checks cover direct native telemetry, model and tool
+execution, atomic publication, cancellation, accounting, and read-only inspection.
+No live provider calls were made for this upgrade. The receipts below qualify
+their recorded revisions.
 
 Pi revision `8ce69e9d2b17` passed the locked Bun 1.4.2 checks on 2026-10-01:
 109 tests and 1,507 assertions. All five artifacts matched across two clean
@@ -74,7 +139,7 @@ extension task registration, atomic publication, pause and close accounting,
 read-only SQLite, provider recovery, JSON-error retry classification, and CRLF
 framing.
 
-Source `6a9510e477ce` exercised this Pi pin on Jupiter under Nomad on 2026-10-01,
+Source `6a9510e477ce` exercised Pi `8ce69e9d2b17` on Jupiter under Nomad on 2026-10-01,
 using Bun 1.4.2, Codex CLI 0.153.4, and `gpt-6-astra` at max reasoning.
 Four Pi role calls and one Codex source invocation settled successfully. Two
 auxiliary notes received fresh PASS judgments for correctness, sources, and
@@ -146,19 +211,19 @@ WebSocket continuation. Reopening supplied no provider key and made no
 additional calls. The process still inherited the gateway environment variable.
 Two independent Codex reviews of the earlier accepted Lab packets returned
 PASS, using one admitted Luna/max invocation each. The original campaigns and
-packet bytes remained unchanged. These reviews qualify the current review path
+packet bytes remained unchanged. These reviews qualify the recorded review path
 and the exact elementary task, with no external sources required.
 
 Gateway accounting measured eight successful requests, including Codex's
 internal requests, at $0.0080742 API-equivalent cost. Observe rendered both
 completed campaigns and their separate PASS receipts using public reports from
-the original runtime and the current snapshot API. Browser screenshots are under
-`output/playwright/issue6/`.
+the original runtime and the snapshot API checked in that qualification.
+Browser screenshots are under `output/playwright/issue6/`.
 
 The earlier receipts establish live guidance, pause, interruption, and resume at
-their recorded revisions. Current-source checks cover the later integration,
-observation, transport, and review changes. This qualification used mounted
-source archives in a retained image. It did not replace the production
+their recorded revisions. Checks on those source archives cover the later
+integration, observation, transport, and review changes. This qualification used
+mounted source archives in a retained image. It did not replace the production
 coordinator or upgrade existing campaigns. Historical subscription-provider
 receipts retain their original scope.
 

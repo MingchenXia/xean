@@ -6,7 +6,7 @@ import {
   type EntryId,
 } from "@earendil-works/pi-durable";
 import { Xean, type JsonValue, type Work } from "xean";
-import { declarationVersion } from "xean/solve";
+import { declarationVersion, type Note } from "xean/solve";
 import { campaignReport, statusReport, usageRecord } from "xean/report";
 import {
   readSnapshot,
@@ -14,7 +14,7 @@ import {
   snapshotFromReport,
 } from "xean-observe";
 
-test("status retains native usage, explicit zeros, unknown usage, and unsettled calls", async () => {
+test("status preserves committed verification and native usage with bounded operational metadata", async () => {
   const storage = new MemoryStorage();
   const engine = await Xean.open(storage, {
     task: { kind: "xean.solve", version: declarationVersion },
@@ -197,6 +197,99 @@ test("status retains native usage, explicit zeros, unknown usage, and unsettled 
     });
     const checked = history.notes[1]!;
     const check = checked.checks[0]!;
+    const inconclusive = { verdict: "INCONCLUSIVE", report: body } as const;
+    const verificationNotes: Note[] = [
+      history.notes[0]!,
+      {
+        ...checked,
+        verified: false,
+        dead: true,
+        accepted: false,
+        checks: [
+          ...checked.checks,
+          {
+            noteId: checked.id,
+            correctness: { ...inconclusive, premises: [] },
+            source: { verdict: "FAIL", report: body },
+          },
+          { noteId: checked.id, source: pass },
+        ],
+      },
+      {
+        ...checked,
+        id: "unresolved",
+        verified: false,
+        accepted: false,
+        checks: [
+          {
+            noteId: "unresolved",
+            correctness: check.correctness,
+            source: inconclusive,
+          },
+        ],
+      },
+      {
+        ...checked,
+        id: "unchecked",
+        verified: false,
+        accepted: false,
+        checks: [],
+      },
+    ];
+    const verification = statusReport({
+      ...snapshot,
+      notes: verificationNotes,
+    });
+    expect(verification.notes).toMatchObject({
+      total: 4,
+      imported: 1,
+      generated: 3,
+      verified: 1,
+      dead: 1,
+      accepted: 0,
+    });
+    expect(verification.verification).toEqual({
+      correctness: {
+        PASS: 2,
+        FAIL: 0,
+        INCONCLUSIVE: 0,
+        trusted: 1,
+        unchecked: 1,
+      },
+      source: { PASS: 0, FAIL: 1, INCONCLUSIVE: 1, trusted: 1, unchecked: 1 },
+      requirements: {
+        PASS: 1,
+        FAIL: 0,
+        INCONCLUSIVE: 0,
+        trusted: 0,
+        unchecked: 3,
+      },
+      reconstruction: {
+        PASS: 1,
+        FAIL: 0,
+        INCONCLUSIVE: 0,
+        trusted: 0,
+        unchecked: 3,
+      },
+    });
+    for (const status of [
+      "running",
+      "paused",
+      "blocked",
+      "limited",
+      "cancelled",
+      "completed",
+    ] as const) {
+      const accepted = observedCampaign({
+        work,
+        status,
+        result: { noteId: checked.id },
+      }).status;
+      expect(accepted.notes?.accepted).toBe(1);
+      expect(accepted.acceptedNoteId).toBe(
+        status === "completed" ? checked.id : null,
+      );
+    }
     for (const malformed of [
       { ...check, source: { ...check.source, passages: "not an array" } },
       { ...check, reconstruction: { ...check.reconstruction, proof: 7 } },
@@ -210,7 +303,7 @@ test("status retains native usage, explicit zeros, unknown usage, and unsettled 
     const generic = observedCampaign({
       task: { kind: "custom", task: "not a solver task" },
       status: "completed",
-      result: 25,
+      result: { noteId: checked.id },
       work: [
         {
           ...work[0]!,
@@ -222,9 +315,11 @@ test("status retains native usage, explicit zeros, unknown usage, and unsettled 
       kind: "custom",
       task: null,
       notes: [],
-      result: 25,
+      result: { noteId: checked.id },
       work: [{ guidance: null, noteIds: [], checkCount: 0 }],
     });
+    expect(generic.status.acceptedNoteId).toBeNull();
+    expect(generic.status.verification).toBeUndefined();
     for (const kind of ["xean.solve.offline", "xean.solve.library"])
       expect(
         statusReport({
@@ -239,7 +334,15 @@ test("status retains native usage, explicit zeros, unknown usage, and unsettled 
       status: "running",
       pendingSignals: 2,
       work: { queued: 0, active: 0, completed: 0, failed: 0, cancelled: 0 },
-      notes: { total: 1, verified: 1, dead: 0, accepted: 0, candidates: 1 },
+      notes: {
+        total: 1,
+        imported: 1,
+        generated: 0,
+        verified: 1,
+        dead: 0,
+        accepted: 0,
+        candidates: 1,
+      },
       calls: { admitted: 5, settled: 4, unknownUsage: 1, unsettled: 1 },
     });
     expect(report.calls.byModel).toEqual([
@@ -300,6 +403,76 @@ test("status retains native usage, explicit zeros, unknown usage, and unsettled 
       scanning.mockRestore();
     }
     expect(await engine.records()).toEqual(snapshot.records);
+    // Omitted models still contribute to exact totals, including unknown and unsettled usage.
+    for (let index = 0; index < 12; index++) {
+      const callId = entry("xean.call.started", {
+        model: { ...pi, id: `model-${index}` },
+      });
+      if (index < 11)
+        entry("xean.call.settled", {
+          callId,
+          message: body,
+          usage: index === 10 ? null : { input_tokens: 0 },
+        });
+    }
+    const diagnostic = "Operational diagnostic. ".repeat(100);
+    const metadata: Work[] = Array.from({ length: 25 }, (_, index) => ({
+      ...work[0]!,
+      id: `work-${index}`,
+      role: index === 11 ? "xean.verifier" : "xean.explorer",
+      status: index < 11 ? "queued" : index < 13 ? "active" : "failed",
+      input: { targets: body, notes: body, guidance: body },
+      result: body,
+      error: diagnostic,
+    }));
+    const bounded = statusReport({
+      ...snapshot,
+      notes: verificationNotes,
+      campaign: {
+        ...snapshot.campaign,
+        work: metadata,
+        error: diagnostic,
+        providerCalls: calls.length + 12,
+      },
+    });
+    expect(bounded.work).toEqual({
+      queued: 11,
+      active: 2,
+      completed: 0,
+      failed: 12,
+      cancelled: 0,
+    });
+    expect(bounded.activity.items.map(({ id }) => id)).toEqual([
+      "work-11",
+      "work-12",
+      ...Array.from({ length: 8 }, (_, index) => `work-${index}`),
+    ]);
+    expect(bounded.activity.omitted).toBe(3);
+    expect(bounded.activity.items[0]).toEqual({
+      id: "work-11",
+      role: "xean.verifier",
+      status: "active",
+      attempts: 1,
+    });
+    expect(bounded.failures.items.map(({ id }) => id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `work-${24 - index}`),
+    );
+    expect(bounded.failures.omitted).toBe(2);
+    expect(bounded.error).toBe(diagnostic.slice(0, 499) + "…");
+    expect(
+      bounded.failures.items.every(({ error }) => error === bounded.error),
+    ).toBe(true);
+    expect(bounded.calls.byModel).toHaveLength(10);
+    expect(bounded.calls).toMatchObject({
+      admitted: 17,
+      settled: 15,
+      unknownUsage: 2,
+      unsettled: 2,
+      byModelOmitted: 4,
+    });
+    expect(JSON.stringify(bounded)).not.toContain(body);
+    expect(JSON.stringify(bounded)).not.toContain("Independent proof.");
+    expect(JSON.stringify(bounded).length).toBeLessThan(15_000);
   } finally {
     await engine.close();
   }

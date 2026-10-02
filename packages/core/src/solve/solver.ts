@@ -15,6 +15,7 @@ import {
   taskSchema,
   verificationTargets,
   type ExplorerInput,
+  type CodexInput,
   type Task,
   type VerifierInput,
 } from "./contracts.ts";
@@ -32,7 +33,7 @@ export function createSolver(
   taskValue: Task,
   runtime: PiRuntime | (() => PiRuntime),
   settings: Partial<RoleOptions> = {},
-  research?: Research | ((runtime: PiRuntime) => Research),
+  research: Research = codexResearch(),
 ) {
   const task = decode(taskSchema, taskValue);
   const maxExplorerReads = settings.maxExplorerReads ?? 4;
@@ -48,47 +49,30 @@ export function createSolver(
     throw new Error("maxExplorerResponses must be a positive integer");
   if (!Check(positiveIntegerSchema, options.maxExplorerReads))
     throw new Error("maxExplorerReads must be a positive integer");
-  let implementation: ReturnType<typeof createRoles> | undefined;
   const load = () => {
-    if (!implementation) {
-      const ready = typeof runtime === "function" ? runtime() : runtime;
-      if (ready.profiles.explorer.model.provider === chatGptWebProviderId) {
-        if (
-          requestedExplorerResponses !== undefined &&
-          requestedExplorerResponses !== 1
-        )
-          throw new Error(
-            "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
-          );
-        options.maxExplorerResponses = 1;
-        options.chatGptSingleShot = true;
-      }
-      implementation = createRoles(
-        ready,
-        typeof research === "function"
-          ? research(ready)
-          : (research ?? codexResearch(undefined, ready.usagePrefix)),
-        options,
-      );
+    if (typeof runtime === "function") runtime = runtime();
+    if (runtime.profiles.explorer.model.provider === chatGptWebProviderId) {
+      if (
+        requestedExplorerResponses !== undefined &&
+        requestedExplorerResponses !== 1
+      )
+        throw new Error(
+          "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
+        );
+      options.maxExplorerResponses = 1;
+      options.chatGptSingleShot = true;
     }
-    return implementation;
+    return runtime;
   };
-  const functions: ReturnType<typeof createRoles> = {
-    explorer: async (...args) => load().explorer(...args),
-    coordinator: async (...args) => load().coordinator(...args),
-    verifier: async (...args) => load().verifier(...args),
-    reconstruct: async (...args) => load().reconstruct(...args),
-    literature: async (...args) => load().literature(...args),
-    review: async (...args) => load().review(...args),
-  };
+  const functions = createRoles(load, research, options);
   const builtInExplorer = functions.explorer;
-  const roles: Role[] = (["explorer", "verifier", "literature"] as const).map(
-    (name) => ({
-      name: `xean.${name}`,
-      run: (input, execution, context) =>
-        functions[name](input as never, execution, context),
-    }),
-  );
+  const roles: Role[] = (
+    ["explorer", "verifier", "literature", "codex"] as const
+  ).map((name) => ({
+    name: `xean.${name}`,
+    run: (input, execution, context) =>
+      functions[name](input as never, execution, context),
+  }));
   const coordinator: XeanOptions["coordinator"] = {
     name: "xean.coordinator",
     async run(signal, view, execution, context) {
@@ -132,6 +116,8 @@ export function createSolver(
       const dispatch: WorkRequest[] = [];
       for (const request of plan.work) {
         if (request.kind === "verifier") continue;
+        if (request.kind === "codex" && !options.codex)
+          throw new Error("Codex worker is not configured");
         if (request.kind === "explorer") {
           if (explorerUsed) continue;
           explorerUsed = options.chatGptSingleShot === true;
@@ -146,7 +132,13 @@ export function createSolver(
                   notes,
                   guidance: request.guidance,
                 } satisfies ExplorerInput)
-              : { task, notes: notes.map(noteInfo), query: request.query },
+              : request.kind === "codex"
+                ? ({
+                    task,
+                    notes: closure(request.notes, notes),
+                    assignment: request.assignment,
+                  } satisfies CodexInput)
+                : { task, notes: notes.map(noteInfo), query: request.query },
         });
       }
       if (targets.length)

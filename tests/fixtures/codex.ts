@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-const directory = process.env.HOME!;
+const directory =
+  process.env.XEAN_FIXTURE === "unchanged"
+    ? process.env.HOME!
+    : dirname(process.argv[1]!);
 const args = process.argv.slice(2);
 if (args.includes("descendant")) {
   process.on("SIGTERM", () => {});
@@ -11,6 +14,7 @@ if (args.includes("descendant")) {
 } else if (args.includes("exec")) {
   const input = JSON.parse(await Bun.stdin.text()) as {
     mode: string;
+    assignment?: string;
     task?: { problem: string };
     notes?: { id: string; premises: string[] }[];
   };
@@ -22,11 +26,19 @@ if (args.includes("descendant")) {
       profile: profile < 0 ? null : args[profile + 1],
       reasoning: args.find((arg) => arg.startsWith("model_reasoning_effort=")),
       shell: args.find((arg) => arg.startsWith("features.shell_tool=")),
+      webSearch: args.find((arg) => arg.startsWith("web_search=")),
+      sandbox: args[args.indexOf("--sandbox") + 1],
+      workspace: process.cwd(),
+      schema: args[args.indexOf("--output-schema") + 1],
       codexHome: process.env.CODEX_HOME,
       marker: process.env.XEAN_FIXTURE,
       usageTag: process.env.XEAN_CODEX_USAGE_TAG,
     }) + "\n",
   );
+  if (args.includes("features.shell_tool=true")) {
+    await writeFile("program.ts", "console.log(25);\n");
+    await writeFile("output.txt", input.mode ?? input.assignment ?? "");
+  }
   const event = (value: unknown) => console.log(JSON.stringify(value));
   if (input.mode === "wait") {
     const child = spawn(
@@ -51,27 +63,29 @@ if (args.includes("descendant")) {
   } else {
     const schema = args[args.indexOf("--output-schema") + 1]!;
     JSON.parse(await readFile(schema, "utf8"));
-    const result = input.notes
-      ? {
-          results: input.notes
-            .map((note) => ({
-              noteId: note.id,
-              result: {
-                verdict: "PASS",
-                report: "Checked",
-                correction: null,
-                passages: note.premises.map((quote, premise) => ({
-                  premise,
-                  ...(input.task?.problem.includes(quote)
-                    ? { url: "urn:xean:task", quote: input.task.problem }
-                    : { url: "https://example.com/paper", quote }),
-                })),
-              },
-            }))
-            .reverse(),
-        }
-      : { answer: 25 };
-    if (input.notes)
+    const result = input.assignment
+      ? JSON.parse(input.assignment)
+      : input.notes
+        ? {
+            results: input.notes
+              .map((note) => ({
+                noteId: note.id,
+                result: {
+                  verdict: "PASS",
+                  report: "Checked",
+                  correction: null,
+                  passages: note.premises.map((quote, premise) => ({
+                    premise,
+                    ...(input.task?.problem.includes(quote)
+                      ? { url: "urn:xean:task", quote: input.task.problem }
+                      : { url: "https://example.com/paper", quote }),
+                  })),
+                },
+              }))
+              .reverse(),
+          }
+        : { answer: 25 };
+    if (input.notes && !input.assignment)
       event({ type: "item.completed", item: { type: "web_search" } });
     event({
       type: "item.completed",

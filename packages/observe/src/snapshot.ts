@@ -1,5 +1,5 @@
 import { taskSchema, type SolverResult, type Task } from "xean/solve";
-import { campaignReport, statusReport } from "xean/report";
+import { campaignReport, statusReport, statusSchema } from "xean/report";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -28,7 +28,7 @@ export function snapshotFromReport(
 ) {
   const declaration = campaign.task as { kind?: string; task?: Task } | null;
   return {
-    schema: "xean-observe/v3" as const,
+    schema: "xean-observe/v4" as const,
     kind:
       typeof declaration?.kind === "string" && declaration.kind.trim()
         ? declaration.kind
@@ -51,14 +51,20 @@ export function snapshotFromReport(
           notes !== undefined && status === "completed"
             ? (result as SolverResult)
             : undefined;
-        const request = input as { guidance?: unknown; query?: unknown } | null;
+        const request = input as {
+          guidance?: unknown;
+          query?: unknown;
+          assignment?: unknown;
+        } | null;
         const guidance =
           notes !== undefined
             ? role === "xean.explorer"
               ? request?.guidance
               : role === "xean.literature"
                 ? request?.query
-                : null
+                : role === "xean.codex"
+                  ? request?.assignment
+                  : null
             : null;
         return {
           id,
@@ -112,22 +118,14 @@ const check = Type.Script(
 );
 const snapshotSchema = Type.Unsafe<Snapshot>(
   Type.Script(
-    { Task: taskSchema, Count: count, Check: check },
+    { Task: taskSchema, Count: count, Check: check, Status: statusSchema },
     `{
-    schema: "xean-observe/v3",
+    schema: "xean-observe/v4",
     kind: string | null,
     observedAt: string,
     usageAvailable: boolean,
     task: Task | null,
-    status: {
-      status: string, error: string | null, usageNote: string,
-      calls: {
-        admitted: number, settled: number, unknownUsage: number, unsettled: number,
-        byModel: {
-          model: string, api: string, admitted: number, reportedUsage: unknown
-        }[]
-      }
-    },
+    status: Status,
     notes: {
       id: string, summary: string, detailedSummary: string, text: string,
       support: string[],
@@ -146,5 +144,7 @@ const snapshotSchema = Type.Unsafe<Snapshot>(
 export function readSnapshot(value: unknown): Snapshot {
   if (!Value.Check(snapshotSchema, value))
     throw new Error("Unsupported observation schema or malformed snapshot");
-  return value;
+  const status = structuredClone(value.status);
+  Value.Clean(statusSchema, status);
+  return { ...value, status };
 }

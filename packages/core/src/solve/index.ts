@@ -18,6 +18,7 @@ export {
   type LiteratureInput,
 } from "./research.ts";
 export { askCodex, type CodexOptions } from "./codex.ts";
+export { codexWorker } from "./codex-worker.ts";
 export {
   profileNames,
   type PiRuntime,
@@ -31,6 +32,7 @@ export type {
   NoteInfo,
   Verdict,
   ExplorerInput,
+  CodexInput,
   VerifierInput,
   ReconstructionInput,
   VerificationStage,

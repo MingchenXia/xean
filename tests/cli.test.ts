@@ -5,14 +5,110 @@ import { join, resolve } from "node:path";
 import { version } from "../package.json";
 import { declarationVersion } from "xean/solve";
 
+const runtimeArgs = [process.execPath, "--no-install", "--no-env-file"];
+const cliArgs = [
+  ...runtimeArgs,
+  resolve(import.meta.dir, "../packages/cli/src/index.ts"),
+];
+
+test("standalone research runs without Pi credentials and preserves usage attribution", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-cli-research-"));
+  const task = {
+    problem: "Prove 1 = 1",
+    completionCriteria: "Use reflexivity",
+  };
+  const command = join(directory, "codex");
+  const invocations = join(directory, "invocations.jsonl");
+  const environment = { ...process.env };
+  delete environment.XEAN_TEST_UNUSED_PI_KEY;
+  try {
+    await writeFile(
+      command,
+      `#!${process.execPath}
+import { appendFile } from "node:fs/promises";
+const input = await Bun.stdin.json();
+await appendFile(${JSON.stringify(invocations)}, JSON.stringify(process.env.XEAN_CODEX_USAGE_TAG) + "\\n");
+const value = "query" in input ? { notes: [], candidate: false } : { verdict: "PASS", report: "Reflexivity proves the exact claim.", correction: null, premises: [], passages: [] };
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(value) } }));
+console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, output_tokens: 0 } }));
+`,
+      { mode: 0o700 },
+    );
+    await writeFile(join(directory, "task.json"), JSON.stringify(task));
+    await writeFile(join(directory, "argument.md"), "Equality is reflexive.");
+    await writeFile(
+      join(directory, "input.json"),
+      JSON.stringify({ task, notes: [], query: "Find references" }),
+    );
+    await writeFile(
+      join(directory, "settings.json"),
+      JSON.stringify({
+        profiles: {
+          default: {
+            provider: "openai",
+            model: "gpt-6-astra",
+            apiKeyEnv: "XEAN_TEST_UNUSED_PI_KEY",
+          },
+        },
+        research: { model: "fixture", command },
+        literature: true,
+        usagePrefix: "frozen",
+        limits: { attempts: 1, providerCalls: 1 },
+      }),
+    );
+    const run = (...args: string[]) => {
+      const result = Bun.spawnSync(
+        [...cliArgs, "--usage-prefix", "override", ...args],
+        { cwd: directory, env: environment },
+      );
+      expect(result.stderr.toString()).toBe("");
+      expect(result.exitCode).toBe(0);
+      return JSON.parse(result.stdout.toString()).campaign;
+    };
+    for (const args of [
+      ["review", "task.json", "argument.md", "review.sqlite", "settings.json"],
+      [
+        "role",
+        "literature",
+        "input.json",
+        "literature.sqlite",
+        "settings.json",
+      ],
+    ]) {
+      const campaign = run(...args);
+      expect(campaign.status).toBe("completed");
+      expect(campaign.providerCalls).toBe(1);
+      expect(campaign.task.settings.usagePrefix).toBe("frozen");
+      expect(run(...args)).toEqual(campaign);
+    }
+    const tags = (await Bun.file(invocations).text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(tags).toHaveLength(2);
+    expect(tags.every((tag) => tag.startsWith("override/"))).toBe(true);
+    const ordinary = run(
+      "role",
+      "explorer",
+      "input.json",
+      "explorer.sqlite",
+      "settings.json",
+    );
+    expect(ordinary.status).toBe("blocked");
+    expect(ordinary.providerCalls).toBe(0);
+    expect(ordinary.error).toContain("XEAN_TEST_UNUSED_PI_KEY");
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("CLI metadata stays model-free, shares flags, and releases ownership after failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-"));
-  const entry = resolve(import.meta.dir, "../packages/cli/src/index.ts");
   const run = (...args: string[]) => {
-    const result = Bun.spawnSync(
-      [process.execPath, "--no-install", "--no-env-file", entry, ...args],
-      { cwd: directory, timeout: 5000 },
-    );
+    const result = Bun.spawnSync([...cliArgs, ...args], {
+      cwd: directory,
+      timeout: 5000,
+    });
     return {
       code: result.exitCode,
       stdout: result.stdout.toString(),
@@ -121,16 +217,13 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
 
 test("CLI inspects solver campaign kinds, drains large output, and restricts execution declarations", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-output-"));
-  const entry = resolve(import.meta.dir, "../packages/cli/src/index.ts");
   const kinds = ["xean.solve", "xean.solve.offline", "xean.solve.library"];
   const argument = "For every integer n, 2n is even.\n".repeat(65_536);
   try {
     // Isolate the large SQLite fixture from native handles retained by earlier tests.
     const initializing = Bun.spawn(
       [
-        process.execPath,
-        "--no-install",
-        "--no-env-file",
+        ...runtimeArgs,
         "--eval",
         `import { Xean, openXeanStorage } from "xean";
 import { join } from "node:path";
@@ -175,29 +268,15 @@ try {
     for (const kind of kinds) {
       const database = join(directory, `${kind}.sqlite`);
       if (kind !== "xean.solve") {
-        const rejected = Bun.spawnSync([
-          process.execPath,
-          "--no-install",
-          "--no-env-file",
-          entry,
-          "run",
-          database,
-        ]);
+        const rejected = Bun.spawnSync([...cliArgs, "run", database]);
         expect(rejected.exitCode).not.toBe(0);
         expect(rejected.stderr.toString()).toContain("Invalid value");
       }
-      for (const command of ["inspect", "export"]) {
-        const child = Bun.spawn(
-          [
-            process.execPath,
-            "--no-install",
-            "--no-env-file",
-            entry,
-            command,
-            database,
-          ],
-          { stdout: "pipe", stderr: "pipe" },
-        );
+      for (const command of ["status", "inspect", "export"]) {
+        const child = Bun.spawn([...cliArgs, command, database], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
         // Let the producer fill its pipe before the consumer starts reading.
         await Bun.sleep(100);
         const [stdout, stderr, code] = await Promise.all([
@@ -207,7 +286,17 @@ try {
         ]);
         expect(stderr).toBe("");
         expect(code).toBe(0);
-        if (command === "inspect") {
+        if (command === "status") {
+          const report = JSON.parse(stdout);
+          expect(report).toMatchObject({
+            status: "completed",
+            acceptedNoteId: null,
+            notes: { imported: 1, generated: 0 },
+          });
+          expect(Date.parse(report.observedAt)).toBeGreaterThan(0);
+          expect(stdout.length).toBeLessThan(4096);
+          expect(stdout).not.toContain("2n is even.");
+        } else if (command === "inspect") {
           const report = JSON.parse(stdout);
           expect(report.campaign.providerCalls).toBe(0);
           expect(report.notes[0].text).toBe("2n is even.");

@@ -43,6 +43,7 @@ export function socketPath(database: string): string {
 export async function requestOwner(
   database: string,
   command: OwnerCommand,
+  expectedOwnerId?: string,
 ): Promise<unknown | undefined> {
   const path = socketPath(database);
   let response: Response;
@@ -52,7 +53,7 @@ export async function requestOwner(
       redirect: "error",
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(command),
+      body: JSON.stringify({ ...command, expectedOwnerId }),
     });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -73,6 +74,8 @@ export async function requestOwner(
     } catch (failure) {
       if ((failure as NodeJS.ErrnoException).code !== "ENOENT") throw failure;
     }
+    if (expectedOwnerId !== undefined)
+      throw new Error("Expected campaign owner is unavailable");
     return undefined;
   }
   const value = await response.json();
@@ -85,7 +88,11 @@ export async function requestOwner(
 }
 
 /** Start only after acquiring this campaign's exclusive kernel ownership. */
-export async function serveControl(database: string, engine: Xean) {
+export async function serveControl(
+  database: string,
+  engine: Xean,
+  ownerId?: string,
+) {
   const path = socketPath(database);
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -116,7 +123,10 @@ export async function serveControl(database: string, engine: Xean) {
       )
         return new Response("Not found", { status: 404 });
       try {
-        const command = (await request.json()) as OwnerCommand;
+        const { expectedOwnerId, ...command } =
+          (await request.json()) as OwnerCommand & { expectedOwnerId?: string };
+        if (expectedOwnerId !== undefined && expectedOwnerId !== ownerId)
+          throw new Error("Campaign owner changed");
         if (command.kind === "resume" && stopping)
           throw new Error("Owner is stopping");
         if (["pause", "resume", "cancel"].includes(command.kind))

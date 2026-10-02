@@ -7,7 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
-export const declarationVersion = 11;
+export const declarationVersion = 12;
 const text = Type.String({ minLength: 1 });
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -160,12 +160,38 @@ export const literaturePlan = object({
   kind: Type.Literal("literature"),
   query: text,
 });
-export const planSchema = (literature: boolean) =>
+export const codexPlan = object({
+  kind: Type.Literal("codex", {
+    description:
+      "Use Codex sparingly when implementation or tool-assisted work is needed for a concrete question. It can write and run programs and returns ordinary unverified notes with retained artifacts.",
+  }),
+  assignment: Type.String({
+    minLength: 1,
+    description:
+      "The assignment and why its result matters to the exact task. Codex chooses the implementation and tools.",
+  }),
+  notes: Type.Array(text, {
+    uniqueItems: true,
+    description:
+      "Relevant note IDs. Their full text and dependencies are supplied automatically. Use [] when none are needed.",
+  }),
+});
+const workPlan = Type.Union([
+  explorePlan,
+  verifyPlan,
+  literaturePlan,
+  codexPlan,
+]);
+export const planSchema = (literature: boolean, codex = false) =>
   object({
     work: Type.Array(
-      literature
-        ? Type.Union([explorePlan, verifyPlan, literaturePlan])
-        : Type.Union([explorePlan, verifyPlan]),
+      Type.Union(
+        workPlan.anyOf.filter(
+          (plan) =>
+            (plan.properties.kind.const !== "literature" || literature) &&
+            (plan.properties.kind.const !== "codex" || codex),
+        ),
+      ) as typeof workPlan,
       { minItems: 1 },
     ),
   });
@@ -185,13 +211,15 @@ export type NoteInfo = Pick<
 export type ExplorerInput = SolverInput & {
   guidance: string;
 };
+export type CodexInput = SolverInput & { assignment: string };
 export type VerifierInput = SolverInput & {
   targets: { id: string; through: VerificationStage }[];
   evidence?: SourceEvidence[];
 };
 export type ReconstructionInput = SolverInput & { targets: string[] };
 export type SolverResult =
-  ({ kind: "notes" } & Exploration) | { kind: "verification"; checks: Check[] };
+  | ({ kind: "notes"; workspace?: string } & Exploration)
+  | { kind: "verification"; checks: Check[] };
 
 /** Strict validation at trust boundaries: no conversion, defaults, or dropped nulls. */
 export function decode<S extends TSchema>(
