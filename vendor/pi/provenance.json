@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/earendil-works/pi",
-  "commit": "a13d35a742c6ef8462812a28fbe1d8c8b7431c32",
+  "commit": "7fbbd5f4a1d982bb02d63472dde0774fa639f99b",
   "build": {
     "node": "26.5.0",
     "npm": "11.17.0",
@@ -22,34 +22,34 @@
       "version": "1.0.0",
       "bytes": 208924,
       "sha256": "f456ecf70d9689e701383e2cea8460ffd00d8c9f8379c9ecd67e5fe8a7045e92",
-      "path": "vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-chord-1.0.0.tgz"
+      "path": "vendor/pi/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/earendil-works-chord-1.0.0.tgz"
     },
     {
       "name": "@earendil-works/pi-telemetry",
       "version": "1.0.0",
       "bytes": 27276,
       "sha256": "cb7231d68ddc1c71654899c1f09b677d39c35467770b1a0369ae41a41bd3e77c",
-      "path": "vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-telemetry-1.0.0.tgz"
+      "path": "vendor/pi/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/earendil-works-pi-telemetry-1.0.0.tgz"
     },
     {
       "name": "@earendil-works/pi-ai",
       "version": "1.0.0",
       "bytes": 766926,
       "sha256": "47ed047295caad160ab16e84bb4de2e26bb5ab75c6d2bf205b32408ea7fa50db",
-      "path": "vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-ai-1.0.0.tgz"
+      "path": "vendor/pi/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/earendil-works-pi-ai-1.0.0.tgz"
     },
     {
       "name": "@earendil-works/pi-durable",
       "version": "1.0.0",
-      "bytes": 473117,
-      "sha256": "3499fd00b95dbab66ce0e73acbb6704672f31957e4a4230980287ddc7ab5ad7b",
-      "path": "vendor/pi/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/earendil-works-pi-durable-1.0.0.tgz"
+      "bytes": 473128,
+      "sha256": "c25188768e109038987db9c4344e755284c138cdddc770ef1682d2729bfb1ec5",
+      "path": "vendor/pi/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/earendil-works-pi-durable-1.0.0.tgz"
     }
   ],
   "patches": [
     {
       "path": "patches/@earendil-works%2Fpi-ai@1.0.0.patch",
-      "sha256": "ddfd0dd154fee52307bfd6b5da95665504b526f63ff3fab5930891c1cd7ec2c2",
+      "sha256": "c5af341d06d5c603e630a168f8a23f0174721af8451a4fc226c163a2e9a82684",
       "appliedBy": "Bun patchedDependencies at installation"
     },
     {

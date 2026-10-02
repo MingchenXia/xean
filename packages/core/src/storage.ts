@@ -1,7 +1,6 @@
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { Database, constants } from "bun:sqlite";
 import type { Storage } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -30,10 +29,8 @@ export async function openXeanStorage(
         ? realpathSync(path)
         : join(realpathSync(dirname(path)), basename(path));
       // Never unlink the lock file: ownership follows this inode across opens.
-      const owner = cleanup.use(
-        new DatabaseSync(`${path}.lock`, { timeout: 0 }),
-      );
-      owner.exec("BEGIN EXCLUSIVE");
+      const owner = cleanup.use(new Database(`${path}.lock`, { create: true }));
+      owner.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
     }
     const native = new Database(path, {
       readonly: readOnly,

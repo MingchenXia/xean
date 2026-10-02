@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { once } from "node:events";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   fauxAssistantMessage,
@@ -10,11 +11,16 @@ import {
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { ask } from "../packages/core/src/solve/pi.ts";
-import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import {
+  Xean,
+  openXeanStorage,
+  type JsonValue,
+} from "../packages/core/src/index.ts";
 import {
   createSolver,
   project,
   submitCommand,
+  codexResearch,
 } from "../packages/core/src/solve/index.ts";
 import { fixtureRuntime, invoke } from "./fixtures/pi.ts";
 
@@ -315,3 +321,148 @@ test("Explorer resumes private native work before one complete shared publicatio
     await rm(directory, { recursive: true, force: true });
   }
 }, 15_000);
+
+test("Verifier reuses completed source evidence and Pi stages after interruption", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-verifier-recovery-"));
+  const path = join(directory, "campaign.sqlite");
+  const pending = Promise.withResolvers<void>();
+  const calls: string[] = [];
+  const pass = { verdict: "PASS" as const, report: "Checked." };
+  let sourceCalls = 0;
+  let resuming = false;
+  const setup = () => {
+    const runtime = fixtureRuntime((input, _options, selected) => {
+      calls.push(selected.id);
+      const packet = JSON.parse(
+        String(
+          input.messages.find((message) => message.role === "user")!.content,
+        ),
+      );
+      const result: JsonValue =
+        selected.id === "correctness"
+          ? { ...pass, premises: ["External theorem"] }
+          : selected.id === "statement"
+            ? { statement: "Exact claim" }
+            : selected.id === "proof"
+              ? { proof: "Independent proof", complete: true }
+              : pass;
+      return fauxAssistantMessage(
+        [
+          fauxToolCall("submit_result", {
+            results: [{ noteId: packet.notes[0].id, result }],
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    });
+    const solver = createSolver(
+      { problem: "Exact claim", completionCriteria: "Complete proof" },
+      runtime,
+      {},
+      {
+        ...codexResearch(),
+        async source({ notes }) {
+          const operationId = `source-${++sourceCalls}`;
+          return notes.map(({ id, premises }) => ({
+            noteId: id,
+            result: {
+              ...pass,
+              kind: "codex-report" as const,
+              operationId,
+              reportedAt: new Date().toISOString(),
+              premises,
+              passages: [],
+            },
+          }));
+        },
+      },
+    );
+    solver.functions.explorer = async () => ({
+      kind: "notes",
+      candidate: true,
+      notes: [
+        {
+          id: "n1",
+          summary: "Claim",
+          detailedSummary: "Exact claim",
+          text: "Original proof",
+          support: [],
+        },
+      ],
+    });
+    solver.functions.coordinator = async ({ notes, failures }) => {
+      if (failures.length)
+        throw new Error(failures[0]!.error ?? "Verifier failed");
+      return {
+        work: notes.length
+          ? [
+              {
+                kind: "verifier",
+                notes: [notes[0]!.id],
+                through: "reconstruction",
+              },
+            ]
+          : [{ kind: "explorer", guidance: "Explore" }],
+      };
+    };
+    const verifier = solver.functions.verifier;
+    solver.functions.verifier = (input, execution, context) =>
+      verifier(
+        input,
+        {
+          ...execution,
+          recorder: {
+            ...execution.recorder,
+            async begin(identity) {
+              if (!resuming && identity.id === "proof") {
+                const signal = context.abortSignal!;
+                signal.throwIfAborted();
+                pending.resolve();
+                await once(signal, "abort");
+                signal.throwIfAborted();
+              }
+              return execution.recorder.begin(identity);
+            },
+          },
+        },
+        context,
+      );
+    return solver;
+  };
+  let engine = await Xean.open(await openXeanStorage(path), setup());
+  let running: ReturnType<Xean["run"]> | undefined;
+  try {
+    running = engine.run();
+    await Promise.race([pending.promise, running]);
+    const before = await engine.inspect();
+    expect(project(before)[0]).toMatchObject({
+      checks: [],
+      verified: false,
+      accepted: false,
+    });
+    await engine.close();
+    await running;
+    expect(calls).toEqual(["correctness", "requirements", "statement"]);
+
+    resuming = true;
+    engine = await Xean.open(await openXeanStorage(path), setup());
+    const completed = await engine.run();
+    expect(completed.status).toBe("completed");
+    expect({ sourceCalls, calls }).toEqual({
+      sourceCalls: 1,
+      calls: [
+        "correctness",
+        "requirements",
+        "statement",
+        "proof",
+        "reconstruction",
+      ],
+    });
+    const note = project(completed)[0]!;
+    expect(note.checks[0]!.source).toMatchObject({ operationId: "source-1" });
+  } finally {
+    await engine.close();
+    await running;
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -1,11 +1,14 @@
 import type { Context } from "@earendil-works/chord";
 import { isDeepStrictEqual } from "node:util";
-import { Assert } from "typebox/value";
+import { createHash } from "node:crypto";
+import { Assert, Check as check } from "typebox/value";
 import { type Static, type TSchema } from "@earendil-works/pi-ai";
-import type { Execution } from "../types.ts";
+import { positiveIntegerSchema, type Execution } from "../types.ts";
+import { json } from "../json.ts";
 import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
 import {
   correctnessSchema,
+  canExplore,
   batchSchema,
   batchResults,
   explorationSchema,
@@ -18,9 +21,9 @@ import {
   verificationStages,
   verificationTargets,
   type Check,
-  type CodexInput,
   type ExplorerInput,
   type Note,
+  type Source,
   type Plan,
   type SolverResult,
   type Task,
@@ -46,6 +49,11 @@ import { type Research, type LiteratureInput } from "./research.ts";
 import type { Settings } from "./config.ts";
 import { noteReader } from "./reader.ts";
 import { codexWorker } from "./codex-worker.ts";
+
+/** A replacement function supplies Codex without the built-in worker settings. */
+export const unconfiguredCodex: ReturnType<typeof codexWorker> = () => {
+  throw new Error("Codex worker is not configured");
+};
 
 const mathematicalCheck =
   "Check exact statements and hypotheses. Check both summaries against the authoritative full text: preserve hypotheses, quantitative guarantees, conditionality, negative conclusions, and unresolved gaps. A summary must not strengthen a claim or present an unresolved result as established. PASS requires an established argument. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. On PASS, you may supply correction with the complete text and consistent summary and detailedSummary, changing only harmless typos, formatting, or unambiguous notation. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. A substantial repair requires a new note. Treat established support results as given, but verify their applicability and all new reasoning. Do not infer mathematical truth from an earlier model's confidence.";
@@ -78,12 +86,24 @@ function recordCheck<Stage extends VerificationStage>(
   }
 }
 
+/** Final-task reconstruction requires verified targets that meet requirements. */
+const reconstructionTargets = (stages: ReadonlyMap<Note, VerificationStage>) =>
+  [...stages].flatMap(([note, through]) =>
+    through === "reconstruction" &&
+    note.verified &&
+    stagePassed(note, "requirements")
+      ? [note.id]
+      : [],
+  );
+
 export type CoordinationInput = {
   task: Task;
   notes: Note[];
   failures: { id: string; role: string; error: string | null }[];
   guidance: string[];
   literatureUsed: boolean;
+  /** Any prior work for the current built-in Explorer, including failures. */
+  explorerUsed: boolean;
 };
 export type RoleOptions = Required<
   Pick<Settings, "maxExplorerResponses" | "maxExplorerReads" | "literature">
@@ -99,13 +119,18 @@ export function createRoles(
   research: Research,
   options: RoleOptions,
 ) {
+  if (!check(positiveIntegerSchema, options.maxExplorerResponses))
+    throw new Error("maxExplorerResponses must be a positive integer");
+  if (!check(positiveIntegerSchema, options.maxExplorerReads))
+    throw new Error("maxExplorerReads must be a positive integer");
   const pi = () => {
     if (typeof runtime === "function") runtime = runtime();
     return runtime;
   };
   const literature = options.literature && research.retrieval;
-  const codex =
-    options.codex && codexWorker(options.codex, options.usagePrefix);
+  const singleShotExplorer = (ready: PiRuntime) =>
+    options.chatGptSingleShot === true ||
+    ready.profiles.explorer.model.provider === chatGptWebProviderId;
   const batch = async <S extends TSchema>(
     profile: ProfileName,
     instructions: string,
@@ -263,22 +288,20 @@ export function createRoles(
       }),
     };
   };
-  return {
+  const functions = {
     reconstruct,
-    codex(input: CodexInput, execution: Execution, context: Context) {
-      if (!codex) throw new Error("Codex worker is not configured");
-      return codex(input, execution, context);
-    },
+    codex: options.codex
+      ? codexWorker(options.codex, options.usagePrefix)
+      : unconfiguredCodex,
     async explorer(
       input: ExplorerInput,
       execution: Execution,
       context: Context,
     ): Promise<SolverResult> {
       const ready = pi();
-      const singleShot =
-        options.chatGptSingleShot ||
-        ready.profiles.explorer.model.provider === chatGptWebProviderId;
+      const singleShot = singleShotExplorer(ready);
       const maxResponses = singleShot ? 1 : options.maxExplorerResponses;
+      const maxReads = singleShot ? 0 : options.maxExplorerReads;
       input = structuredClone(input);
       const index = input.notes.map(noteInfo);
       const explorerInstructions = singleShot
@@ -292,7 +315,7 @@ export function createRoles(
           notes: index.map(({ summary: _summary, ...state }) => state),
           guidance: input.guidance,
           allowance: {
-            reads: options.maxExplorerReads,
+            reads: maxReads,
             responses: maxResponses,
           },
         },
@@ -301,7 +324,7 @@ export function createRoles(
         context,
         {
           maxResponses,
-          maxReads: options.maxExplorerReads,
+          maxReads,
           prefix: [
             { task: input.task },
             ...index.map(({ id, summary }) => ({ id, summary })),
@@ -334,23 +357,25 @@ export function createRoles(
       execution: Execution,
       context: Context,
     ): Promise<Plan> {
+      const ready = pi();
       input = structuredClone(input);
-      const notes = input.notes;
+      const { notes, explorerUsed, ...state } = input;
       const prompt = {
-        ...input,
+        ...state,
         notes: notes.map(noteInfo),
         capabilities: {
-          codex: Boolean(codex),
+          explorer: canExplore(singleShotExplorer(ready), explorerUsed),
+          codex: functions.codex !== unconfiguredCodex,
           literature: literature && !input.literatureUsed,
           sourceRetrieval: research.retrieval,
         },
       };
       return ask(
-        pi(),
+        ready,
         "coordinator",
-        "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy. For Explorer, supply only guidance. The library supplies the exact task, every note summary, verification feedback, and a bounded reader. Explorer chooses which notes to read. Continue exploration without prescribing proof steps. Explorer never has external retrieval tools. Follow capabilities: when literature is false, do not request a literature search or delegate external retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Explorer may read dead notes for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes, batching independent IDs in one call. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return at least one useful work request. Never declare a solution yourself: code accepts only complete verification evidence.",
+        "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy and is the default for mathematical reasoning. For Explorer, supply only guidance. The library supplies the exact task, every note summary, verification feedback, and a bounded reader. Explorer chooses which notes to read. Continue exploration without prescribing proof steps. Explorer never has external retrieval tools. Follow capabilities: when explorer is false, its one-shot allowance is exhausted and no Explorer work can be requested; when literature is false, do not request a literature search or delegate external retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Use Codex rarely, for a concrete implementation needed by the task. Its assignment must state the deliverable, input/domain, expected output, binding constraints, and checks/evidence that complete the assignment, referring to selected notes where appropriate. Codex chooses its implementation and tools. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Requirements FAIL is final for its note ID but leaves useful mathematics available as support and for dependency reconstruction. Requirements INCONCLUSIVE may be retried. A substantive improvement requires a new note. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Explorer may read dead notes for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes, batching independent IDs in one call. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return useful work. When explorer is false and no available work can advance the task, return work=[] to wait for input. Otherwise return at least one work request. Never declare a solution yourself: code accepts only complete verification evidence.",
         prompt,
-        planSchema(prompt.capabilities.literature, prompt.capabilities.codex),
+        planSchema(prompt.capabilities),
         execution,
         context,
         {
@@ -371,19 +396,19 @@ export function createRoles(
               if (!note || note.dead)
                 throw new Error(`Unknown or dead note: ${id}`);
             }
+            const ordered = requiredStages(targets, notes);
+            const reconstruction = reconstructionTargets(ordered);
             const useful =
-              [...requiredStages(targets, notes)].some(([note, through]) =>
+              [...ordered].some(([note, through]) =>
                 verificationStages.some(
                   (stage) =>
-                    stageWithin(stage, through) && stagePending(note, stage),
+                    stageWithin(stage, through) &&
+                    stagePending(note, stage) &&
+                    (stage !== "reconstruction" ||
+                      reconstruction.includes(note.id)),
                 ),
               ) ||
-              closure(
-                targets
-                  .filter((target) => target.through === "reconstruction")
-                  .map((target) => target.id),
-                notes,
-              ).some(
+              closure(reconstruction, notes).some(
                 (note) =>
                   !note.imported && stagePending(note, "reconstruction"),
               );
@@ -425,18 +450,17 @@ export function createRoles(
         }
         recordCheck(note, check, stage, result);
       };
-      const assess = async <S extends TSchema>(
-        profile: ProfileName,
-        selected: Note[],
+      const assess = async (
+        stage: "correctness" | "requirements",
         instructions: string,
-        schema: S,
-      ): Promise<Static<S>[]> => {
+      ) => {
+        const selected = pending(stage);
         const support = closure(
           selected.flatMap((note) => note.support),
           notes,
         ).filter((note) => !selected.includes(note));
-        return batch(
-          profile,
+        const results = await batch(
+          stage,
           `${mathematicalCheck} Check all requested notes together. The verifiedSupport IDs identify established support notes. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
           {
             task: input.task,
@@ -446,68 +470,58 @@ export function createRoles(
               .filter((note) => note.verified)
               .map((note) => note.id),
           },
-          schema,
+          stage === "correctness" ? correctnessSchema : verdictSchema,
           execution,
           context,
         );
+        selected.forEach((note, index) => record(note, stage, results[index]!));
       };
-      const correctness = pending("correctness");
-      const judgments = await assess(
+      await assess(
         "correctness",
-        correctness,
         `Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For an explicit conditional claim P implies Q, check the derivation of Q assuming P. Its hypothetical antecedent P is part of the claim, not an external theorem to establish; omit it from premises. Proving the implication does not establish P. An unstated assumption in an unconditional claim remains a gap: do not silently weaken the claim to an implication or promote a missing proof step to an external theorem. External results actually used to prove an implication still require the normal assessment below. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Find missing cases, unsupported inferences, and undeclared substantive dependencies. ${research.retrieval ? "A cited theorem note may state an external result without reproving it: assess its statement and application conditionally and list it in premises for source validation. List every directly needed nonroutine external claim with exact hypotheses and conclusion, including any invoked without citation. Explain its application in report." : "This is a closed-book check: source retrieval is disabled. Apply the task's proof rules. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses and conclusion. Explain their applications in report. The steps producing the requested conclusion must satisfy the task's proof requirements."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Each premise must be a standalone statement with all hypotheses, definitions, and qualifications needed to understand it. Source names and citations are allowed. Put proof ideas, application hints, and validation commentary in report, never in premises. Source checking will assess these exact strings, and reconstruction will receive them unchanged. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
-        correctnessSchema,
-      );
-      correctness.forEach((note, index) =>
-        record(note, "correctness", judgments[index]!),
       );
       refresh(notes);
 
       const sources = pending("source");
       if (sources.length) {
-        const results = batchResults(
-          sources.map((note) => note.id),
-          await research.source(
-            {
-              task: input.task,
-              notes: sources.map((note) => ({
-                id: note.id,
-                text: note.text,
-                premises: verdict(note, "correctness")!.premises,
-              })),
-              evidence: sourceEvidence(notes, input.evidence),
-            },
-            execution,
-            context,
-          ),
-        );
+        const sourceInput = {
+          task: input.task,
+          notes: sources.map((note) => ({
+            id: note.id,
+            summary: note.summary,
+            detailedSummary: note.detailedSummary,
+            text: note.text,
+            premises: verdict(note, "correctness")!.premises,
+          })),
+          evidence: sourceEvidence(notes, input.evidence),
+        };
+        // Keep completed evidence stable so later Pi stages recover their exact inputs.
+        const key = `xean.source/${createHash("sha256").update(JSON.stringify(sourceInput)).digest("hex")}`;
+        const durable = execution.durable;
+        let results = await durable?.memo<Source[]>(key, context);
+        if (results === undefined) {
+          results = batchResults(
+            sources.map((note) => note.id),
+            await research.source(sourceInput, execution, context),
+          );
+          if (durable)
+            results = await durable.memo(key, json(results), context);
+        }
         sources.forEach((note, index) =>
-          record(note, "source", results[index]!),
+          record(note, "source", structuredClone(results[index]!)),
         );
         refresh(notes);
       }
-      const requirements = pending("requirements");
-      const required = await assess(
+      await assess(
         "requirements",
-        requirements,
-        "Decide whether each note meets every completion criterion of the original task. Check quantifiers, variants, parameters, computational model, and bounds. A proved implication does not establish its antecedent. If the task requires an unconditional conclusion, an extra hypothesis must be discharged by a proof within the note, established support, or the task's assumptions. Sound partial progress fails this check.",
-        verdictSchema,
-      );
-      requirements.forEach((note, index) =>
-        record(note, "requirements", required[index]!),
+        "Decide whether each note meets every completion criterion of the original task. Check quantifiers, variants, parameters, computational model, and bounds. A proved implication does not establish its antecedent. If the task requires an unconditional conclusion, an extra hypothesis must be discharged by a proof within the note, established support, or the task's assumptions. A specific unmet completion criterion is a concrete reason for FAIL, even when the note is mathematically sound partial progress.",
       );
 
       const reconstructed = await reconstruct(
         {
           task: input.task,
           notes,
-          targets: [...ordered].flatMap(([note, through]) =>
-            through === "reconstruction" &&
-            note.verified &&
-            verdict(note, "requirements")?.verdict === "PASS"
-              ? [note.id]
-              : [],
-          ),
+          targets: reconstructionTargets(ordered),
         },
         execution,
         context,
@@ -536,4 +550,5 @@ export function createRoles(
       return research.review(input, execution, context);
     },
   };
+  return functions;
 }

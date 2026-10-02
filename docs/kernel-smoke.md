@@ -48,17 +48,24 @@ bin/fleet-nix run .#fleet-run -- ../xean/scripts/codex-lb-smoke.ts codex-lb/xean
 bin/fleet-nix run .#fleet-run -- ../xean/scripts/solver-smoke.ts codex-lb/xean
 ```
 
-The gateway smoke uses Pi Durable conversations to check concurrent workers,
-native usage, cached WebSocket continuation, and reopening in another process.
+The launchers verify dependencies, read the gateway key from OpenBao into memory,
+and pass it over stdin to the child runtime with the provisioned lab CA.
+
+The gateway smoke uses Pi Durable conversations to check two concurrent workers,
+native usage, cached WebSocket connection reuse and delta requests, and reopening
+in another process. Successful execution prints `completed` for both phases.
 Its Durable implementation still requires live qualification. The solver smoke
-checks the tree task through acceptance and unchanged reopening. Both use Luna
-at max reasoning with finite call allowances. The source-checking Codex path and
+initializes without model calls, then checks the tree edge-count task through
+acceptance and unchanged reopening with a forty-call allowance. Both use Luna
+at max reasoning. The source-checking Codex path and
 subscription providers require separate checks when affected. Their setup is
 in the [solver guide](solver.md#configuration-and-functions).
 
 Retain source revision, Bun version, frozen task/settings, campaign, result,
-and stderr under ignored `runs/`. A snapshot left by a failed assertion is not
-a successful smoke. Record provider limitations with the source revision.
+and stderr under ignored `runs/`. The solver launcher saves the accepted argument
+as `argument.md` and preserves failed-attempt artifacts. A snapshot left by a
+failed assertion is not a successful smoke. Record provider limitations with the
+source revision.
 
 Historical provider, benchmark, and memory measurements remain in Git and their
 original local run artifacts. Those private artifacts are not part of the source

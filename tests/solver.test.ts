@@ -387,38 +387,56 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
   }
 }, 15_000);
 
-test("source INCONCLUSIVE is final across revisions, evidence, dependency checks, and batches", async () => {
+test("final source and requirements verdicts reject no-op plans across revisions and dependencies", async () => {
   const pass = { verdict: "PASS" as const, report: "Checked." };
   const task = { problem: "Exact task", completionCriteria: "Complete proof" };
-  const notes: Note[] = ["base", "dependent"].map((id) => ({
-    id,
-    text: id,
-    summary: id,
-    detailedSummary: id,
-    support: id === "dependent" ? ["base"] : [],
-    revision: 0,
-    imported: false,
-    checks: [
-      {
-        noteId: id,
-        correctness: { ...pass, premises: ["External theorem"] },
-        ...(id === "dependent" ? { source: pass } : {}),
-      },
-    ],
-    candidate: false,
-    dead: false,
-    verified: false,
-    accepted: false,
-  }));
+  const notes: Note[] = ["base", "lemma", "dependent", "rejected"].map(
+    (id) => ({
+      id,
+      text: id,
+      summary: id,
+      detailedSummary: id,
+      support:
+        id === "dependent"
+          ? ["base", "lemma"]
+          : id === "rejected"
+            ? ["lemma"]
+            : [],
+      revision: 0,
+      imported: false,
+      checks: [
+        {
+          noteId: id,
+          correctness: { ...pass, premises: ["External theorem"] },
+          ...(id !== "base" ? { source: pass } : {}),
+          ...(id === "rejected"
+            ? {
+                requirements: {
+                  verdict: "FAIL" as const,
+                  report: "Missing completion criterion",
+                },
+              }
+            : {}),
+        },
+      ],
+      candidate: false,
+      dead: false,
+      verified: false,
+      accepted: false,
+    }),
+  );
   const sources: string[][] = [];
   const requests: Plan["work"] = [
     { kind: "verifier", notes: ["base"], through: "source" },
     { kind: "verifier", notes: ["dependent"], through: "reconstruction" },
+    { kind: "verifier", notes: ["rejected"], through: "requirements" },
+    { kind: "verifier", notes: ["rejected"], through: "reconstruction" },
     { kind: "explorer", guidance: "Find a supported argument" },
   ];
+  const requestCount = requests.length;
   const runtime = fixtureRuntime((context, _options, selected) => {
     expect(selected.id).toBe("coordinator");
-    if (requests.length < 3) {
+    if (requests.length < requestCount) {
       expect(context.messages.at(-1)).toMatchObject({
         role: "toolResult",
         isError: true,
@@ -456,18 +474,16 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
       },
     },
   );
-  const execution = {
-    attemptId: "source-once",
-    attempt: 1,
-    recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
-  };
   const input: VerifierInput = {
     task,
     notes,
-    targets: [{ id: "dependent", through: "reconstruction" }],
+    targets: ["dependent", "rejected"].map((id) => ({
+      id,
+      through: "reconstruction",
+    })),
     evidence: [],
   };
-  const verify = () => invoke(solver.functions.verifier, input, execution);
+  const verify = () => invoke(solver.functions.verifier, input);
   const first = await verify();
   if (first.kind !== "verification") throw new Error("Expected verification");
   expect(first.checks).toMatchObject([
@@ -477,8 +493,13 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
   notes[0]!.checks.push(...first.checks);
   refresh(notes);
   expect(
-    notes.every((note) => !note.dead && !note.verified && !note.accepted),
-  ).toBe(true);
+    notes.map(({ dead, verified, accepted }) => [dead, verified, accepted]),
+  ).toEqual([
+    [false, false, false],
+    [false, true, false],
+    [false, false, false],
+    [false, true, false],
+  ]);
   notes[0]!.text += ".";
   notes[0]!.revision++;
   input.evidence!.push({
@@ -488,11 +509,14 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
     quote: "New evidence",
   });
   expect(await verify()).toEqual({ kind: "verification", checks: [] });
-  const plan = await invoke(
-    solver.functions.coordinator,
-    { task, notes, failures: [], guidance: [], literatureUsed: false },
-    execution,
-  );
+  const plan = await invoke(solver.functions.coordinator, {
+    task,
+    notes,
+    failures: [],
+    guidance: [],
+    literatureUsed: false,
+    explorerUsed: false,
+  });
   expect(plan.work[0]!.kind).toBe("explorer");
   notes.push({
     ...notes[0]!,
@@ -565,15 +589,11 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
       { stopReason: "toolUse" },
     );
   });
-  await invoke(
-    createSolver(task, runtime).functions.verifier,
-    { task, notes, targets: [{ id: "n1", through: "reconstruction" }] },
-    {
-      attemptId: "prefix",
-      attempt: 1,
-      recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
-    },
-  );
+  await invoke(createSolver(task, runtime).functions.verifier, {
+    task,
+    notes,
+    targets: [{ id: "n1", through: "reconstruction" }],
+  });
   const requirements = calls.get("requirements")!;
   const reconstruction = calls.get("reconstruction")!;
   expect(requirements.tools).toEqual(reconstruction.tools);
@@ -632,9 +652,14 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     noteId: "s",
     correctness: { ...pass, premises: [] },
     source: pass,
+    requirements: {
+      verdict: "FAIL",
+      report: "A support lemma does not solve the task.",
+    },
   });
   const calls: string[] = [];
   let retry = false;
+  let target = "b";
   const runtime = fixtureRuntime((context, _options, selected) => {
     calls.push(selected.id);
     const input = JSON.parse(
@@ -645,7 +670,9 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     let result: unknown;
     if (selected.id === "coordinator") {
       result = {
-        work: [{ kind: "verifier", notes: ["b"], through: "reconstruction" }],
+        work: [
+          { kind: "verifier", notes: [target], through: "reconstruction" },
+        ],
       };
     } else {
       if (selected.id === "proof") {
@@ -721,22 +748,13 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     );
   });
   const solver = createSolver(task, runtime);
-  const execution = {
-    attemptId: "batch",
-    attempt: 1,
-    recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
-  };
-  const result = await invoke(
-    solver.functions.verifier,
-    {
-      task,
-      notes,
-      targets: notes
-        .slice(3, 8)
-        .map(({ id }) => ({ id, through: "reconstruction" as const })),
-    },
-    execution,
-  );
+  const result = await invoke(solver.functions.verifier, {
+    task,
+    notes,
+    targets: notes
+      .slice(3, 8)
+      .map(({ id }) => ({ id, through: "reconstruction" as const })),
+  });
   if (result.kind !== "verification") throw new Error("Expected verification");
   for (const check of result.checks)
     notes.find((note) => note.id === check.noteId)!.checks.push(check);
@@ -777,20 +795,24 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     "reconstruction",
   ]);
   // A candidate's own PASS must not prevent scheduling its missing dependency.
-  const plan = await invoke(
-    solver.functions.coordinator,
-    { task, notes, failures: [], guidance: [], literatureUsed: false },
-    execution,
-  );
-  expect(plan.work).toEqual([
+  const plan = () =>
+    invoke(solver.functions.coordinator, {
+      task,
+      notes,
+      failures: [],
+      guidance: [],
+      literatureUsed: false,
+      explorerUsed: false,
+    });
+  expect((await plan()).work).toEqual([
     { kind: "verifier", notes: ["b"], through: "reconstruction" },
   ]);
   retry = true;
-  const resumed = await invoke(
-    solver.functions.verifier,
-    { task, notes, targets: [{ id: "b", through: "reconstruction" }] },
-    execution,
-  );
+  const resumed = await invoke(solver.functions.verifier, {
+    task,
+    notes,
+    targets: [{ id: "b", through: "reconstruction" }],
+  });
   if (resumed.kind !== "verification") throw new Error("Expected verification");
   expect(resumed.checks.map((check) => check.noteId)).toEqual(["s"]);
   notes[0]!.checks.push(...resumed.checks);
@@ -816,6 +838,14 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     ),
   ).toEqual({ kind: "verification", checks: [] });
   expect(calls.slice(-3)).toEqual(["statement", "proof", "reconstruction"]);
+  // Imported targets still need their own reconstruction when support is done.
+  target = "theorem";
+  notes
+    .find((note) => note.id === target)!
+    .checks.push({ noteId: target, requirements: pass });
+  expect((await plan()).work).toEqual([
+    { kind: "verifier", notes: [target], through: "reconstruction" },
+  ]);
   const invalid = structuredClone(notes);
   invalid[0]!.checks.push({
     noteId: "s",

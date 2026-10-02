@@ -2,12 +2,78 @@ import { expect, test } from "bun:test";
 import { getEventListeners } from "node:events";
 import {
   fauxAssistantMessage,
+  createModels,
   isRetryableAssistantError,
   normalizeContext,
   retryAssistantCall,
   type Model,
 } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { googleProvider } from "@earendil-works/pi-ai/providers/google";
+import { auditedStream } from "../packages/core/src/pi.ts";
+
+test("Anthropic and Google preserve HTTP status for native retry classification", async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const provider of [anthropicProvider(), googleProvider()]) {
+      const models = createModels();
+      models.setProvider(provider);
+      const model = models
+        .getModels(provider.id)
+        .find((model) => model.reasoning)!;
+      for (const status of [404, 503]) {
+        let requests = 0;
+        let admitted = 0;
+        let settled = 0;
+        globalThis.fetch = Object.assign(
+          async () => {
+            requests++;
+            return Response.json(
+              {
+                error: {
+                  type: status === 404 ? "not_found_error" : "api_error",
+                  code: status,
+                  message: "deployment overloaded",
+                  status: status === 404 ? "NOT_FOUND" : "UNAVAILABLE",
+                },
+              },
+              { status },
+            );
+          },
+          { preconnect: original.preconnect },
+        ) as typeof fetch;
+        const result = await auditedStream(
+          models,
+          {
+            begin() {
+              admitted++;
+              return {
+                recordRequest() {},
+                settle() {
+                  settled++;
+                },
+              };
+            },
+          },
+          { enabled: true, maxRetries: 1, baseDelayMs: 1 },
+        )(
+          model,
+          {
+            messages: [{ role: "user", content: "Fixture", timestamp: 0 }],
+          },
+          { apiKey: "fixture-key", maxRetries: 0 },
+        ).result();
+        expect(result.providerError?.status).toBe(status);
+        expect(requests).toBe(status === 404 ? 1 : 2);
+        expect(admitted).toBe(requests);
+        expect(settled).toBe(requests);
+      }
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 
 const model: Model<"openai-codex-responses"> = {
   id: "xean-retry-fixture",

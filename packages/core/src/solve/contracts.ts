@@ -89,13 +89,10 @@ const passageSchema = object({
   url: text,
   quote: text,
 });
-const sourceProperties = {
+export const sourceSchema = object({
   ...verdictSchema.properties,
   // Codex structured output requires every field; null means no correction.
   correction: Type.Union([noteContentSchema, Type.Null()]),
-};
-export const sourceSchema = object({
-  ...sourceProperties,
   passages: Type.Array(
     Type.Union([
       passageSchema,
@@ -104,7 +101,7 @@ export const sourceSchema = object({
   ),
 });
 export const reviewSchema = object({
-  ...sourceProperties,
+  ...Type.Omit(verdictSchema, ["correction"]).properties,
   passages: Type.Array(passageSchema),
   premises: premisesSchema,
 });
@@ -163,12 +160,13 @@ export const literaturePlan = object({
 export const codexPlan = object({
   kind: Type.Literal("codex", {
     description:
-      "Use Codex sparingly when implementation or tool-assisted work is needed for a concrete question. It can write and run programs and returns ordinary unverified notes with retained artifacts.",
+      "Use Codex rarely for a concrete implementation needed by the mathematical task. Explorer handles mathematical reasoning. Codex writes and runs programs and returns ordinary unverified notes with retained artifacts.",
   }),
   assignment: Type.String({
     minLength: 1,
+    pattern: "\\S",
     description:
-      "The assignment and why its result matters to the exact task. Codex chooses the implementation and tools.",
+      "State the concrete deliverable, input/domain, expected output, binding constraints, and checks/evidence that complete this implementation assignment. Selected notes may define these requirements. The task's completion criteria provide mathematical context. Codex chooses the implementation and tools.",
   }),
   notes: Type.Array(text, {
     uniqueItems: true,
@@ -182,17 +180,30 @@ const workPlan = Type.Union([
   literaturePlan,
   codexPlan,
 ]);
-export const planSchema = (literature: boolean, codex = false) =>
+export const canExplore = (singleShot: boolean, used: boolean) =>
+  !singleShot || !used;
+export function chatGptResponseLimit(requested?: number): 1 {
+  if (requested !== undefined && requested !== 1)
+    throw new Error(
+      "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
+    );
+  return 1;
+}
+export const planSchema = (capabilities: {
+  literature: boolean;
+  codex: boolean;
+  explorer: boolean;
+}) =>
   object({
     work: Type.Array(
       Type.Union(
         workPlan.anyOf.filter(
           (plan) =>
-            (plan.properties.kind.const !== "literature" || literature) &&
-            (plan.properties.kind.const !== "codex" || codex),
+            plan.properties.kind.const === "verifier" ||
+            capabilities[plan.properties.kind.const],
         ),
       ) as typeof workPlan,
-      { minItems: 1 },
+      { minItems: capabilities.explorer ? 1 : 0 },
     ),
   });
 export type Plan = Static<ReturnType<typeof planSchema>>;

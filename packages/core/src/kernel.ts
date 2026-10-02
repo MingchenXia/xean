@@ -36,6 +36,7 @@ import {
   WORKER,
   initialAttempt,
   isXeanTask,
+  taskVersion,
   type Input,
   type Runtime,
   type AttemptState,
@@ -71,12 +72,8 @@ const stopped = (status: XeanStatus) =>
 const owners = new WeakSet<Storage>();
 
 function limits(input: Partial<Limits> = {}): Limits {
-  const value: Limits = {
-    concurrency: 4,
-    attempts: 3,
-    providerCalls: null,
-    ...input,
-  };
+  const { concurrency = 4, attempts = 3, providerCalls = null } = input;
+  const value = { ...input, concurrency, attempts, providerCalls };
   if (!Check(limitsSchema, value)) throw new Error("Invalid campaign limits");
   return json(value);
 }
@@ -231,7 +228,7 @@ export class Xean {
         tasks: [WORKER, COORDINATOR].map((name) =>
           defineTask<Input, AttemptState, JsonValue, object>({
             name,
-            version: 1,
+            version: taskVersion,
             initial: initialAttempt,
             phases: {
               run: (task, runtime, context) =>
@@ -471,14 +468,13 @@ export class Xean {
       (task) => isXeanTask(task) && !task.abortRequested,
     ) as PiTask[];
     const selected: PiTask[] = [];
-    const coordinatorRunning = tx.tasks.some(
-      (t) => t.kind === COORDINATOR && active.has(t.id),
+    // Later signals wait for the oldest decision, including recovery cleanup.
+    const oldest = tx.tasks
+      .filter((t) => t.kind === COORDINATOR && t.state.status !== "terminal")
+      .sort((a, b) => a.id - b.id)[0];
+    const coordinator = roots.find(
+      (t) => t.id === oldest?.id && t.state.status === "pending",
     );
-    const coordinator = coordinatorRunning
-      ? undefined
-      : roots.find(
-          (t) => t.kind === COORDINATOR && t.state.status === "pending",
-        );
     if (coordinator) selected.push(coordinator);
     const occupied = tx.tasks.filter(
       (t) => t.kind === WORKER && active.has(t.id),
@@ -499,22 +495,7 @@ export class Xean {
         task.state.checkpoint.attempts >= tx.state.limits.attempts,
     );
     if (exhausted) {
-      // A recovered owner may still have private descendants. Pi cancels and
-      // joins them before the domain failure hook publishes its receipt.
-      tx.writeTask({
-        ...exhausted,
-        memos: undefined,
-        state: {
-          status: "completing",
-          checkpoint: exhausted.state.checkpoint!,
-          outcome: {
-            status: "faulted",
-            error: {
-              message: `Attempt limit reached for task ${exhausted.id}`,
-            },
-          },
-        },
-      });
+      this.exhaust(tx, exhausted);
       return out;
     }
     // Read frozen Coordinator views before the first table write in the batch.
@@ -556,6 +537,26 @@ export class Xean {
       out.push({ id: task.id, checkpoint });
     }
     return out;
+  }
+
+  private exhaust(tx: Transaction, task: PiTask): void {
+    // Pi cancels and joins private descendants before finalizing this outcome.
+    // Freeze a draining Coordinator's failure before a grant clears the cap.
+    tx.writeTask({
+      ...task,
+      memos: undefined,
+      state: {
+        status: "completing",
+        checkpoint: task.state.checkpoint!,
+        outcome: {
+          status:
+            task.kind === COORDINATOR && tx.state.callLimitReached
+              ? "failed"
+              : "faulted",
+          error: { message: `Attempt limit reached for task ${task.id}` },
+        },
+      },
+    });
   }
 
   private current(tx: Transaction, item: Reserved): PiTask | undefined {
@@ -612,6 +613,7 @@ export class Xean {
               taskId: runtime.taskId,
               conversation: runtime.conversation,
               snapshot: runtime.snapshot,
+              memo: runtime.memo,
               context: runtime.context,
               registry: this.registry,
               models: this.models,
@@ -673,7 +675,7 @@ export class Xean {
       await Promise.all(calls.pending);
       if (this.store.failure) throw error;
       if (this.closing || nativeContext.abortSignal?.aborted) return;
-      await this.joinOwned(runtime.taskId, BACKGROUND_CONTEXT, true);
+      await this.joinOwned(runtime.taskId, nativeContext, true);
       await this.store.mutateTask(runtime, async (tx, task) => {
         if (task.state.status !== "running") return;
         const message = errorText(error);
@@ -1063,7 +1065,7 @@ export class Xean {
       throw new Error("Additional calls must be a positive safe integer");
     if (typeof key !== "string" || !key)
       throw new Error("Call allowance requires a nonempty key");
-    return this.keyedSignal("allowance", additional, key, async (tx) => {
+    return this.keyedSignal("allowance", additional, key, (tx) => {
       if (
         tx.state.status === "completed" ||
         tx.state.status === "cancelled" ||
@@ -1085,11 +1087,7 @@ export class Xean {
               task.state.status === "pending" &&
               task.state.checkpoint.attempts >= tx.state.limits.attempts
             )
-              await this.failTask(
-                tx,
-                task,
-                `Attempt limit reached for task ${task.id}`,
-              );
+              this.exhaust(tx, task);
           tx.state.error = null;
         }
         tx.state.callLimitReached = false;

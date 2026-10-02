@@ -38,10 +38,10 @@ all three packages, with one dependency lock and aligned package versions.
 - [Changelog](CHANGELOG.md): changes and compatibility.
 - [Contributor rules](AGENTS.md): design priorities and repository boundaries.
 
-Matching Pi packages are pinned to the Pi 1.0.0 release commit in `package.json`.
+Matching Pi packages are pinned to one exact source commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
-build, frozen model data, and hashes. The `main` branch is the current
-distribution. Its three-view note format, updated Pi storage schema, and Harness
+build, frozen model data, and hashes. The `main` branch contains the unreleased
+3.0 candidate. Its three-view note format, updated Pi storage schema, and Harness
 checkpoints require new campaigns. Historical campaigns require their original
 source revision and runtime. Existing releases and tags remain historical archives.
 
@@ -128,10 +128,10 @@ licenses.
 
 ## Distribution
 
-Distribute checked source commits from `main`. APIs, CLI contracts, and campaign
-formats may change. Run ongoing campaigns with their original source revision
-and frozen settings. Preserve existing releases and tags, and do not create
-new numbered releases or release tags.
+Prepare 3.0 from a checked source revision. Development builds retain their
+prerelease version until qualification is complete. Run ongoing campaigns with
+their original source revision and frozen settings. Preserve existing releases
+and tags as historical archives.
 
 Before distributing a source revision:
 
@@ -190,25 +190,3 @@ It runs two workers concurrently and accepts their sum of squares, writing
 `runs/deterministic.sqlite`. Repeating it reopens the committed result.
 Pass another database path to start fresh. `run()` can return while waiting for
 input, so only `status: "completed"` establishes accepted completion.
-
-## Live kernel smoke
-
-On `saturn`, run from Fleet Infra:
-
-```sh
-bin/fleet-nix run .#fleet-run -- ../xean/scripts/codex-lb-smoke.ts codex-lb/xean
-```
-
-The launcher verifies dependencies, reads the gateway key from OpenBao into
-memory, and passes it over stdin with the provisioned lab CA. Two concurrent
-Luna workers use max reasoning and Pi Durable conversations over cached
-WebSocket transport. The smoke checks results, usage, connection reuse, delta
-requests, and unchanged reopening in a second process without credentials.
-This Durable smoke still requires live qualification. Historical gateway receipts
-retain their recorded scope.
-
-Campaigns and records remain under ignored `runs/`. Successful execution prints
-`completed` for both phases. JSON snapshots can also exist after assertion
-failure, so their presence alone does not establish success.
-See [kernel verification](docs/kernel-smoke.md) for observed results and
-[solver verification](docs/solver.md#current-verification) for role checks.

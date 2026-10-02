@@ -1,6 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { Check } from "typebox/value";
-import { positiveIntegerSchema } from "../types.ts";
 import type { Role, WorkRequest, XeanOptions } from "../types.ts";
 import {
   closure,
@@ -11,6 +9,8 @@ import {
 } from "./notes.ts";
 import {
   decode,
+  canExplore,
+  chatGptResponseLimit,
   declarationVersion,
   taskSchema,
   verificationTargets,
@@ -21,6 +21,7 @@ import {
 } from "./contracts.ts";
 import {
   createRoles,
+  unconfiguredCodex,
   type CoordinationInput,
   type RoleOptions,
 } from "./roles.ts";
@@ -36,30 +37,26 @@ export function createSolver(
   research: Research = codexResearch(),
 ) {
   const task = decode(taskSchema, taskValue);
-  const maxExplorerReads = settings.maxExplorerReads ?? 4;
+  const {
+    maxExplorerReads = 4,
+    maxExplorerResponses = maxExplorerReads + 4,
+    literature = false,
+    chatGptSingleShot = false,
+  } = settings;
   const options: RoleOptions = {
-    maxExplorerResponses: maxExplorerReads + 4,
-    literature: false,
-    maxExplorerReads,
-    chatGptSingleShot: false,
     ...settings,
+    maxExplorerReads,
+    maxExplorerResponses,
+    literature,
+    chatGptSingleShot,
   };
   const requestedExplorerResponses = settings.maxExplorerResponses;
-  if (!Check(positiveIntegerSchema, options.maxExplorerResponses))
-    throw new Error("maxExplorerResponses must be a positive integer");
-  if (!Check(positiveIntegerSchema, options.maxExplorerReads))
-    throw new Error("maxExplorerReads must be a positive integer");
   const load = () => {
     if (typeof runtime === "function") runtime = runtime();
     if (runtime.profiles.explorer.model.provider === chatGptWebProviderId) {
-      if (
-        requestedExplorerResponses !== undefined &&
-        requestedExplorerResponses !== 1
-      )
-        throw new Error(
-          "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
-        );
-      options.maxExplorerResponses = 1;
+      options.maxExplorerResponses = chatGptResponseLimit(
+        requestedExplorerResponses,
+      );
       options.chatGptSingleShot = true;
     }
     return runtime;
@@ -96,6 +93,9 @@ export function createSolver(
         notes,
         guidance: guidance(view),
         literatureUsed,
+        explorerUsed:
+          functions.explorer === builtInExplorer &&
+          view.work.some((work) => work.role === "xean.explorer"),
         failures: view.work
           .filter((work) => work.status === "failed")
           .map(({ id, role, error }) => ({ id, role, error })),
@@ -110,17 +110,21 @@ export function createSolver(
         load();
       // Explorer workers may run alongside the single verification batch.
       const targets = verificationTargets(plan);
-      let explorerUsed =
-        options.chatGptSingleShot === true &&
-        view.work.some((work) => work.role === "xean.explorer");
+      let explorerUsed = input.explorerUsed;
       const dispatch: WorkRequest[] = [];
       for (const request of plan.work) {
         if (request.kind === "verifier") continue;
-        if (request.kind === "codex" && !options.codex)
+        if (request.kind === "codex" && functions.codex === unconfiguredCodex)
           throw new Error("Codex worker is not configured");
-        if (request.kind === "explorer") {
-          if (explorerUsed) continue;
-          explorerUsed = options.chatGptSingleShot === true;
+        if (
+          request.kind === "explorer" &&
+          functions.explorer === builtInExplorer
+        ) {
+          if (!canExplore(options.chatGptSingleShot === true, explorerUsed))
+            throw new Error(
+              "Explorer is unavailable: its one-shot allowance was used",
+            );
+          explorerUsed = true;
         }
         dispatch.push({
           id: `w${signal.id}-${dispatch.length + 1}`,

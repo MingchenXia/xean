@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
 import { version } from "../package.json";
 import { declarationVersion } from "xean/solve";
 
@@ -10,6 +12,58 @@ const cliArgs = [
   ...runtimeArgs,
   resolve(import.meta.dir, "../packages/cli/src/index.ts"),
 ];
+
+test("CA restart preserves process identity and drains after terminal SIGINT", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-cli-signal-"));
+  const script = join(directory, "index.ts");
+  const ca = join(directory, "ca.pem");
+  // Exercise the real bootstrap with a fixture CA and a slow-draining command.
+  await writeFile(ca, "fixture");
+  await writeFile(
+    script,
+    (await readFile(cliArgs.at(-1)!, "utf8"))
+      .replace('"/etc/fleet/ca/fleet-lab-root.pem"', JSON.stringify(ca))
+      .replace(
+        'await import("./commands.ts");',
+        `const input = await Bun.stdin.text();
+const stopped = Promise.withResolvers<void>();
+process.once("SIGINT", () => {
+  void Bun.sleep(50).then(() => stopped.resolve());
+});
+console.log("ready");
+await stopped.promise;
+console.log(JSON.stringify({ pid: process.pid, ca: process.env.NODE_EXTRA_CA_CERTS, args: process.argv.slice(2), input }));`,
+      ),
+  );
+  const child = Bun.spawn([...runtimeArgs, script, "literal argument"], {
+    env: { ...process.env, NODE_EXTRA_CA_CERTS: undefined },
+    detached: true,
+    stdin: Buffer.from("input"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    let result: unknown;
+    for await (const line of createInterface({
+      input: Readable.from(child.stdout),
+    })) {
+      if (line === "ready") process.kill(-child.pid, "SIGINT");
+      else result = JSON.parse(line);
+    }
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stderr).text()).toBe("");
+    expect(result).toEqual({
+      pid: child.pid,
+      ca,
+      args: ["literal argument"],
+      input: "input",
+    });
+  } finally {
+    child.kill("SIGKILL");
+    await child.exited;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("standalone research runs without Pi credentials and preserves usage attribution", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-cli-research-"));
@@ -28,7 +82,7 @@ test("standalone research runs without Pi credentials and preserves usage attrib
 import { appendFile } from "node:fs/promises";
 const input = await Bun.stdin.json();
 await appendFile(${JSON.stringify(invocations)}, JSON.stringify(process.env.XEAN_CODEX_USAGE_TAG) + "\\n");
-const value = "query" in input ? { notes: [], candidate: false } : { verdict: "PASS", report: "Reflexivity proves the exact claim.", correction: null, premises: [], passages: [] };
+const value = "query" in input ? { notes: [], candidate: false } : { verdict: "PASS", report: "Reflexivity proves the exact claim.", premises: [], passages: [] };
 console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(value) } }));
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, output_tokens: 0 } }));
 `,

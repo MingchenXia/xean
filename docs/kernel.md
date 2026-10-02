@@ -1,7 +1,7 @@
 # Xean kernel
 
 Xean coordinates durable work over Pi's storage and execution APIs. The current
-foundation pins matching packages to the Pi 1.0.0 release commit and uses the
+foundation pins matching Pi 1.0.0 packages to one source commit and uses the
 public `pi-durable` storage contract.
 The [glossary](glossary.md) defines the shared terminology and code spellings.
 
@@ -57,7 +57,7 @@ role may call the same async function. Scheduling through the kernel supplies
 the durable request and atomic publication boundary.
 
 `execution.durable` exposes the owning task ID, invocation-bound `commit`,
-`conversation`, `snapshot`, and `context` operations, and the host's native
+`conversation`, `snapshot`, `memo`, and `context` operations, and the host's native
 Registry and Models collection. A role installs its extension and creates a
 conversation owned by that task, selecting the extension in the creating
 transaction. On recovery, native descendants wait until the owner is active
@@ -142,7 +142,8 @@ Pi aborts and joins descendants before Xean publishes the failure receipt.
 
 A Coordinator decision commits its next state, consumes its pending signal,
 and admits all new work together. A failed decision admits no partial work
-batch. Coordinator attempts run sequentially while workers continue concurrently.
+batch. Coordinator signals run in creation order, including recovery and failure
+cleanup, while workers continue concurrently.
 
 Shared mathematical content can be carried in a committed result. A dedicated
 note schema, dependency closure, correction rules, verification reuse, and
@@ -223,7 +224,9 @@ waiting. Forceful process termination belongs to the supervising application.
 
 An attempt remains active until its admitted provider calls finish settlement.
 A failure cancels sibling calls and joins their accounting and private work
-before releasing the attempt. Returning with a pending admission or unsettled
+before releasing the attempt. Shutdown can interrupt the private-work join,
+leaving unfinished native aborts for recovery. Admitted calls still settle before
+shutdown finishes. Returning with a pending admission or unsettled
 call fails the worker.
 A settlement error also prevents success, even if the role handles that error.
 `auditedStream` owns settlement on all response and error paths. Direct recorder
@@ -247,6 +250,9 @@ interrupt several concurrent workers.
 | `concurrency`   | Concurrent worker attempts, with Coordinator allowed alongside them                                      | `4`               |
 | `attempts`      | Maximum invocations per logical worker or Coordinator signal, including initial and interrupted attempts | `3`               |
 | `providerCalls` | Initial logical-call allowance, retained unchanged when reopening                                        | `null`, unlimited |
+
+Omitted limits and explicitly undefined known fields use these defaults.
+Unknown fields and invalid values are rejected.
 
 The kernel imposes no wall-clock deadline on campaigns or roles. Elapsed time
 does not stop kernel admission or publication. Settings reject the retired
@@ -285,6 +291,8 @@ remain valid on reopen.
 
 A grant can return a campaign stopped by its call cap to `running`, clear the
 admission block, and make preserved work runnable. It does not invoke `run()`.
+An exhausted Coordinator already draining keeps its failure outcome while Pi
+cancels and joins its private descendants, including across a concurrent grant.
 A paused campaign stays paused. A blocked campaign can receive a grant while
 preserving its Coordinator failure and pending signal. Explicit `resume()` is
 still required. Cancelled and completed campaigns reject new grants.
@@ -402,7 +410,9 @@ empty or Pi storage exists before campaign initialization commits. The library
 reports this state with `UninitializedCampaignError`. Missing files, foreign
 sessions, corruption, and incompatible versions remain errors.
 Lifecycle and solver input commands use the running owner's local Unix socket;
-without an owner, those commands acquire ownership. Runners can assign
+without an owner, those commands acquire ownership. Before sending a command,
+the client checks that the socket and its private directory belong to the current
+user. Runners can assign
 `--owner-id ID` when starting execution and use `--expected-owner-id ID` on
 live commands. The serving owner checks the ID before mutation. Conditional
 commands fail if that owner has ended or been replaced, with no offline fallback.

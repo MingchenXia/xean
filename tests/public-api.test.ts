@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Xean, openXeanStorage } from "xean";
 import {
   createSolver,
@@ -10,55 +8,105 @@ import {
   type Plan,
   type Task,
 } from "xean/solve";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { fixtureRuntime } from "./fixtures/pi.ts";
+import { fixtureRuntime, invoke } from "./fixtures/pi.ts";
 
-test.each(["completed", "failed"] as const)(
-  "browser Explorer quota survives a %s attempt and reopen",
-  async (status) => {
-    const directory = await mkdtemp(join(tmpdir(), "xean-browser-quota-"));
-    const path = join(directory, "campaign.sqlite");
-    let calls = 0;
-    const setup = () => {
-      const runtime = fixtureRuntime(() => {
-        calls++;
-        if (status === "failed") throw new Error("Browser request failed");
-        return fauxAssistantMessage(
-          [fauxToolCall("submit_result", { notes: [], candidate: false })],
-          { stopReason: "toolUse" },
-        );
-      });
-      runtime.profiles.explorer.model.provider = "codex-chatgpt-web";
-      const solver = createSolver(
-        { problem: "P", completionCriteria: "Prove P" },
-        () => runtime,
+const coordination = {
+  task: { problem: "P", completionCriteria: "Prove P" },
+  notes: [],
+  failures: [],
+  guidance: [],
+  literatureUsed: false,
+  explorerUsed: false,
+};
+const explore = { kind: "explorer" as const, guidance: "Explore" };
+const planReply = () =>
+  fauxAssistantMessage([fauxToolCall("submit_result", { work: [explore] })], {
+    stopReason: "toolUse",
+  });
+
+test("built-in planner sees replacement Codex and keeps literature opt-in", async () => {
+  const capabilities: { codex: boolean; literature: boolean }[] = [];
+  const solver = createSolver(
+    coordination.task,
+    fixtureRuntime((context) => {
+      const input = JSON.parse(
+        String(
+          context.messages.find((message) => message.role === "user")!.content,
+        ),
       );
-      solver.functions.coordinator = async () => ({
-        work: [
-          { kind: "explorer", guidance: "Explore" },
-          { kind: "explorer", guidance: "Try another approach" },
-        ],
+      capabilities.push({
+        codex: input.capabilities.codex,
+        literature: input.capabilities.literature,
       });
-      return solver;
-    };
-    let engine: Xean | undefined;
-    try {
-      engine = await Xean.open(await openXeanStorage(path), setup());
-      const first = await engine.run();
-      expect(first.work).toHaveLength(1);
-      expect(first.work[0]!.status).toBe(status);
-      await engine.close();
-      engine = await Xean.open(await openXeanStorage(path), setup());
-      await engine.input({ kind: "guide", id: "again", text: "Continue" });
-      const second = await engine.run();
-      expect(calls).toBe(1);
-      expect(second.work).toEqual(first.work);
-    } finally {
-      await engine?.close();
-      await rm(directory, { recursive: true });
-    }
-  },
-);
+      return planReply();
+    }),
+  );
+  await invoke(solver.functions.coordinator, coordination);
+  const replacement = async () => ({
+    kind: "notes" as const,
+    notes: [],
+    candidate: false,
+  });
+  solver.functions.codex = replacement;
+  solver.functions.literature = replacement;
+  await invoke(solver.functions.coordinator, coordination);
+  expect(capabilities).toEqual([
+    { codex: false, literature: false },
+    { codex: true, literature: false },
+  ]);
+});
+
+test("direct Pi runtime rejects browser Coordinator before call admission", async () => {
+  let calls = 0;
+  let admitted = 0;
+  const runtime = fixtureRuntime(() => {
+    calls++;
+    return planReply();
+  });
+  runtime.profiles.coordinator.model.provider = "codex-chatgpt-web";
+  const solver = createSolver(coordination.task, runtime);
+  await expect(
+    invoke(solver.functions.coordinator, coordination, {
+      recorder: {
+        begin() {
+          admitted++;
+          return { recordRequest() {}, settle() {} };
+        },
+      },
+    }),
+  ).rejects.toThrow("profiles.explorer");
+  expect(admitted).toBe(0);
+  expect(calls).toBe(0);
+});
+
+test("duplicate browser work rejects the entire plan before any provider call", async () => {
+  let calls = 0;
+  const runtime = fixtureRuntime(() => {
+    calls++;
+    throw new Error("Invalid plans must not call Explorer");
+  });
+  runtime.profiles.explorer.model.provider = "codex-chatgpt-web";
+  const solver = createSolver(
+    { problem: "P", completionCriteria: "Prove P" },
+    () => runtime,
+  );
+  solver.functions.coordinator = async () => ({
+    work: [
+      { kind: "explorer", guidance: "Explore" },
+      { kind: "explorer", guidance: "Try another approach" },
+    ],
+  });
+  const engine = await Xean.open(await openXeanStorage(":memory:"), solver);
+  try {
+    const rejected = await engine.run();
+    expect(rejected.status).toBe("blocked");
+    expect(rejected.error).toContain("Explorer is unavailable");
+    expect(rejected.work).toEqual([]);
+    expect(calls).toBe(0);
+  } finally {
+    await engine.close();
+  }
+});
 
 test("runtime construction validates profiles and never falls back from an explicit credential environment", () => {
   expect(() =>
@@ -108,90 +156,106 @@ test("runtime construction validates profiles and never falls back from an expli
   }
 });
 
-test("public solver functions replace planning, Explorer, and Verifier without constructing Pi", async () => {
-  const task: Task = {
-    problem: "Prove 2 + 2 = 4",
-    completionCriteria: "Give a proof",
-  };
-  const solver = createSolver(task, () => {
-    throw new Error(
-      "Replaced functions must not initialize the default runtime",
+test.each(["explorer", "codex"] as const)(
+  "public solver functions replace planning, %s, and Verifier without constructing Pi",
+  async (worker) => {
+    const task: Task = {
+      problem: "Prove 2 + 2 = 4",
+      completionCriteria: "Give a proof",
+    };
+    const pass = { verdict: "PASS" as const, report: "Checked" };
+    const solver = createSolver(
+      task,
+      () => {
+        throw new Error(
+          "Replaced functions must not initialize the default runtime",
+        );
+      },
+      { maxExplorerReads: undefined, maxExplorerResponses: undefined },
     );
-  });
-  const called: string[] = [];
-  solver.functions.coordinator = async ({
-    task: exact,
-    notes,
-  }): Promise<Plan> => {
-    expect(exact).toEqual(task);
-    called.push("plan");
-    return {
-      work: notes.length
-        ? [
-            {
-              kind: "verifier",
-              notes: [notes[0]!.id],
-              through: "reconstruction",
-            },
-          ]
-        : [
-            {
-              kind: "explorer",
-              guidance: "Prove the exact claim",
-            },
-          ],
+    expect(solver.options).toMatchObject({
+      maxExplorerReads: 4,
+      maxExplorerResponses: 8,
+    });
+    const called: string[] = [];
+    solver.functions.coordinator = async ({
+      task: exact,
+      notes,
+    }): Promise<Plan> => {
+      expect(exact).toEqual(task);
+      called.push("plan");
+      return {
+        work: notes.length
+          ? [
+              {
+                kind: "verifier",
+                notes: [notes[0]!.id],
+                through: "reconstruction",
+              },
+            ]
+          : [
+              worker === "explorer"
+                ? {
+                    kind: "explorer",
+                    guidance: "Prove the exact claim",
+                  }
+                : {
+                    kind: "codex",
+                    assignment:
+                      "Compute the requested sum and record the result",
+                    notes: [],
+                  },
+            ],
+      };
     };
-  };
-  solver.functions.explorer = async () => {
-    called.push("explore");
-    return {
-      kind: "notes",
-      candidate: true,
-      notes: [
-        {
-          id: "n1",
-          summary: "Addition",
-          detailedSummary: "Two plus two equals four by associativity.",
-          text: "2 + 2 = (1 + 1) + (1 + 1) = 4.",
-          support: [],
-        },
-      ],
-    };
-  };
-  solver.functions.verifier = async ({ notes, targets }) => {
-    called.push("verify");
-    expect(targets).toEqual([{ id: notes[0]!.id, through: "reconstruction" }]);
-    return {
-      kind: "verification",
-      checks: [
-        {
-          noteId: notes[0]!.id,
-          correctness: {
-            verdict: "PASS",
-            report: "Addition is correct",
-            premises: [],
+    solver.functions[worker] = async () => {
+      called.push(worker);
+      return {
+        kind: "notes",
+        candidate: true,
+        notes: [
+          {
+            id: "n1",
+            summary: "Addition",
+            detailedSummary: "Two plus two equals four by associativity.",
+            text: "2 + 2 = (1 + 1) + (1 + 1) = 4.",
+            support: [],
           },
-          source: { verdict: "PASS", report: "Self-contained" },
-          requirements: { verdict: "PASS", report: "Exact task" },
-          reconstruction: {
-            verdict: "PASS",
-            report: "Independent proof agrees",
-            statement: task.problem,
-            proof: "Counting two pairs gives four units.",
-          },
-        },
-      ],
+        ],
+      };
     };
-  };
-  const engine = await Xean.open(await openXeanStorage(":memory:"), solver);
-  try {
-    const result = await engine.run();
-    expect(result.status).toBe("completed");
-    expect(result.providerCalls).toBe(0);
-    expect(called).toEqual(["plan", "explore", "plan", "verify"]);
-    expect(await engine.run()).toEqual(result);
-    expect(called).toHaveLength(4);
-  } finally {
-    await engine.close();
-  }
-});
+    solver.functions.verifier = async ({ notes, targets }) => {
+      called.push("verify");
+      expect(targets).toEqual([
+        { id: notes[0]!.id, through: "reconstruction" },
+      ]);
+      return {
+        kind: "verification",
+        checks: [
+          {
+            noteId: notes[0]!.id,
+            correctness: { ...pass, premises: [] },
+            source: pass,
+            requirements: pass,
+            reconstruction: {
+              ...pass,
+              statement: task.problem,
+              proof: "Counting two pairs gives four units.",
+            },
+          },
+        ],
+      };
+    };
+    const engine = await Xean.open(await openXeanStorage(":memory:"), solver);
+    try {
+      const result = await engine.run();
+      expect(result.status).toBe("completed");
+      expect(result.providerCalls).toBe(0);
+      expect(called).toEqual(["plan", worker, "plan", "verify"]);
+      expect(await engine.run()).toEqual(result);
+      expect(called).toHaveLength(4);
+    } finally {
+      await engine.close();
+    }
+  },
+);

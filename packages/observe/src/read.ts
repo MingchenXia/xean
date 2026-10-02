@@ -4,7 +4,7 @@ import { execa } from "execa";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { campaignVersion, inspectCampaign } from "xean";
-import { decode, taskSchema } from "xean/solve";
+import { decode, taskSchema, type Task } from "xean/solve";
 import { usageRecord } from "xean/report";
 import { readEvidence, readReview } from "./artifacts.ts";
 import { readSnapshot, snapshot, type Snapshot } from "./snapshot.ts";
@@ -15,24 +15,30 @@ const observationProcess = {
   timeout: observationInterval,
   forceKillAfterDelay: 1_000,
 };
+export const defaultProcessTask = "solver";
 
+const nonempty = Type.String({ pattern: "\\S" });
 const reviewReceipt = Type.Script(
   {
-    Text: Type.String({ pattern: "\\S" }),
+    Text: nonempty,
     DateTime: Type.String({ format: "date-time" }),
   },
   "{ reviewer: Text, reviewedAt: DateTime, verdict: 'PASS' | 'FAIL' | 'INCONCLUSIVE', report: Text }",
 );
 
-export type Source = {
-  id: string;
-  directory: string;
-  host?: string;
-  runtime?: string;
-  job?: string;
-  task?: string;
-  review?: string;
-};
+export const sourceSchema = Type.Object(
+  {
+    id: Type.String({ pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" }),
+    directory: Type.String({ minLength: 1 }),
+    host: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]*$" })),
+    runtime: Type.Optional(Type.String({ pattern: "^/[a-zA-Z0-9/_.-]+$" })),
+    job: Type.Optional(nonempty),
+    task: Type.Optional(nonempty),
+    review: Type.Optional(nonempty),
+  },
+  { additionalProperties: false },
+);
+export type Source = Static<typeof sourceSchema>;
 export type Run = {
   id: string;
   source: string;
@@ -42,7 +48,7 @@ export type Run = {
   stale?: boolean;
   snapshot?: Snapshot;
   heartbeat?: {
-    task: { problem: string; completionCriteria: string };
+    task: Task;
     rounds: number;
     lastRound?: unknown;
   };
@@ -174,6 +180,7 @@ export async function readProcess(
   const observation: Pick<Run, "process" | "error"> = {};
   try {
     if (source.job) {
+      const task = source.task ?? defaultProcessTask;
       const nomad = (args: string[]) =>
         execa(resolve(fleet, "bin/fleet-nomad"), args, {
           ...observationProcess,
@@ -190,7 +197,7 @@ export async function readProcess(
       if (allocation) {
         observation.process = {
           job: source.job,
-          task: source.task ?? "solver",
+          task,
           allocation: allocation.ID,
           status: allocation.ClientStatus,
           observedAt: new Date().toISOString(),
@@ -207,7 +214,7 @@ export async function readProcess(
               "-n",
               stderr ? "10" : "20",
               allocation.ID,
-              source.task ?? "solver",
+              task,
             ]);
           } catch (error) {
             recordError(observation, error);

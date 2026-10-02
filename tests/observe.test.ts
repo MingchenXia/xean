@@ -604,7 +604,7 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
     ).toThrow();
     expect(() =>
       readSources([{ id: "run", directory, task: "" }], directory),
-    ).toThrow("Nomad task");
+    ).toThrow("/0/task");
     let reads = 0;
     const handle = api(
       [

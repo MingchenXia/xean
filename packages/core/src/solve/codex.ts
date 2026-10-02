@@ -198,8 +198,7 @@ export async function askCodex<S extends TSchema>(
   usage = transcript.usage;
   if (run.failed) throw new Error(run.stderr.trim() || run.shortMessage);
   context.abortSignal?.throwIfAborted();
-  if (transcript.error || transcript.value === undefined)
-    throw new Error(transcript.error ?? "Codex returned no structured result");
+  if (transcript.error) throw new Error(transcript.error);
   return {
     value: decode(schema, transcript.value),
     operationId,

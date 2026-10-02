@@ -24,7 +24,7 @@ and the campaign's frozen reader. Read full inspection or proofs only when neede
 - Treat code growth as a design cost. Report runtime and test line deltas for
   substantial changes. Remove redundant representations and bookkeeping while
   preserving readable formatting and essential correctness checks.
-- Push standard behavior into Pi and maintained libraries. Before adding runtime
+- Use runtime-native APIs, Pi, and maintained libraries for standard behavior. Before adding runtime
   machinery, inspect the pinned Pi/Chord implementation and record any missing
   guarantee in the alignment notes. Check ownership, publication, cleanup, and
   whether consumers retain histories despite native paging.
@@ -40,8 +40,9 @@ and the campaign's frozen reader. Read full inspection or proofs only when neede
   unless the user explicitly requests them.
 - Use TypeScript on Fleet's locked Bun runtime. Follow
   `~/.config/fleet/agent-reference.md` for runtime and fleet operations.
-- The main branch is the current distribution. Preserve existing releases and
-  tags as historical archives. Do not create numbered releases or release tags.
+- Prepare the 3.0 release from a reviewed source revision. Publish a release or
+  create its tag only when requested and after the distribution checks pass.
+  Preserve existing releases and tags as historical archives.
   Preserve active campaigns and their source-frozen runtimes.
   Historical artifacts retain the original Yean and Xean names and formats.
 
@@ -53,6 +54,9 @@ and the campaign's frozen reader. Read full inspection or proofs only when neede
   coverage, or retired contracts. Keep fixtures simple and consolidate overlap.
 - Run proportionate checks. Repeat or broaden them only after relevant changes,
   failures, or unresolved concerns.
+- Distinguish prompt-contract tests from evidence of mathematical performance.
+  Screen one prompt change at a time on small frozen cases before larger runs,
+  keeping held-out tasks and independent judgments separate from tuning.
 - Before a long model-backed run, smoke-test every required path in its deployed
   image with its runtime, model, credentials, and native configuration. Include
   Codex source checking when used. Inspect results and recorded failures, not
@@ -111,7 +115,10 @@ and the campaign's frozen reader. Read full inspection or proofs only when neede
   source verification, independent review, and optional implementation work,
   using its native tools. The solver guide defines the
   [Codex worker](docs/solver.md#codex-worker) and its artifact boundary.
-  Self-contained source checks skip Codex. Actual capabilities govern scheduling.
+  Use it sparingly for concrete implementation requirements with specified
+  inputs, outputs, constraints, and checks. Self-contained source checks skip Codex.
+  Model-visible capabilities and dispatch validation must agree. Reject unavailable
+  requests instead of silently dropping them. Intentional waiting uses the existing lifecycle.
 - Closed-book correctness may establish task-permitted background after checking
   exact statements and hypotheses. Forbidden black boxes fail. Uncertain premises
   remain unresolved under the task's proof rules.
@@ -126,6 +133,7 @@ and the campaign's frozen reader. Read full inspection or proofs only when neede
 - Source reuse shares immutable quotations and original bindings. Each new
   application requires judgment. Independent review obtains its own evidence.
 - Trust harmless corrections to preserve meaning, dependencies, and checks.
+  Supply every note view a role is permitted to replace.
   Mathematical changes require new notes. Preserve revision checks, frozen inputs,
   and atomic publication as specified in the solver guide.
 - Each invocation must finish with room for its structured result. Use Pi's

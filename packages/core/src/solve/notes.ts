@@ -93,7 +93,7 @@ export function verdict<Stage extends VerificationStage>(
   for (const check of note.checks) {
     const value = check[name];
     if (!value) continue;
-    if (value.verdict === "FAIL" && fatalStages.includes(name)) return value;
+    if (value.verdict === "FAIL") return value;
     if (value.verdict === "PASS" || result?.verdict !== "PASS") result = value;
   }
   return result;
@@ -110,9 +110,14 @@ export function stagePassed(note: Note, stage: VerificationStage): boolean {
   );
 }
 
-/** A committed source verdict is final, including INCONCLUSIVE. */
+/** Source verdicts and FAIL outcomes are final per note ID. */
 export function stagePending(note: Note, stage: VerificationStage): boolean {
-  if (note.dead || stagePassed(note, stage)) return false;
+  if (
+    note.dead ||
+    verdict(note, stage)?.verdict === "FAIL" ||
+    stagePassed(note, stage)
+  )
+    return false;
   if (stage === "correctness") return true;
   if (stage === "source")
     return stagePassed(note, "correctness") && !verdict(note, "source");

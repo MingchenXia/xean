@@ -49,6 +49,7 @@ type Definition = Task<Input, AttemptState, JsonValue, object>;
 export type Runtime = TaskRuntime<Input, AttemptState, JsonValue, object>;
 export const WORKER = "xean.worker";
 export const COORDINATOR = "xean.coordinator";
+export const taskVersion = 1;
 export const isXeanTask = (task: { kind: string }): boolean =>
   task.kind === WORKER || task.kind === COORDINATOR;
 export const campaignAddress = {
@@ -151,7 +152,7 @@ export class Store {
       const page = await storage.scanTasks({}, 256, cursor, context);
       for (const task of page.items) {
         if (!isXeanTask(task)) continue;
-        if (task.version !== 1) {
+        if (task.version !== taskVersion) {
           throw new Error(`Unsupported Xean task ${task.kind}@${task.version}`);
         }
         tasks.set(task.id, resident(task as PiTask));
@@ -172,16 +173,19 @@ export class Store {
             );
           },
         });
-      // Harness owns recovery. Refresh only records it may have changed before
-      // the post-open subscription can observe them.
+      const store = new Store(storage, tasks, session, runtime?.registry);
+      // Subscribe before refresh so asynchronous reads cannot lose newer commits.
       if (runtime)
         for (const task of tasks.values())
-          if (task.state.status === "running")
-            tasks.set(
-              task.id,
-              resident((await storage.task(task.id, context)) as PiTask),
-            );
-      return new Store(storage, tasks, session, runtime?.registry);
+          if (
+            task.state.status === "running" ||
+            task.state.status === "completing"
+          ) {
+            const refreshed = await storage.task(task.id, context);
+            if (tasks.get(task.id) === task)
+              tasks.set(task.id, resident(refreshed as PiTask));
+          }
+      return store;
     } catch (error) {
       await session.close(context).catch(() => {});
       throw error;

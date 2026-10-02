@@ -8,6 +8,7 @@ import {
   sourceSchema,
   reviewSchema,
   type Exploration,
+  type NoteContent,
   type NoteInfo,
   type ReviewInput,
   type ResearchReport,
@@ -24,7 +25,7 @@ export interface Research {
   source(
     input: {
       task: Task;
-      notes: { id: string; text: string; premises: string[] }[];
+      notes: (NoteContent & { id: string; premises: string[] })[];
       evidence?: SourceEvidence[];
     },
     execution: Execution,
@@ -48,7 +49,7 @@ const sourceInstructions =
   "Check each note's external premises against primary-source evidence. Return exactly one {noteId, result} in results for every supplied note. Assess each note separately; other notes in the batch are not established premises. For a conditional claim P implies Q, establish only external results used in the derivation. Its explicit hypothetical antecedent P is part of the claim, not an external theorem to establish, and proving the implication does not establish P. The task supplies assumptions and proof rules; whether this partial or conditional result meets its completion criteria belongs to the separate requirements check. Verify the exact supplied statements, hypotheses, conclusion, variant, and application using the full note. Premises must be standalone external claims suitable for a blind prover: source names and citations are allowed, but proof ideas, application hints, and validation commentary are not. Substantive algorithmic guarantees belong in the external claim; directions for proving or applying this note do not. If the supplied wording contains such commentary or is too ambiguous to stand alone, return INCONCLUSIVE and explain the problem in report; do not silently rewrite it and approve different wording. A concrete mathematical mismatch still gives FAIL. PASS approves the exact supplied premise strings. First assess the supplied task and evidence. The evidence contains previously inspected quotations with their original statements and IDs. Reassess their applicability to each note; an earlier PASS does not establish a different claim. When supplied evidence establishes every premise, return immediately without web activity. Reuse sufficient quotations by returning {premise, passageId}; do not search or reopen a source merely to reconfirm a supplied quotation. Retrieve only evidence missing for a specific premise, then stop once that gap is settled. For fresh evidence, open a primary source and return {premise, url, quote} with an exact quotation. premise is the zero-based index in that note's premises. Search snippets and remembered theorems are insufficient. PASS requires every premise to be established. FAIL requires a concrete mathematical mismatch. Missing necessary evidence gives INCONCLUSIVE. Citation typos alone do not fail valid mathematics. On PASS, you may supply correction with the complete text and consistent summary and detailedSummary, changing only harmless typos, formatting, or unambiguous notation. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. " +
   taskEvidence;
 const literatureInstructions =
-  "Answer the supplied query for the exact mathematical task. Search for the specific missing theorem, hypothesis, or source the query identifies. Stay within that question; do not expand into a general survey or collect adjacent results merely because they share terminology. Use the supplied task and notes to avoid rediscovering established material. Task-granted assumptions need no literature search. Stop when the query is answered with primary-source evidence, or report that necessary evidence could not be established. Open sources, report exact hypotheses and conclusions, cite their URLs and relevant passages, and keep uncertain matches explicit. Return only useful new ordinary unverified theorem notes with local IDs n1, n2, ... . Each note has an index summary, a detailedSummary preserving actual claims, conditions, bounds, and unresolved gaps, and authoritative full text. Return notes=[] if there is no useful new result. Put citation URLs and quotations in text. The support array contains only existing or earlier local note IDs whose mathematical results are used, never URLs. Use support=[] for an independent theorem note. Set candidate=false. Search snippets and memory do not count as inspected sources.";
+  "Answer the supplied query for the exact mathematical task. Search for the specific missing theorem, hypothesis, or source the query identifies. Stay within that question; do not expand into a general survey or collect adjacent results merely because they share terminology. Use the supplied task and notes to avoid rediscovering established material. Task-granted assumptions need no literature search. Stop when the query is answered with primary-source evidence, or report that necessary evidence could not be established. Open sources, report exact hypotheses and conclusions, cite their URLs and relevant passages, and keep uncertain matches explicit. Return useful new ordinary unverified research notes with local IDs n1, n2, ... . Include a source mismatch or bounded unsuccessful search when that finding helps future work: state what was checked and what remains unknown. An unsuccessful search does not establish that a theorem does not exist. Each note has an index summary, a detailedSummary preserving actual claims, conditions, bounds, and unresolved gaps, and authoritative full text. Return notes=[] only when there is no new information worth retaining. Put citation URLs and quotations in text. The support array contains only existing or earlier local note IDs whose mathematical results are used, never URLs. Use support=[] for an independent finding. Set candidate=false. Search snippets and memory do not count as inspected sources.";
 const reviewInstructions =
   "Independently audit the entire argument for the exact problem and completion criteria. Check every supporting proof rather than inheriting solver verdicts. Verify all load-bearing inferences, hypotheses, cases, bounds, and theorem applications. An explicit hypothetical antecedent in a supporting implication is part of its claim, not an external premise; check the derivation under that assumption and every application that needs the antecedent established. An implication alone does not establish the unconditional conclusion. An unstated assumption in an unconditional claim remains a gap. List all nonroutine external premises as exact standalone claims in premises, keeping proof ideas, application explanations, and validation commentary in report, and open matching primary sources for every one, with quotations indexed by their zero-based position in premises (0 for the first). A self-contained argument has premises=[]. PASS requires the full argument and every essential external premise to be established. FAIL requires a concrete mathematical defect. Unsettled checks give INCONCLUSIVE. Report harmless wording corrections explicitly; substantial repairs require a new argument. " +
   taskEvidence;
@@ -56,7 +57,7 @@ const reviewInstructions =
 /** Retain reported passages directly; observed web activity does not authenticate quotes. */
 export function bindCodex(
   result: {
-    value: Static<typeof sourceSchema>;
+    value: Static<typeof sourceSchema> | Static<typeof reviewSchema>;
     operationId: string;
     searches: number;
   },
@@ -65,11 +66,8 @@ export function bindCodex(
   passagePrefix = result.operationId,
   task?: Task,
 ): ResearchReport {
-  const {
-    value: { correction, ...value },
-    operationId,
-    searches,
-  } = result;
+  const { operationId, searches } = result;
+  const { correction, ...value } = { correction: null, ...result.value };
   const fromTask = (passage: { url: string; quote: string }) =>
     passage.url === taskSource &&
     !!passage.quote.trim() &&

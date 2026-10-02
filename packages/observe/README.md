@@ -48,6 +48,7 @@ usage totals. Both reports must come from the same inspection.
 
 Create a config file containing the runs to display. Local paths resolve relative
 to the config file. Remote paths are absolute and name a provisioned Bun runtime.
+Configuration rejects unknown fields and reports invalid fields by their JSON path.
 For either source, an optional `job` obtains process status and recent logs through
 Fleet's Nomad CLI. `task` selects the Nomad task and defaults to `solver`.
 Xean Lab uses `worker`. The process panel identifies a sampled pool allocation

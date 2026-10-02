@@ -9,8 +9,10 @@ prevent further delegation.
 ## Sources and availability
 
 The Pi/Chord packages are pinned to
-[`a13d35a742c6`](https://github.com/earendil-works/pi/tree/a13d35a742c6ef8462812a28fbe1d8c8b7431c32),
-the Pi `1.0.0` release. Pi Durable remains experimental. The
+[`7fbbd5f4a1d9`](https://github.com/earendil-works/pi/tree/7fbbd5f4a1d982bb02d63472dde0774fa639f99b),
+two commits after the Pi `1.0.0` release. The intervening changes affect changelogs
+and the coding-agent UI, leaving Xean's runtime packages unchanged. Pi Durable
+remains experimental. The
 [artifact record](../vendor/pi/provenance.json) identifies the source, frozen
 model catalog, reproducible builds, and retained patches.
 
@@ -72,7 +74,9 @@ native records and drafts can be Session-owned. Coordinator copies its callable
 input once and derives its prompt and note reader from that frozen copy.
 
 Store uses `Session.subscribeCommits()` to update its task projection after
-document adoption. Pi owns commit observation and poisoning. After a rejected
+document adoption. Startup subscribes before refreshing recovered tasks and
+preserves newer commits observed during those reads. Pi owns commit observation
+and poisoning. After a rejected
 operation, an empty Session commit checks whether the instance remains usable
 without a Storage write.
 Migration-only commits notify observers. Pi also rejects `now()` and
@@ -92,6 +96,8 @@ Session writes before joining on close.
   line. Xean uses it for concurrency, sequential Coordinator invocations, pause,
   call-cap draining, and attempt-start records. A pause during an unfinished
   admission rolls back the batch and its records.
+  Native candidate order is not signal order. Xean admits only its oldest
+  unfinished Coordinator when that task is eligible, including after recovery.
 - `onTaskFailure` can replace a runtime-generated `faulted` or `orphaned` outcome
   and stage domain records in the same transaction. Xean publishes a worker's
   failure signal or blocks a failed Coordinator without losing its signal.
@@ -184,6 +190,9 @@ zero counts, retry-listener cleanup, cache-session isolation, and the existing
 JSON/serialization allocation fixes. Authentication, invalid requests, context
 limits, and quota failures remain terminal even when their details resemble
 transport errors. Retryable typed WebSocket failures use Pi's HTTP fallback.
+Anthropic and Google catches retain `normalizeProviderError` output so native
+retry classification sees HTTP status rather than only error-message wording.
+Remove those hunks when both adapters preserve `providerError` upstream.
 The retry pattern matches `terminated` as a word so JSON `Unterminated string`
 errors do not trigger transport retries. Remove that change when upstream narrows
 the pattern or uses an equivalent classification.
@@ -230,7 +239,7 @@ leave Codex with `tool_choice: required` but no tools and is rejected by the
 provider.
 
 ChatGPT Web's [service boundary and role policy](solver.md#configuration-and-functions)
-live in the solver guide. The adapter uses Pi's `createProvider`, `lazyStream`,
+live in the solver guide. The adapter uses Pi's `createProvider`, `lazyStream`, `contentText`,
 Responses transport, and transcript conversion. The tested wire contract is:
 
 - `POST {baseUrl}/responses` accepts the complete Responses input, including
@@ -282,6 +291,11 @@ document, derives response counts from the transcript, and reuses the frozen
 Coordinator snapshot after interruption. Logical retries of terminal failures
 start a new conversation. Shared notes still publish only when the worker succeeds.
 
+A verifier stores validated source batches in native task memos keyed by their
+exact input. Recovery reuses the original source-report IDs, keeping later Pi
+stage inputs stable. The memo is private to the worker and requires no additional
+storage or publication mechanism.
+
 The task document maps each stage's input identity to its conversation in the
 same transaction that creates it. Pi's first-writer-wins memos cannot replace
 this mapping after a terminal failure or atomically create the conversation.
@@ -299,7 +313,7 @@ limits that preserve full text. The stream wrapper retains call admission,
 effective-request recording, and settlement even when cancellation bypasses
 generation hooks. Native generation retries are disabled because the audited
 stream already uses Pi's response retry policy. ChatGPT Web cannot replay an
-interrupted browser send. Codex subprocesses remain opaque whole-worker calls.
+interrupted browser send. An unfinished Codex subprocess restarts as a whole call.
 Deferred model requests are rejected because native polling does not yet pass
 through the call-admission and settlement wrapper.
 
@@ -341,7 +355,7 @@ framework remain deferred. Invocation-specific extensions are registered today
 to bind frozen inputs, tools, and call accounting. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/src/session/session.ts
-[scheduler]: https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/src/harness/scheduler.ts
-[spec]: https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/docs/spec.md
+[types]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/docs/spec.md

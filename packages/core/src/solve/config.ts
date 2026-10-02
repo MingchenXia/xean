@@ -15,8 +15,14 @@ import {
   chatGptWebProviderId,
 } from "../providers/chatgpt-web.ts";
 import { limitsSchema, positiveIntegerSchema } from "../types.ts";
-import { decode, defaultReasoning, object } from "./contracts.ts";
 import {
+  chatGptResponseLimit,
+  decode,
+  defaultReasoning,
+  object,
+} from "./contracts.ts";
+import {
+  assertProfileProvider,
   profileNames,
   type PiRuntime,
   type Profile,
@@ -81,10 +87,7 @@ export function readSettings(value: unknown): Settings {
     throw new Error("codex.workspace must be an absolute directory");
   // The scarce browser subscription must never become a fallback or verifier.
   for (const [name, profile] of Object.entries(settings.profiles)) {
-    if (name !== "explorer" && profile?.provider === chatGptWebProviderId)
-      throw new Error(
-        `ChatGPT Web may only be configured explicitly for profiles.explorer, not profiles.${name}`,
-      );
+    if (profile) assertProfileProvider(name, profile.provider);
     const endpoint = profile?.baseUrl;
     if (!endpoint) continue;
     const url = new URL(endpoint);
@@ -100,14 +103,9 @@ export function readSettings(value: unknown): Settings {
       );
   }
   if (settings.profiles.explorer?.provider === chatGptWebProviderId) {
-    if (
-      settings.maxExplorerResponses !== undefined &&
-      settings.maxExplorerResponses !== 1
-    )
-      throw new Error(
-        "ChatGPT Web Explorer requires maxExplorerResponses=1; each browser response consumes scarce subscription capacity",
-      );
-    settings.maxExplorerResponses = 1;
+    settings.maxExplorerResponses = chatGptResponseLimit(
+      settings.maxExplorerResponses,
+    );
   }
   return settings;
 }

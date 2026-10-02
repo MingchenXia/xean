@@ -13,6 +13,7 @@ import type {
   Campaign,
   Coordinator,
   JsonValue,
+  Limits,
   Role,
   WorkRequest,
 } from "../packages/core/src/types.ts";
@@ -402,11 +403,34 @@ test("invalid open options release ownership and committed work survives role re
         coordinator,
       }),
     ).rejects.toThrow("Duplicate");
+    for (const limits of [
+      { concurrency: null },
+      { attempts: null },
+      { unknown: undefined },
+    ])
+      await expect(
+        Xean.open(await openXeanStorage(path), {
+          task: "reuse",
+          roles: [role],
+          coordinator,
+          limits: limits as Partial<Limits>,
+        }),
+      ).rejects.toThrow("Invalid campaign limits");
     const storage = await openXeanStorage(path);
     const first = await Xean.open(storage, {
       task: "reuse",
       roles: [role],
       coordinator,
+      limits: {
+        concurrency: undefined,
+        attempts: undefined,
+        providerCalls: undefined,
+      },
+    });
+    expect((await first.inspect()).limits).toEqual({
+      concurrency: 4,
+      attempts: 3,
+      providerCalls: null,
     });
     await expect(
       Xean.open(storage, { roles: [role], coordinator }),

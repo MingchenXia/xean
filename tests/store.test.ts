@@ -1,4 +1,9 @@
 import { expect, spyOn, test } from "bun:test";
+import { setImmediate } from "node:timers/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openXeanStorage } from "xean";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -34,6 +39,89 @@ const initial: CampaignState = {
   result: null,
   error: null,
 };
+
+test("Store observes native completion during recovery refresh", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-store-recovery-"));
+  const path = join(directory, "campaign.sqlite");
+  let storage = await openXeanStorage(path);
+  const registry = createRegistry();
+  registry.install({
+    name: "fixture",
+    tasks: ["xean.worker", "xean.coordinator"].map((name) =>
+      defineTask({
+        name,
+        version: 1,
+        initial: initialAttempt,
+        phases: { run: async () => {} },
+        abort: async () => {},
+      }),
+    ),
+  });
+  const runtime = { models: createModels(), registry };
+  let store = await Store.open(storage, initial, runtime);
+  store.harness.pause();
+  try {
+    const [workerId, signalId] = await store.mutate(
+      async (tx) =>
+        [
+          await tx.newTask("xean.worker", {
+            id: "work",
+            role: "fixture",
+            input: null,
+          }),
+          await tx.newTask("xean.coordinator", { kind: "input", value: null }),
+        ] as const,
+    );
+    await store.close();
+    storage = await openXeanStorage(path);
+    const worker = (await storage.task(workerId, context))!;
+    const signal = (await storage.task(signalId, context))!;
+    await storage.commit(
+      [
+        {
+          type: "task",
+          value: {
+            ...worker,
+            state: { status: "running", checkpoint: initialAttempt() },
+          },
+        },
+        {
+          type: "task",
+          value: {
+            ...signal,
+            memos: undefined,
+            state: {
+              status: "completing",
+              checkpoint: initialAttempt(),
+              outcome: {
+                status: "failed",
+                error: { message: "Exhausted before crash" },
+              },
+            },
+          },
+        },
+      ],
+      context,
+    );
+    const read = storage.task.bind(storage);
+    storage.task = async (id, ctx) => {
+      const value = await read(id, ctx);
+      if (id === workerId)
+        for (let turn = 0; turn < 5; turn++) await setImmediate();
+      return value;
+    };
+    store = await Store.open(storage, undefined, runtime);
+    expect((await read(signalId, context))?.state.status).toBe("terminal");
+    expect(
+      await store.mutate(
+        (tx) => tx.tasks.find((task) => task.id === signalId)?.state.status,
+      ),
+    ).toBe("terminal");
+  } finally {
+    await store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("Store rejects foreign conversations and session documents without a root", async () => {
   const foreign = defineDoc({

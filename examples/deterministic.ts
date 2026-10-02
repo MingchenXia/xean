@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import { Xean, openXeanStorage } from "xean";
 import { sumOfSquares } from "./sum-of-squares.ts";
 
 const path =

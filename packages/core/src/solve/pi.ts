@@ -47,6 +47,13 @@ export const profileNames = [
   "reconstruction",
 ] as const;
 export type ProfileName = (typeof profileNames)[number];
+/** The browser subscription is restricted to the explicitly selected Explorer. */
+export function assertProfileProvider(name: string, provider: string): void {
+  if (name !== "explorer" && provider === chatGptWebProviderId)
+    throw new Error(
+      `ChatGPT Web may only be configured explicitly for profiles.explorer, not profiles.${name}`,
+    );
+}
 export interface PiRuntime {
   models: Models;
   profiles: Record<ProfileName, Profile>;
@@ -108,6 +115,7 @@ export async function ask<S extends TSchema>(
   const host = execution.durable;
   if (!host) throw new Error("Pi roles require a campaign execution context");
   const profile = runtime.profiles[name];
+  assertProfileProvider(name, profile.model.provider);
   if (profile.options?.deferred)
     throw new Error(
       "Deferred model requests are unsupported: polling has no call accounting",

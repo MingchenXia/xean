@@ -1,11 +1,15 @@
 #!/usr/bin/env bun
 import { resolve, dirname, isAbsolute } from "node:path";
 import { parseArgs } from "node:util";
+import { Type } from "typebox";
+import { decode } from "xean/solve";
 import { statusText } from "xean/report";
 import {
+  defaultProcessTask,
   observationInterval,
   readProcess,
   readRun,
+  sourceSchema,
   type Source,
   type Run,
 } from "./read.ts";
@@ -13,37 +17,13 @@ import { verifyInstall } from "../../../scripts/dependencies.ts";
 import index from "../web/index.html";
 
 export function readSources(value: unknown, directory: string): Source[] {
-  if (!Array.isArray(value)) throw new Error("Config must be a list of runs");
   const ids = new Set<string>();
-  return value.map((source: Source) => {
-    if (
-      !source ||
-      typeof source.id !== "string" ||
-      !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(source.id) ||
-      ids.has(source.id)
-    )
-      throw new Error("Invalid or duplicate run ID");
+  return decode(Type.Array(sourceSchema), value).map((source) => {
+    if (ids.has(source.id)) throw new Error("Duplicate run ID");
     ids.add(source.id);
-    if (typeof source.directory !== "string" || !source.directory)
-      throw new Error("Run directory is required");
-    if (
-      source.task !== undefined &&
-      (typeof source.task !== "string" || !source.task.trim())
-    )
-      throw new Error("Nomad task must be a nonempty string");
-    if (
-      source.review !== undefined &&
-      (typeof source.review !== "string" ||
-        !source.review.trim() ||
-        isAbsolute(source.review))
-    )
+    if (source.review !== undefined && isAbsolute(source.review))
       throw new Error("Review receipt must be a nonempty relative path");
-    if (
-      source.host &&
-      (!/^[a-z][a-z0-9-]*$/.test(source.host) ||
-        !/^\/[a-zA-Z0-9/_.-]+$/.test(source.runtime ?? "") ||
-        !source.directory.startsWith("/"))
-    )
+    if (source.host && (!source.runtime || !isAbsolute(source.directory)))
       throw new Error(
         "Remote runs require a host, absolute directory, and absolute runtime path",
       );
@@ -137,7 +117,7 @@ export function api(
       if (source.job) {
         const processKey = JSON.stringify([
           source.job,
-          source.task ?? "solver",
+          source.task ?? defaultProcessTask,
         ]);
         processObservation =
           batch.processes.get(processKey) ?? readProcess(source, fleet, signal);

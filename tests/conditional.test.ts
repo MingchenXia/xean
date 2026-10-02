@@ -6,7 +6,11 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { Execution, JsonValue } from "../packages/core/src/types.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
 import type { Note, Source } from "../packages/core/src/solve/contracts.ts";
-import { refresh } from "../packages/core/src/solve/notes.ts";
+import {
+  refresh,
+  stagePending,
+  verdict,
+} from "../packages/core/src/solve/notes.ts";
 import { codexResearch } from "../packages/core/src/solve/research.ts";
 import { invoke, fixtureRuntime } from "./fixtures/pi.ts";
 
@@ -123,6 +127,9 @@ test("conditional hypotheses remain claims while external results require source
           expect(input.instructions).toContain(
             "A proved implication does not establish its antecedent",
           );
+          expect(input.instructions).toContain(
+            "A specific unmet completion criterion is a concrete reason for FAIL",
+          );
           expect(input.notes.map(({ id }: Note) => id)).toEqual(["n1", "n3"]);
           results = input.notes.map(({ id }: Note) => ({
             noteId: id,
@@ -220,7 +227,13 @@ test("conditional hypotheses remain claims while external results require source
       "completion criteria belongs to the separate requirements check",
     );
     expect(JSON.parse(sources[0]!.prompt).notes).toEqual([
-      { id: "n3", text: notes[2]!.text, premises: [external] },
+      {
+        id: "n3",
+        summary: notes[2]!.summary,
+        detailedSummary: notes[2]!.detailedSummary,
+        text: notes[2]!.text,
+        premises: [external],
+      },
     ]);
     expect(
       notes.map(({ verified, dead, accepted }) => ({
@@ -244,6 +257,62 @@ test("conditional hypotheses remain claims while external results require source
     });
     expect(calls.slice(2)).toEqual(["statement", "proof", "reconstruction"]);
     expect(sources).toHaveLength(1);
+    const lemma = notes[0]!;
+    lemma.checks.push(...reconstructed.checks, {
+      noteId: lemma.id,
+      requirements: {
+        verdict: "PASS",
+        report: "A later disagreement cannot clear FAIL.",
+      },
+    });
+    lemma.text += "\n";
+    lemma.revision++;
+    refresh(notes);
+    expect(verdict(lemma, "requirements")?.verdict).toBe("FAIL");
+    expect(stagePending(lemma, "requirements")).toBe(false);
+    expect(lemma).toMatchObject({
+      verified: true,
+      dead: false,
+      accepted: false,
+    });
+    expect(
+      await invoke(
+        solver.functions.verifier,
+        {
+          task,
+          notes,
+          targets: [{ id: lemma.id, through: "reconstruction" }],
+        },
+        execution,
+      ),
+    ).toEqual({ kind: "verification", checks: [] });
+    expect(calls).toHaveLength(5);
+    // A new note ID can carry independent successful requirements evidence.
+    const fresh: Note = {
+      ...lemma,
+      id: "fresh",
+      revision: 0,
+      checks: [
+        {
+          noteId: "fresh",
+          correctness: verdict(lemma, "correctness"),
+          source: verdict(lemma, "source"),
+          requirements: {
+            verdict: "INCONCLUSIVE",
+            report: "Needs another check.",
+          },
+          reconstruction: verdict(lemma, "reconstruction"),
+        },
+      ],
+    };
+    refresh([fresh]);
+    expect(stagePending(fresh, "requirements")).toBe(true);
+    fresh.checks.push({
+      noteId: fresh.id,
+      requirements: { verdict: "PASS", report: "Complete." },
+    });
+    refresh([fresh]);
+    expect(fresh.accepted).toBe(true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -389,33 +458,30 @@ test("reconstruction uses unchanged source premises, rejects extractor replaceme
       async source({ notes }) {
         calls.push("source");
         expect(notes).toEqual([
-          { id: "n1", text: note.text, premises: [theorem] },
+          {
+            id: "n1",
+            summary: note.summary,
+            detailedSummary: note.detailedSummary,
+            text: note.text,
+            premises: [theorem],
+          },
         ]);
         return [{ noteId: "n1", result: source }];
       },
     },
   );
-  const execution: Execution = {
-    attemptId: "source-reconstruction",
-    attempt: 1,
-    recorder: { begin: () => ({ recordRequest() {}, settle() {} }) },
-  };
-  const verified = await invoke(
-    solver.functions.verifier,
-    { task, notes: [note], targets: [{ id: "n1", through: "requirements" }] },
-    execution,
-  );
+  const verified = await invoke(solver.functions.verifier, {
+    task,
+    notes: [note],
+    targets: [{ id: "n1", through: "requirements" }],
+  });
   if (verified.kind !== "verification")
     throw new Error("Expected verification");
   note.checks.push(...verified.checks);
   expect(calls).toEqual(["correctness", "source", "requirements"]);
   calls.length = 0;
   const reconstruct = (notes: Note[], target = "n1") =>
-    invoke(
-      solver.functions.reconstruct,
-      { task, notes, targets: [target] },
-      execution,
-    );
+    invoke(solver.functions.reconstruct, { task, notes, targets: [target] });
   for (const verdict of [undefined, "FAIL", "INCONCLUSIVE"] as const) {
     const blocked = structuredClone(note);
     blocked.checks[0]!.source = verdict ? { ...source, verdict } : undefined;

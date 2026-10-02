@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as yieldToEvents } from "node:timers/promises";
 import {
   awaitWithContext,
   BACKGROUND_CONTEXT,
@@ -44,16 +45,23 @@ async function privateWork<S extends { phase: string }>(
   return (await api.conversation(id, context))!;
 }
 
-for (const attempts of [1, 2])
-  test(`native private recovery preserves checkpoints, frozen input, and ${attempts} attempt allowance`, async () => {
+for (const [attempts, failed] of [
+  [1, false],
+  [2, false],
+  [2, true],
+] as const)
+  test(`${failed ? "failed" : "interrupted"} native private recovery preserves checkpoints, frozen input, and ${attempts} attempt allowance`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "xean-durable-"));
     const path = join(directory, "campaign.sqlite");
     const entered = latch();
     const register = latch();
+    const cancelled = latch();
+    const cleanup = latch();
     let recovering = false;
     let preparations = 0;
     let finishes = 0;
     const views: unknown[] = [];
+    const signals: string[] = [];
     const extension = {
       name: "private-fixture",
       tasks: [
@@ -72,7 +80,14 @@ for (const attempts of [1, 2])
             async finish(_task, runtime, context) {
               if (!recovering) {
                 entered.resolve();
-                await awaitWithContext(latch().promise, context);
+                try {
+                  await awaitWithContext(latch().promise, context);
+                } finally {
+                  if (failed) {
+                    cancelled.resolve();
+                    await cleanup.promise;
+                  }
+                }
               }
               finishes++;
               await runtime.commit(
@@ -100,42 +115,79 @@ for (const attempts of [1, 2])
       coordinator: {
         name: "private coordinator",
         async run(signal, view, execution, context) {
-          if (signal.kind !== "start") return { state: view.state };
+          signals.push(signal.kind);
+          const state = Array.isArray(view.state) ? view.state : [];
+          if (signal.kind !== "start")
+            return { state: [...state, signal.kind] };
           views.push(view.inputs);
           if (recovering) await register.promise;
           const conversation = await privateWork(execution, extension, context);
-          await conversation.waitForIdle(context);
-          execution.durable!.registry.uninstall(extension);
-          return { state: "finished" };
+          try {
+            if (failed && !recovering) {
+              await awaitWithContext(entered.promise, context);
+              throw new Error("Role failed with busy private work");
+            }
+            await conversation.waitForIdle(context);
+          } finally {
+            execution.durable!.registry.uninstall(extension);
+          }
+          return { state: [...state, "start"] };
         },
       },
     };
     let engine = await Xean.open(await openXeanStorage(path), options);
     try {
       const first = engine.run();
-      await entered.promise;
+      await (failed ? cancelled : entered).promise;
       await engine.input("arrived after the frozen prompt");
-      await engine.close();
+      expect((await engine.inspect()).state).toBeNull();
+      expect(
+        (await engine.records()).filter(
+          (entry) => entry.kind === "xean.attempt.failed",
+        ),
+      ).toHaveLength(0);
+      let closed = false;
+      const closing = engine.close().then(() => {
+        closed = true;
+      });
+      if (failed) {
+        await yieldToEvents();
+        expect(closed).toBe(false);
+        cleanup.resolve();
+      }
+      await closing;
       await first;
       recovering = true;
       engine = await Xean.open(await openXeanStorage(path), options);
+      expect(
+        (await engine.records()).filter(
+          (entry) => entry.kind === "xean.attempt.failed",
+        ),
+      ).toHaveLength(0);
       const second = engine.run();
       if (attempts === 1) {
-        expect((await second).status).toBe("blocked");
+        expect(await second).toMatchObject({
+          status: "blocked",
+          state: null,
+          pendingSignals: 2,
+        });
         expect(views).toEqual([[]]);
+        expect(signals).toEqual(["start"]);
         expect(finishes).toBe(0);
         return;
       }
       while (views.length < 2)
         await new Promise((resolve) => setTimeout(resolve, 1));
       expect(finishes).toBe(0);
+      expect(signals).toEqual(["start", "start"]);
       register.resolve();
       const result = await second;
-      expect(result.state).toBe("finished");
+      expect(result.state).toEqual(["start", "input"]);
+      expect(signals).toEqual(["start", "start", "input"]);
       expect(result.pendingSignals).toBe(0);
       expect(views).toEqual([[], []]);
       expect(preparations).toBe(1);
-      expect(finishes).toBe(1);
+      expect(finishes).toBe(failed ? 0 : 1);
       expect(
         (await engine.records()).filter(
           (entry) => entry.kind === "xean.attempt.interrupted",
@@ -143,6 +195,7 @@ for (const attempts of [1, 2])
       ).toHaveLength(1);
     } finally {
       register.resolve();
+      cleanup.resolve();
       await engine.close();
       await rm(directory, { recursive: true, force: true });
     }

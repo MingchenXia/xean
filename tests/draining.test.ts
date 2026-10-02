@@ -3,7 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as yieldToEvents } from "node:timers/promises";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import {
+  defineTask,
+  MemoryStorage,
+  type TaskId,
+} from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
   Xean,
@@ -399,118 +404,181 @@ test("a grant racing admission denial preserves the fresh Coordinator opportunit
   }
 });
 
-test("a grant does not turn an exhausted interrupted draining signal into a blocker", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "xean-draining-"));
-  const path = join(directory, "campaign.sqlite");
-  const admitted = Promise.withResolvers<void>();
-  const releaseWorker = Promise.withResolvers<void>();
-  const denyCall = Promise.withResolvers<void>();
-  const coordinatorBusy = Promise.withResolvers<void>();
-  const signals: string[] = [];
-  let workerRuns = 0;
-  const options: XeanOptions = {
-    task: "recover exhausted Coordinator while draining",
-    limits: { concurrency: 2, providerCalls: 1, attempts: 1 },
-    roles: [
-      {
-        name: "worker",
-        async run(input, execution) {
-          workerRuns++;
-          if (input === "denied") {
-            await admitted.promise;
-            await denyCall.promise;
+test.each(["pending", "completing"] as const)(
+  "a grant during %s recovery joins exhausted private work without blocking",
+  async (boundary) => {
+    const directory = await mkdtemp(join(tmpdir(), "xean-draining-"));
+    const path = join(directory, "campaign.sqlite");
+    const admitted = Promise.withResolvers<void>();
+    const releaseWorker = Promise.withResolvers<void>();
+    const denyCall = Promise.withResolvers<void>();
+    const coordinatorBusy = Promise.withResolvers<void>();
+    const completing = Promise.withResolvers<void>();
+    const releaseCommit = Promise.withResolvers<void>();
+    let privateTask: TaskId | undefined;
+    const signals: string[] = [];
+    let workerRuns = 0;
+    const options: XeanOptions = {
+      task: "recover exhausted Coordinator while draining",
+      limits: { concurrency: 2, providerCalls: 1, attempts: 1 },
+      roles: [
+        {
+          name: "worker",
+          async run(input, execution) {
+            workerRuns++;
+            if (input === "denied") {
+              await admitted.promise;
+              await denyCall.promise;
+            }
+            const call = await execution.recorder.begin(model);
+            await call.recordRequest({ input });
+            admitted.resolve();
+            await releaseWorker.promise;
+            await call.settle(fauxAssistantMessage("persisted result"), null);
+            return "persisted result";
+          },
+        },
+      ],
+      coordinator: {
+        name: "coordinate",
+        async run(signal, view, execution, context) {
+          signals.push(signal.kind);
+          if (signal.kind === "start")
+            return {
+              state: null,
+              dispatch: ["admitted", "denied"].map((id) => ({
+                id,
+                role: "worker",
+                input: id,
+              })),
+            };
+          if (signal.kind === "failed") {
+            const aborted = new Promise<void>((resolve) => {
+              context.abortSignal!.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+            const api = execution.durable!;
+            const child = defineTask({
+              name: "fixture.private",
+              version: 1,
+              initial: () => ({ phase: "run" }),
+              phases: {
+                run: async () => {
+                  await aborted;
+                },
+              },
+              abort: async (_task, runtime, context) => {
+                await runtime.commit(
+                  () => ({
+                    status: "terminal",
+                    outcome: { status: "aborted" },
+                  }),
+                  context,
+                );
+              },
+            });
+            api.registry.install({ name: "fixture", tasks: [child] });
+            privateTask = await api.commit(
+              (tx) =>
+                tx.createTask(child, null, {
+                  ownership: { kind: "task", taskId: api.taskId },
+                }),
+              context,
+            );
+            coordinatorBusy.resolve();
+            await aborted;
+            throw new TransientError("Coordinator interrupted");
           }
-          const call = await execution.recorder.begin(model);
-          await call.recordRequest({ input });
-          admitted.resolve();
-          await releaseWorker.promise;
-          await call.settle(fauxAssistantMessage("persisted result"), null);
-          return "persisted result";
+          return { state: view.work[0]!.result };
         },
       },
-    ],
-    coordinator: {
-      name: "coordinate",
-      async run(signal, view, _execution, context) {
-        signals.push(signal.kind);
-        if (signal.kind === "start")
-          return {
-            state: null,
-            dispatch: ["admitted", "denied"].map((id) => ({
-              id,
-              role: "worker",
-              input: id,
-            })),
-          };
-        if (signal.kind === "failed") {
-          const aborted = new Promise<void>((resolve) => {
-            context.abortSignal!.addEventListener("abort", () => resolve(), {
-              once: true,
-            });
-          });
-          coordinatorBusy.resolve();
-          await aborted;
-          throw new TransientError("Coordinator interrupted");
-        }
-        return { state: view.work[0]!.result };
-      },
-    },
-  };
-  let engine: Xean | undefined;
-  let recovered: Xean | undefined;
-  try {
-    engine = await Xean.open(await openXeanStorage(path), options);
-    const running = engine.run();
-    await admitted.promise;
-    const pausing = engine.pause();
-    denyCall.resolve();
-    for (let turn = 0; turn < 100; turn++) {
-      if ((await engine.inspect()).work[1]!.status === "failed") break;
-      await yieldToEvents();
-    }
-    expect((await engine.inspect()).work[1]!.status).toBe("failed");
-    releaseWorker.resolve();
-    const beforeClose = await pausing;
-    expect(beforeClose.work[0]).toMatchObject({
-      status: "completed",
-      result: "persisted result",
-    });
-    expect(beforeClose.status).toBe("paused");
-    expect(beforeClose.callLimitReached).toBe(true);
-    expect(beforeClose.pendingSignals).toBe(2);
-    expect(signals).toEqual(["start"]);
-    await engine.close();
-    await running;
+    };
+    let engine: Xean | undefined;
+    let recovered: Xean | undefined;
+    try {
+      engine = await Xean.open(await openXeanStorage(path), options);
+      const running = engine.run();
+      await admitted.promise;
+      const pausing = engine.pause();
+      denyCall.resolve();
+      for (let turn = 0; turn < 100; turn++) {
+        if ((await engine.inspect()).work[1]!.status === "failed") break;
+        await yieldToEvents();
+      }
+      expect((await engine.inspect()).work[1]!.status).toBe("failed");
+      releaseWorker.resolve();
+      const beforeClose = await pausing;
+      expect(beforeClose.work[0]).toMatchObject({
+        status: "completed",
+        result: "persisted result",
+      });
+      expect(beforeClose.status).toBe("paused");
+      expect(beforeClose.callLimitReached).toBe(true);
+      expect(beforeClose.pendingSignals).toBe(2);
+      expect(signals).toEqual(["start"]);
+      await engine.close();
+      await running;
 
-    recovered = await Xean.open(await openXeanStorage(path), options);
-    expect((await recovered.inspect()).status).toBe("paused");
-    const resuming = recovered.resume();
-    await coordinatorBusy.promise;
-    await recovered.close();
-    await resuming;
-    recovered = await Xean.open(await openXeanStorage(path), options);
-    expect(await recovered.inspect()).toMatchObject({
-      status: "running",
-      callLimitReached: true,
-    });
-    await recovered.extendCalls(1, "recover-draining");
-    const result = await recovered.run();
-    expect(result.status).toBe("running");
-    expect(result.callLimitReached).toBe(false);
-    expect(result.pendingSignals).toBe(0);
-    expect(result.state).toBe("persisted result");
-    expect(result.work[0]).toMatchObject({
-      status: "completed",
-      attempts: 1,
-      result: "persisted result",
-    });
-    expect(workerRuns).toBe(2);
-    expect(signals).toEqual(["start", "failed", "completed", "allowance"]);
-  } finally {
-    denyCall.resolve();
-    releaseWorker.resolve();
-    await engine?.close();
-    await recovered?.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+      recovered = await Xean.open(await openXeanStorage(path), options);
+      expect((await recovered.inspect()).status).toBe("paused");
+      const resuming = recovered.resume();
+      await coordinatorBusy.promise;
+      await recovered.close();
+      await resuming;
+      const storage = await openXeanStorage(path);
+      recovered = await Xean.open(storage, options);
+      expect(await recovered.inspect()).toMatchObject({
+        status: "running",
+        callLimitReached: true,
+      });
+      const commit = storage.commit.bind(storage);
+      let held = false;
+      storage.commit = async (writes, context) => {
+        const result = await commit(writes, context);
+        if (
+          boundary === "completing" &&
+          !held &&
+          writes.some(
+            (write) =>
+              write.type === "task" &&
+              write.value.kind === "xean.coordinator" &&
+              write.value.state.status === "completing",
+          )
+        ) {
+          held = true;
+          completing.resolve();
+          await releaseCommit.promise;
+        }
+        return result;
+      };
+      const draining = boundary === "completing" ? recovered.run() : undefined;
+      if (draining) await completing.promise;
+      const grant = recovered.extendCalls(1, "recover-draining");
+      releaseCommit.resolve();
+      await grant;
+      const result = await (draining ?? recovered.run());
+      expect(result.status).toBe("running");
+      expect(result.callLimitReached).toBe(false);
+      expect(result.pendingSignals).toBe(0);
+      expect(result.state).toBe("persisted result");
+      expect(result.work[0]).toMatchObject({
+        status: "completed",
+        attempts: 1,
+        result: "persisted result",
+      });
+      expect(workerRuns).toBe(2);
+      expect(
+        (await storage.task(privateTask!, BACKGROUND_CONTEXT))?.state.status,
+      ).toBe("terminal");
+      expect(signals).toEqual(["start", "failed", "completed", "allowance"]);
+    } finally {
+      releaseCommit.resolve();
+      denyCall.resolve();
+      releaseWorker.resolve();
+      await engine?.close();
+      await recovered?.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);

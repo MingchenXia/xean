@@ -43,13 +43,18 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
   A request may establish outstanding dependencies even when the target's own
   requested stages are already satisfied.
 - Literature is optional and disabled by default. It can complete once per
-  campaign and returns ordinary unverified theorem notes. Coordinator may retry
+  campaign and returns ordinary unverified notes, including useful source
+  mismatches and bounded unsuccessful searches with their remaining uncertainty.
+  An unsuccessful search does not establish that a theorem does not exist. Coordinator may retry
   failed literature workers. When enabled, it requests a specific external theorem
   or source gap, rather than a general survey. Task-granted assumptions and
   self-contained arguments need no survey. The startup setting remains the
   authority for availability. This search limit belongs to the built-in Coordinator.
 - The optional [Codex worker](#codex-worker) implements assignments with native
   shell and file tools. Coordinator supplies the assignment and selects note IDs.
+  Mathematical reasoning remains Explorer's job. Codex is used sparingly for
+  concrete implementation requirements with specified inputs, outputs, constraints,
+  and checks, supplied directly or through the selected notes.
   The worker returns ordinary unverified notes and may nominate a candidate.
   It chooses its own implementation and tools.
 
@@ -119,6 +124,11 @@ generated claims together, with a proof per note. Trusted imported support and
 previously reconstructed claims supply statement-only assumptions. Source-checked
 external premises also remain assumptions. Imported notes explicitly selected
 as targets must themselves be reconstructed.
+For an imported candidate that relies on external theorems beyond the task's
+granted assumptions or permitted background, import those theorems as supporting
+notes and declare the support links. Imported notes skip correctness
+and its premise extraction, so blind reconstruction receives those assumptions
+through declared support.
 
 Source checking assesses these exact premise strings and their suitability for
 blind reuse before approving them. This is also the contract for custom research
@@ -213,8 +223,10 @@ Notes have stable IDs derived from their producing work or external command and
 local note ID.
 Support names actual mathematical dependencies. Missing, cyclic, forward, and
 dead dependencies are rejected. Correctness, source, or reconstruction FAIL
-invalidates the note and its dependents. Requirements FAIL leaves useful partial
-results available. Reconstruction FAIL requires a defect in the candidate;
+invalidates the note and its dependents. Requirements FAIL is final for that note
+ID and leaves useful partial results available as support. Harmless corrections
+preserve the rejection. A substantive repair requires a new note. Requirements
+INCONCLUSIVE remains retryable. Reconstruction FAIL requires a defect in the candidate;
 failure of the independent proof alone is INCONCLUSIVE.
 
 Notes can receive harmless corrections through the command interface below.
@@ -274,8 +286,9 @@ provider-call admission and records any reported usage. Failed responses do not
 consume the completed-response allowance. Completed encrypted reasoning from
 OpenAI Responses and Codex Responses survives an interrupted response. Failed
 text, unfinished reasoning, and tool calls are omitted from the retry input.
-Exhaustion, insufficient context, or refused admission fails the
-invocation and publishes no partial mathematical result. This response recovery
+Response recovery fails when retries are exhausted, admission is refused, or
+retained reasoning leaves insufficient answer space. It publishes no partial
+mathematical result on those failures. This response recovery
 is local to a live invocation. Across process restarts, Pi resumes the role's
 private conversation: completed generations and tool results remain in its
 transcript, accepted submissions and consumed reads remain in its document, and
@@ -290,11 +303,14 @@ gets a fresh conversation. The worker still publishes one complete result and
 one Coordinator signal together. Pi role functions require the execution context
 supplied by a campaign. Standalone CLI role commands use this same path. Library
 callers can use Pi's `MemoryStorage` for an ephemeral campaign; only persistent
-storage survives process restarts. Codex subprocesses retain whole-worker recovery.
+storage survives process restarts. The verifier retains each validated source
+batch in its task's native memo, keyed by the exact source input. This preserves
+source evidence and later Pi stage identities on recovery. Interrupted Codex
+subprocesses restart as whole calls.
 
 Codex research uses developer instructions, JSON stdin, and an output schema.
-Its source/review schema requires `correction`, with `null` meaning no edit;
-the adapter omits that null in local verdicts. This follows OpenAI's
+Its source schema requires `correction`, with `null` meaning no edit.
+The adapter omits that null in local verdicts. This follows OpenAI's
 [strict structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs#all-fields-must-be-required).
 
 Role invocations are intended to finish with room for a structured result.
@@ -398,12 +414,14 @@ checks from evidence about difficult mathematical judgments.
 
 ### Codex worker
 
-Configure `settings.codex` to let Coordinator request implementation work:
+Configure `settings.codex` to enable the built-in Codex worker.
+The assignment states the deliverable, input domain, expected output, constraints,
+and checks. Selected notes can supply the exact specification:
 
 ```json
 {
   "kind": "codex",
-  "assignment": "Implement and check the construction in the selected note.",
+  "assignment": "Implement the construction specified in the selected note for n <= 6. Output a witness for each n and check every stated constraint independently. Retain the program, inputs, outputs, and rerun command.",
   "notes": ["w3-1/n1"]
 }
 ```
@@ -528,18 +546,9 @@ Supply credentials through the provider's normal environment variables, a
 profile's `apiKeyEnv`, or `--key-stdin`. Credential values are never settings.
 When the fleet CA is installed, the CLI launches the same locked Bun with that
 CA so the direct command can reach the lab services.
-The codex-lb smoke launcher reads its key from OpenBao and supplies the fleet CA
-to the child runtime:
-
-```sh
-bin/fleet-nix run .#fleet-run -- ../xean/scripts/solver-smoke.ts codex-lb/xean
-```
-
-It initializes without model calls, then runs the tree edge-count task with
-Luna at max reasoning and forty logical calls. It saves
-the campaign and accepted argument under ignored `runs/`, then reopens without
-a credential and checks that no work or records change. The failed-attempt
-artifacts are also retained.
+The [live verification procedure](kernel-smoke.md#live-provider-checks) covers
+the gateway and solver smoke launchers, credentials, retained artifacts, and
+qualification boundaries.
 
 ### Checking status
 
@@ -831,7 +840,8 @@ The adapter derives the JSON answer schema from Pi's current tool names,
 descriptions, and argument schemas. It validates the entire answer without
 coercion before emitting native Pi calls. Pi executes those calls and supplies
 their results on the next turn. The service only returns text and needs no
-knowledge of notes or roles. An empty call list permits a final text answer.
+knowledge of notes or roles. An empty call list permits a final text answer only
+when the caller allows that completion form. Explorer requires `submit_result`.
 `toolChoice: "none"` requests ordinary text. Images remain unsupported.
 The [live smoke](kernel-smoke.md#chatgpt-web) qualifies structured answers only.
 
@@ -841,6 +851,10 @@ continuation calls and cannot be a default, Coordinator, or Verifier profile.
 Settings reject response budgets other than one. Direct `createRoles()` calls
 also cap Explorer at one response without a note reader, overriding a larger
 caller allowance. Built-in campaigns admit no additional ChatGPT Explorer work.
+Coordinator sees that Explorer is unavailable after its first attempt and may
+return an empty plan when no useful remaining work can be scheduled. The campaign
+then waits for external input with status `running`, without claiming completion.
+Unavailable requests from replacement planners are rejected rather than dropped.
 
 Each outer tool round can consume another Pro allowance. Recovered browser
 workers fail before sending, using the durable attempt ordinal, even if the
@@ -875,8 +889,9 @@ in both Pi and Codex calls while preserving the campaign's frozen settings.
 An override requires this invocation to acquire ownership. It cannot change an
 already-running owner's attribution.
 Configuration and library entry points share bounded integer schemas for limits,
-call grants, and Explorer read and response counts. Settings, declarations, and
-commands are validated strictly, without converting strings or truncating numbers.
+call grants, and Explorer read and response counts. JSON settings, declarations,
+and library command values are validated without converting strings or truncating
+numbers. Numeric CLI arguments are parsed before that validation.
 
 Install and authenticate the Codex CLI for research. To configure its model and
 reasoning, add:
@@ -970,6 +985,16 @@ Replacing a planning function also replaces its validation policy, including the
 single-Explorer restriction. Replacement functions are trusted code and must
 honor their exported input/output types and mathematical contracts. A custom
 Verifier supplies the evidence consumed by the solver's acceptance guard.
+A replacement `.codex` supplies its own runtime configuration and enables Codex
+requests without `settings.codex`. The built-in planner enables literature only
+with `literature: true` and a retrieval-capable research backend.
+
+`CoordinationInput.explorerUsed` records whether the built-in Explorer has prior
+work, including failed attempts. For a replacement Explorer the field is `false`,
+and that role owns its invocation policy. The built-in planner combines it with its actual
+provider to expose availability. Dispatch enforces the built-in browser allowance
+even when the planner is replaced. `Research.source` receives `summary`,
+`detailedSummary`, and `text` for each target, alongside its ID and exact premises.
 
 Individual correctness, requirements, extraction, proof, and comparison
 procedures inside the built-in Verifier are fixed. Their model profiles are
@@ -994,6 +1019,10 @@ The role name may also be `coordinator`, `verifier`, `reconstruct`, `literature`
 role campaign records successful execution, not acceptance of a mathematical
 solution. Solver acceptance, a separate review of the full proof, and catalog
 closure remain distinct.
+
+Standalone Coordinator input includes `explorerUsed`. Set it to `false` when no
+Explorer work has been attempted and to `true` after an attempt. An API Explorer
+remains available in either case, while the built-in browser Explorer is one-shot.
 
 For standalone Codex work, use `bun run xean role codex INPUT.json ROLE.sqlite SETTINGS.json`.
 Its `CodexInput` contains `{task, assignment, notes}`, where `notes` holds full
@@ -1032,8 +1061,8 @@ and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the
 campaign format.
 
-Completed Pi stages survive interruption before shared publication. Codex source
-checks inside a composite verifier may repeat until the whole worker publishes.
+Completed Pi stages and memoized source batches survive interruption before
+shared publication. A source call interrupted before its memo commits may repeat.
 
 ## Current verification
 

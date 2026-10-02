@@ -1,11 +1,39 @@
 # Changelog
 
-## Main
+## 3.0.0 (unreleased)
 
-The main branch is the current distribution. Existing numbered releases and
-tags remain historical archives. Pin the source commit and runtime for each
-campaign.
+The main branch contains the 3.0 release candidate. Pin the source commit and
+runtime for each campaign. Existing releases and tags remain historical archives.
 
+- Make requirements FAIL final for its note ID while retaining the note as useful
+  support. Reject verification plans that cannot perform any pending check.
+  Align one-shot Explorer allowances and requirements instructions with execution.
+- Let shutdown interrupt failed attempts waiting for private cleanup, preserving
+  native recovery. Apply kernel defaults to explicitly undefined optional limits.
+- Validate the control socket and its private directory before sending commands.
+  Clarify CLI numeric parsing and imported candidates' supporting assumptions.
+- Validate Explorer allowances in the shared role factory, including direct
+  library use. Independent reviews return findings and evidence without an
+  unused whole-note correction field.
+- Observe Pi recovery commits before refreshing cached tasks, keeping native
+  completion and campaign scheduling consistent after reopening.
+- Let live CLI lifecycle commands wait for the owner without an HTTP idle timeout.
+  Derive Observe source types and validation from one schema and consolidate
+  verifier assessment and planner capability checks.
+- Pin matching Pi packages to `7fbbd5f4a1d9`. Their runtime sources are unchanged
+  from Pi 1.0.0. Preserve the frozen model catalog and requalify retained patches.
+- Let Pi finish private-child cleanup before settling exhausted Coordinator
+  signals. Call grants during recovery preserve the original draining outcome.
+- Apply library Explorer defaults when optional limits are explicitly undefined.
+- Retain completed verifier source batches in Pi's native task memos so recovery
+  preserves evidence identities and reuses later completed Pi checks.
+- Preserve Coordinator signal order during private recovery. Replace the CLI's
+  CA bootstrap child and signal forwarding with native process replacement,
+  and give the bounded Nomad runner writable storage for its control socket.
+- Align browser submission instructions and Coordinator availability with the
+  one-shot Explorer contract. Supply source checkers with summaries they may
+  correct, retain useful negative literature findings, and require concrete
+  implementation assignments for the optional Codex worker.
 - Initialize campaigns through Pi's native root initializer and retain custom
   models when multiple role runtimes share a provider. Align execution guidance
   with Durable private recovery and distinguish transport sessions from
@@ -37,7 +65,7 @@ campaign.
   Roles pass native telemetry through `Execution.telemetry`. Rebuild the retained artifacts twice
   against the frozen model catalog and rebase the retained patches. Campaign
   storage and solver declaration formats are unchanged by this upgrade.
-- Preserve HTTP error status for Pi's retry classifier, so permanent Responses
+- Preserve HTTP error status for Pi's retry classifier, so permanent Responses, Anthropic, and Google
   errors do not retry because their messages contain transport words.
 - Initialize Pi only for roles that need it. Codex review and literature use
   their own credentials and retain explicit usage attribution.

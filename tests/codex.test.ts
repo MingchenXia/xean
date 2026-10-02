@@ -23,6 +23,7 @@ import {
 } from "../packages/core/src/solve/codex.ts";
 import {
   sourceSchema,
+  codexPlan,
   reviewSchema,
   decode,
   type ResearchReport,
@@ -68,6 +69,165 @@ test.each(["research", "workspace"])(
   15_000,
 );
 
+test("Codex source bindings require exact premises and independent evidence", () => {
+  for (const wireSchema of [sourceSchema, reviewSchema])
+    expect(new Set(Object.keys(wireSchema.properties))).toEqual(
+      new Set(wireSchema.required),
+    );
+  const source = {
+    value: {
+      verdict: "PASS" as const,
+      report: "Reported passage",
+      correction: null,
+      passages: [
+        { premise: 0, url: "https://example.com/paper", quote: "P holds" },
+      ],
+    },
+    operationId: "fixture",
+    searches: 0,
+  };
+  expect(bindCodex(source, ["P"]).verdict).toBe("INCONCLUSIVE");
+  const task = { problem: "Assume P holds.", completionCriteria: "Prove Q" };
+  const taskSource = {
+    ...source,
+    value: {
+      ...source.value,
+      passages: [{ premise: 0, url: "urn:xean:task", quote: task.problem }],
+    },
+  };
+  const taskReport = bindCodex(taskSource, ["P"], [], "fixture", task);
+  expect(taskReport.verdict).toBe("PASS");
+  expect(bindCodex(taskSource, ["P"]).verdict).toBe("INCONCLUSIVE");
+  expect(
+    bindCodex(taskSource, ["P"], [], "fixture", {
+      ...task,
+      problem: "Prove P.",
+    }).verdict,
+  ).toBe("INCONCLUSIVE");
+  const taskReuse = {
+    ...source,
+    value: {
+      ...source.value,
+      passages: [{ premise: 0, passageId: taskReport.passages[0]!.id }],
+    },
+  };
+  expect(
+    bindCodex(taskReuse, ["P"], taskReport.passages, "reuse", task).verdict,
+  ).toBe("PASS");
+  expect(bindCodex(taskReuse, ["P"], taskReport.passages).verdict).toBe(
+    "INCONCLUSIVE",
+  );
+  source.searches = 1;
+  expect(bindCodex(source, ["P", "Q"]).verdict).toBe("INCONCLUSIVE");
+  const verified = bindCodex(source, ["P"]);
+  expect(verified.verdict).toBe("PASS");
+  expect(verified).not.toHaveProperty("correction");
+  expect(
+    bindCodex(
+      {
+        ...source,
+        value: {
+          ...source.value,
+          correction: {
+            summary: "Edited",
+            detailedSummary: "Harmless edit",
+            text: "Harmless edit",
+          },
+        },
+      },
+      ["P"],
+    ).correction,
+  ).toEqual({
+    summary: "Edited",
+    detailedSummary: "Harmless edit",
+    text: "Harmless edit",
+  });
+  expect(verified).toMatchObject({
+    kind: "codex-report",
+    operationId: "fixture",
+  });
+  expect(verified.passages).toEqual([
+    { ...source.value.passages[0]!, id: "fixture/0", statement: "P" },
+  ]);
+  const partial = bindCodex(
+    {
+      ...source,
+      value: {
+        ...source.value,
+        passages: [
+          { premise: 0, passageId: "missing" },
+          ...source.value.passages,
+        ],
+      },
+    },
+    ["P"],
+  );
+  expect(partial.verdict).toBe("INCONCLUSIVE");
+  expect(partial.passages).toEqual([
+    { ...verified.passages[0]!, id: "fixture/1" },
+  ]);
+  const reused = {
+    ...source,
+    operationId: "reuse",
+    searches: 0,
+    value: {
+      ...source.value,
+      passages: [{ premise: 0, passageId: "fixture/0" }],
+    },
+  };
+  const reuse = bindCodex(
+    reused,
+    ["P applied to this note"],
+    verified.passages,
+  );
+  expect(reuse).toMatchObject({
+    verdict: "PASS",
+    operationId: "reuse",
+    premises: ["P applied to this note"],
+    passages: verified.passages,
+  });
+  expect(bindCodex(reused, ["P"]).verdict).toBe("INCONCLUSIVE");
+  expect(bindCodex(reused, ["P", "Q"], verified.passages).verdict).toBe(
+    "INCONCLUSIVE",
+  );
+  expect(
+    bindCodex(
+      { ...reused, value: { ...reused.value, verdict: "FAIL" } },
+      ["Q"],
+      verified.passages,
+    ).verdict,
+  ).toBe("FAIL");
+  expect(
+    bindCodex(
+      {
+        ...source,
+        searches: 0,
+        value: {
+          ...source.value,
+          passages: [
+            ...reused.value.passages,
+            { premise: 1, url: "https://example.com/q", quote: "Q" },
+          ],
+        },
+      },
+      ["P", "Q"],
+      verified.passages,
+    ).verdict,
+  ).toBe("INCONCLUSIVE");
+  const { correction: _correction, ...review } = source.value;
+  const reviewed = decode(reviewSchema, { ...review, premises: ["P"] });
+  const reviewReport = bindCodex(
+    { ...source, value: reviewed },
+    reviewed.premises,
+  );
+  expect(reviewReport.verdict).toBe("PASS");
+  expect(reviewReport).not.toHaveProperty("correction");
+  // Independent review's wire contract permits only newly inspected passages.
+  expect(() =>
+    decode(reviewSchema, { ...reviewed, passages: reused.value.passages }),
+  ).toThrow();
+});
+
 async function codexLifecycle(mode: string) {
   const directory = await mkdtemp(join(process.cwd(), ".xean-codex-test-"));
   const path = join(directory, "campaign.sqlite");
@@ -80,22 +240,6 @@ async function codexLifecycle(mode: string) {
       {
         name: "worker",
         async run(input, execution, context) {
-          if (input === "success") {
-            const research = codexResearch(codex);
-            expect(
-              await research.source(
-                {
-                  task: {
-                    problem: "Self-contained task",
-                    completionCriteria: "Prove it",
-                  },
-                  notes: [{ id: "self", text: "Self-contained", premises: [] }],
-                },
-                execution,
-                context,
-              ),
-            ).toMatchObject([{ noteId: "self", result: { verdict: "PASS" } }]);
-          }
           const workspace =
             mode === "workspace"
               ? await mkdtemp(join(directory, "workspace-"))
@@ -139,154 +283,6 @@ async function codexLifecycle(mode: string) {
   };
   let engine = await Xean.open(await openXeanStorage(path), options);
   try {
-    for (const wireSchema of [sourceSchema, reviewSchema])
-      expect(new Set(Object.keys(wireSchema.properties))).toEqual(
-        new Set(wireSchema.required),
-      );
-    const source = {
-      value: {
-        verdict: "PASS" as const,
-        report: "Reported passage",
-        correction: null,
-        passages: [
-          { premise: 0, url: "https://example.com/paper", quote: "P holds" },
-        ],
-      },
-      operationId: "fixture",
-      searches: 0,
-    };
-    expect(bindCodex(source, ["P"]).verdict).toBe("INCONCLUSIVE");
-    const task = { problem: "Assume P holds.", completionCriteria: "Prove Q" };
-    const taskSource = {
-      ...source,
-      value: {
-        ...source.value,
-        passages: [{ premise: 0, url: "urn:xean:task", quote: task.problem }],
-      },
-    };
-    const taskReport = bindCodex(taskSource, ["P"], [], "fixture", task);
-    expect(taskReport.verdict).toBe("PASS");
-    expect(bindCodex(taskSource, ["P"]).verdict).toBe("INCONCLUSIVE");
-    expect(
-      bindCodex(taskSource, ["P"], [], "fixture", {
-        ...task,
-        problem: "Prove P.",
-      }).verdict,
-    ).toBe("INCONCLUSIVE");
-    const taskReuse = {
-      ...source,
-      value: {
-        ...source.value,
-        passages: [{ premise: 0, passageId: taskReport.passages[0]!.id }],
-      },
-    };
-    expect(
-      bindCodex(taskReuse, ["P"], taskReport.passages, "reuse", task).verdict,
-    ).toBe("PASS");
-    expect(bindCodex(taskReuse, ["P"], taskReport.passages).verdict).toBe(
-      "INCONCLUSIVE",
-    );
-    source.searches = 1;
-    expect(bindCodex(source, ["P", "Q"]).verdict).toBe("INCONCLUSIVE");
-    const verified = bindCodex(source, ["P"]);
-    expect(verified.verdict).toBe("PASS");
-    expect(verified).not.toHaveProperty("correction");
-    expect(
-      bindCodex(
-        {
-          ...source,
-          value: {
-            ...source.value,
-            correction: {
-              summary: "Edited",
-              detailedSummary: "Harmless edit",
-              text: "Harmless edit",
-            },
-          },
-        },
-        ["P"],
-      ).correction,
-    ).toEqual({
-      summary: "Edited",
-      detailedSummary: "Harmless edit",
-      text: "Harmless edit",
-    });
-    expect(verified).toMatchObject({
-      kind: "codex-report",
-      operationId: "fixture",
-    });
-    expect(verified.passages).toEqual([
-      { ...source.value.passages[0]!, id: "fixture/0", statement: "P" },
-    ]);
-    const partial = bindCodex(
-      {
-        ...source,
-        value: {
-          ...source.value,
-          passages: [
-            { premise: 0, passageId: "missing" },
-            ...source.value.passages,
-          ],
-        },
-      },
-      ["P"],
-    );
-    expect(partial.verdict).toBe("INCONCLUSIVE");
-    expect(partial.passages).toEqual([
-      { ...verified.passages[0]!, id: "fixture/1" },
-    ]);
-    const reused = {
-      ...source,
-      operationId: "reuse",
-      searches: 0,
-      value: {
-        ...source.value,
-        passages: [{ premise: 0, passageId: "fixture/0" }],
-      },
-    };
-    const reuse = bindCodex(
-      reused,
-      ["P applied to this note"],
-      verified.passages,
-    );
-    expect(reuse).toMatchObject({
-      verdict: "PASS",
-      operationId: "reuse",
-      premises: ["P applied to this note"],
-      passages: verified.passages,
-    });
-    expect(bindCodex(reused, ["P"]).verdict).toBe("INCONCLUSIVE");
-    expect(bindCodex(reused, ["P", "Q"], verified.passages).verdict).toBe(
-      "INCONCLUSIVE",
-    );
-    expect(
-      bindCodex(
-        { ...reused, value: { ...reused.value, verdict: "FAIL" } },
-        ["Q"],
-        verified.passages,
-      ).verdict,
-    ).toBe("FAIL");
-    expect(
-      bindCodex(
-        {
-          ...source,
-          searches: 0,
-          value: {
-            ...source.value,
-            passages: [
-              ...reused.value.passages,
-              { premise: 1, url: "https://example.com/q", quote: "Q" },
-            ],
-          },
-        },
-        ["P", "Q"],
-        verified.passages,
-      ).verdict,
-    ).toBe("INCONCLUSIVE");
-    // Independent review's wire contract permits only newly inspected passages.
-    expect(() =>
-      decode(reviewSchema, { ...reused.value, premises: ["P"] }),
-    ).toThrow();
     const result = await engine.run();
     expect(result.status).toBe("completed");
     expect(result.work.map((work) => [work.status, work.result])).toEqual([
@@ -430,6 +426,16 @@ test("Coordinator Codex work freezes support and publishes only valid unverified
     { ...solver, limits: { providerCalls: 4 } },
   );
   try {
+    const blankAssignment = { kind: "codex", assignment: " \n", notes: [] };
+    expect(() => decode(codexPlan, blankAssignment)).toThrow();
+    await expect(
+      solver.functions.codex(
+        { task, notes: [], assignment: blankAssignment.assignment },
+        null!,
+        BACKGROUND_CONTEXT,
+      ),
+    ).rejects.toThrow();
+    await expect(access(codex.workspace)).rejects.toThrow();
     await submitCommand(engine, {
       kind: "submit",
       id: "seed",
@@ -552,43 +558,41 @@ test("source batches preserve note identity and distinct evidence in one Codex c
       { id: "a", text: "Apply P", premises: ["P holds"] },
       { id: "self", text: "Self-contained", premises: [] },
       { id: "b", text: "Apply Q", premises: ["Q holds"] },
-    ];
-    await expect(
+    ].map((note) => ({
+      ...note,
+      summary: `Index: ${note.text}`,
+      detailedSummary: `Detail: ${note.text}`,
+    }));
+    let admitted = 0;
+    let request: { operationId: string; prompt: string } | undefined;
+    const source = (selected: typeof notes) =>
       codexResearch(codex).source(
-        { task, notes: [notes[0]!, { ...notes[1]!, id: "a" }] },
+        { task, notes: selected },
         {
-          attemptId: "duplicates",
+          attemptId: "batch",
           attempt: 1,
           recorder: {
             begin() {
-              throw new Error("Must not call");
+              admitted++;
+              return {
+                recordRequest(payload) {
+                  request = payload as typeof request;
+                },
+                settle() {},
+              };
             },
           },
         },
         BACKGROUND_CONTEXT,
-      ),
+      );
+    await expect(
+      source([notes[0]!, { ...notes[1]!, id: "a" }]),
     ).rejects.toThrow("Duplicate source note IDs");
-    let admitted = 0;
-    let request: { operationId: string; prompt: string } | undefined;
-    const results = await codexResearch(codex).source(
-      { task, notes },
-      {
-        attemptId: "batch",
-        attempt: 1,
-        recorder: {
-          begin() {
-            admitted++;
-            return {
-              recordRequest(payload) {
-                request = payload as typeof request;
-              },
-              settle() {},
-            };
-          },
-        },
-      },
-      BACKGROUND_CONTEXT,
-    );
+    expect(await source([notes[1]!])).toMatchObject([
+      { noteId: "self", result: { verdict: "PASS" } },
+    ]);
+    expect(admitted).toBe(0);
+    const results = await source(notes);
     expect(admitted).toBe(1);
     expect(JSON.parse(request!.prompt).task).toEqual(task);
     expect(JSON.parse(request!.prompt).notes).toEqual([notes[0], notes[2]]);

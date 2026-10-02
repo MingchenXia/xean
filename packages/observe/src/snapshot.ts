@@ -3,6 +3,8 @@ import { campaignReport, statusReport, statusSchema } from "xean/report";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+const snapshotFormat = "xean-observe/v4" as const;
+
 export function snapshot(
   value: Parameters<typeof campaignReport>[0],
   observedAt = new Date().toISOString(),
@@ -28,7 +30,7 @@ export function snapshotFromReport(
 ) {
   const declaration = campaign.task as { kind?: string; task?: Task } | null;
   return {
-    schema: "xean-observe/v4" as const,
+    schema: snapshotFormat,
     kind:
       typeof declaration?.kind === "string" && declaration.kind.trim()
         ? declaration.kind
@@ -120,7 +122,7 @@ const snapshotSchema = Type.Unsafe<Snapshot>(
   Type.Script(
     { Task: taskSchema, Count: count, Check: check, Status: statusSchema },
     `{
-    schema: "xean-observe/v4",
+    schema: "${snapshotFormat}",
     kind: string | null,
     observedAt: string,
     usageAvailable: boolean,

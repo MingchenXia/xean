@@ -1,4 +1,4 @@
-import type { XeanOptions } from "../packages/core/src/index.ts";
+import type { XeanOptions } from "xean";
 
 /** The deterministic and live examples share the same scheduling and acceptance. */
 export const sumOfSquares: Pick<XeanOptions, "coordinator" | "accept"> = {

@@ -73,7 +73,7 @@ job "xean-bounded-template" {
         pids_limit = 1024
         mount {
           type = "tmpfs"
-          target = "/scratch"
+          target = "/tmp"
           tmpfs_options {
             size = 268435456
             mode = 1023
@@ -81,8 +81,8 @@ job "xean-bounded-template" {
         }
       }
       env {
-        TMPDIR = "/scratch"
-        HOME = "/scratch"
+        TMPDIR = "/tmp"
+        HOME = "/tmp"
         CODEX_HOME = "/runs/_xean/${var.run_id}/runtime/codex-home"
         NODE_EXTRA_CA_CERTS = "/usr/local/share/ca-certificates/lab-root.crt"
       }

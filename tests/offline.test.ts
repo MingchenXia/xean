@@ -13,9 +13,17 @@ test("closed-book research cannot retrieve or clear unresolved premises", async 
     {
       task: { problem: "Prove a statement", completionCriteria: "A proof" },
       notes: [
-        { id: "proved", text: "Self-contained proof", premises: [] },
+        {
+          id: "proved",
+          summary: "Self-contained",
+          detailedSummary: "Self-contained proof",
+          text: "Self-contained proof",
+          premises: [],
+        },
         {
           id: "external",
+          summary: "External theorem",
+          detailedSummary: "Uses an external theorem",
           text: "Uses a theorem",
           premises: ["External claim"],
         },

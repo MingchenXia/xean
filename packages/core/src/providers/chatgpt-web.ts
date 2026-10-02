@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  contentText,
   createProvider,
   getDeclaredTools,
   resolveTranscript,
@@ -114,7 +115,7 @@ function stream(
           role: "system",
           timestamp: Date.now(),
           content:
-            'Return {"text":...,"calls":[{"name":...,"arguments":...}]} matching the supplied schema. Use calls for the caller-owned tools you need, with optional accompanying text. Use an empty calls array for a final text answer. The caller executes these tools and supplies their results before your next response. Do not substitute ChatGPT-native tools for these functions.',
+            'Return {"text":...,"calls":[{"name":...,"arguments":...}]} matching the supplied schema. Use calls for the caller-owned tools you need, with optional accompanying text. Honor required tool submissions in the caller\'s instructions; use an empty calls array only when those instructions permit a plain text answer. The caller executes these tools. Do not substitute ChatGPT-native tools for these functions.',
         },
       ];
     let servedModel: string | undefined;
@@ -201,11 +202,7 @@ function stream(
       }
       const completed = await source.result();
       const finalAnswer =
-        finalAnswers?.join("\n\n") ??
-        completed.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("");
+        finalAnswers?.join("\n\n") ?? contentText(completed.content, "");
       const message = {
         ...completed,
         api: model.api,

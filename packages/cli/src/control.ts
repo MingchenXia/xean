@@ -48,8 +48,23 @@ export async function requestOwner(
   const path = socketPath(database);
   let response: Response;
   try {
+    const uid = process.getuid?.();
+    const directory = await lstat(dirname(path));
+    if (
+      !directory.isDirectory() ||
+      directory.uid !== uid ||
+      (directory.mode & 0o077) !== 0
+    )
+      throw new Error(
+        "Control socket directory must be private and belong to the current user",
+      );
+    const socket = await lstat(path);
+    if (!socket.isSocket()) throw new Error("Control path is not a socket");
+    if (socket.uid !== uid)
+      throw new Error("Control socket must belong to the current user");
     response = await fetch("http://xean/command", {
       unix: path,
+      timeout: false,
       redirect: "error",
       method: "POST",
       headers: { "content-type": "application/json" },

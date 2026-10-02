@@ -15,12 +15,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { getOpenAICodexWebSocketDebugStats } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
-import {
-  Xean,
-  openXeanStorage,
-  type XeanOptions,
-} from "../packages/core/src/index.ts";
-import { auditedStream } from "../packages/core/src/pi.ts";
+import { Xean, openXeanStorage, type XeanOptions } from "xean";
+import { auditedStream } from "xean/pi";
 import { sumOfSquares } from "./sum-of-squares.ts";
 
 // Run under Fleet's locked Bun. Supply the API key on stdin for live mode;

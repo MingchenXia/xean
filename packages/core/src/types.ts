@@ -52,7 +52,7 @@ export interface Execution {
   /** Native, invocation-bound access to this task's private durable work. */
   readonly durable?: Pick<
     ToolExecutionApi,
-    "taskId" | "conversation" | "commit" | "snapshot"
+    "taskId" | "conversation" | "commit" | "snapshot" | "memo"
   > &
     Pick<TaskRuntime<never, never, never, object>, "context"> & {
       readonly registry: Registry;

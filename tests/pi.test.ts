@@ -82,12 +82,19 @@ test("native provider profiles preserve explicit credentials instead of a shared
 
 test("configuration and library limits share safe integer boundaries", async () => {
   const profiles = { default: { provider: "openai", model: "unused" } };
+  const runtime = () => {
+    throw new Error("Numeric validation needs no model runtime");
+  };
+  const roles = (maxExplorerResponses: number, maxExplorerReads = 1) =>
+    createRoles(runtime, offlineResearch, {
+      maxExplorerResponses,
+      maxExplorerReads,
+      literature: false,
+    });
   const solver = (maxExplorerResponses: number) =>
     createSolver(
       { problem: "Exact task", completionCriteria: "Complete proof" },
-      () => {
-        throw new Error("Numeric validation needs no model runtime");
-      },
+      runtime,
       { maxExplorerResponses },
     );
   const open = (limits: Partial<Limits>) =>
@@ -98,6 +105,12 @@ test("configuration and library limits share safe integer boundaries", async () 
       readSettings({ profiles, maxExplorerResponses: value }),
     ).toThrow();
     expect(() => solver(value)).toThrow();
+    expect(() => roles(value)).toThrow(
+      "maxExplorerResponses must be a positive integer",
+    );
+    expect(() => roles(1, value)).toThrow(
+      "maxExplorerReads must be a positive integer",
+    );
     expect(() =>
       readSettings({ profiles, limits: { concurrency: value } }),
     ).toThrow();
@@ -120,6 +133,7 @@ test("configuration and library limits share safe integer boundaries", async () 
     }
   }
   expect(() => solver(maximum)).not.toThrow();
+  expect(() => roles(maximum, maximum)).not.toThrow();
   const retired = { deadline: Date.now() + 60_000 };
   expect(() => readSettings({ profiles, limits: retired })).toThrow();
   await expect(open(retired as Partial<Limits>)).rejects.toThrow(
@@ -1037,6 +1051,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
         String(input.messages.find((m) => m.role === "user")!.content),
       );
       expect(prompt.capabilities).toEqual({
+        explorer: true,
         codex: false,
         literature: false,
         sourceRetrieval: false,
@@ -1099,6 +1114,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
         guidance: [],
         failures: [],
         literatureUsed: false,
+        explorerUsed: false,
       },
       execution,
     ),

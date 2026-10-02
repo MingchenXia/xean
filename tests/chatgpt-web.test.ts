@@ -188,6 +188,11 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
   try {
     await engine.run();
     const snapshot = await engine.inspectWithRecords();
+    const prompt = JSON.stringify(requests[0].input);
+    expect(prompt).toContain("Return results through submit_result.");
+    expect(prompt).not.toContain(
+      "Use an empty calls array for a final text answer.",
+    );
     expect(snapshot.campaign.status).toBe("completed");
     expect(snapshot.campaign.providerCalls).toBe(1);
     const notes = project(snapshot.campaign);
@@ -227,6 +232,7 @@ test("direct browser roles cannot enable readers or repeat an invalid submission
       calls++;
       const body = await new Response(init?.body).json();
       expect(JSON.stringify(body.input)).not.toContain("read_notes");
+      expect(JSON.stringify(body.input)).toContain('\\"reads\\":0');
       return response(
         selection("submit_result", { notes: [], candidate: true }),
       );

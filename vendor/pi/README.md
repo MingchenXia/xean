@@ -1,7 +1,7 @@
 # Pi artifacts
 
 Xean consumes the packages listed in [provenance.json](provenance.json)
-from Pi commit `a13d35a742c6ef8462812a28fbe1d8c8b7431c32`.
+from Pi commit `7fbbd5f4a1d982bb02d63472dde0774fa639f99b`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
 Pi's internal dependencies. Their upstream package version is `1.0.0`.
@@ -62,7 +62,7 @@ allocation reduction. Retry listener cleanup covers both the Codex transport
 and `retryAssistantCall` backoffs. The assistant retry classifier also treats
 authentication, invalid-request, and explicit context-limit errors as terminal
 when their detail contains transient-looking text.
-Codex and OpenAI Responses failures retain structured status, type, and code for the same native
+Codex, OpenAI Responses, Anthropic, and Google failures retain structured status, type, and code for the same native
 retry classifier. This permits bounded recovery for new server-error codes and
 activates the existing HTTP fallback after transient typed WebSocket failures.
 Quota and billing exhaustion remain terminal, including HTTP 429 responses.

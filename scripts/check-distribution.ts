@@ -3,10 +3,23 @@ import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { decode, readSettings, taskSchema } from "xean/solve";
 import manifest from "../package.json";
 import provenance from "../vendor/pi/provenance.json";
 
 const root = resolve(import.meta.dir, "..");
+for await (const file of new Bun.Glob("examples/*-{settings,task}.json").scan(
+  root,
+)) {
+  const value = await Bun.file(resolve(root, file)).json();
+  assert.doesNotThrow(
+    () =>
+      file.endsWith("-settings.json")
+        ? readSettings(value)
+        : decode(taskSchema, value),
+    `${file}: example contract drift`,
+  );
+}
 const workspaces = new Map<
   string,
   {
