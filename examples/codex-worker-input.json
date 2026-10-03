@@ -1,0 +1,8 @@
+{
+  "task": {
+    "problem": "Implement a function that returns the sum of squares of a finite list of numbers.",
+    "completionCriteria": "A runnable JavaScript module and tests for [3,4] -> 25, [-3,0,4] -> 25 and [] -> 0, with retained commands and stdout."
+  },
+  "notes": [],
+  "assignment": "Create sum.mjs exporting sumSquares(values) and test.mjs using node:assert/strict. Check [3,4], [-3,0,4] and the empty list. Run node test.mjs, print xean-codex-smoke:25 on success and retain stdout in output.txt. Return one ordinary note describing the implementation, checks, output and rerun command, with support=[] and candidate=false. Access no credentials; change files only in the worker workspace."
+}

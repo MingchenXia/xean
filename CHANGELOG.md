@@ -102,6 +102,13 @@ is provided. Existing releases and tags remain historical archives.
   checks validate example settings and tasks against the public schemas and
   require enabled patches to match their provenance. Fleet checks support
   focused test files, and Lab shares a zero-call integration smoke.
+- Add a repository-owned Linux x86_64 cloud entry point that verifies pinned
+  tools and dependency artifacts, repairs stale installations, and uses Tini for
+  child-process cleanup. Native Codex login always uses the current account's
+  inherited authentication. Official device login supports account changes;
+  read-only initialization has an actionable platform permission diagnostic.
+  Generated standalone worker settings follow the checkout path without storing
+  credentials, changing campaign formats, or configuring Pi authentication.
 
 Qualification receipts and provider limitations are recorded in
 [verification](docs/kernel-smoke.md). Historical checks apply to their recorded
