@@ -10,6 +10,30 @@ canonical terminology. Reuse an existing term before defining and justifying a n
 For campaign-status requests, start with the [compact status workflow](docs/solver.md#checking-status)
 and the campaign's frozen reader. Read full inspection or proofs only when needed.
 
+## Managed cloud startup
+
+In managed Linux x86_64 cloud tasks, run `bash scripts/cloud.sh setup` from the
+existing checkout before work. It restores verified tools and frozen dependencies
+without model calls. Use `bash scripts/cloud.sh check` or `bash scripts/cloud.sh xean`
+for commands that need child-process cleanup. Each cloud task is already isolated;
+do not create a worktree unless requested. Follow
+[cloud setup and account changes](README.md#managed-cloud-and-account-changes).
+
+Preserve the current account's native Codex authentication, proxy, and CA environment.
+Never copy credentials into the checkout/cache or reuse an earlier account's
+credentials from a snapshot. For explicitly requested account switching, or an
+actual 401/unrefreshable login, run `bash scripts/cloud.sh login` and have the user
+complete official browser authorization; wait for successful login. An unset API
+key or local login status alone does not justify replacing authentication.
+
+If the native Codex directory is read-only, launch the exact authorized login or
+worker invocation through `exec_command` with `sandbox_permissions="require_escalated"`.
+Keep the native worker's `workspace-write` or research's `read-only` sandbox. Do not
+disable sandboxes or change `HOME`/`CODEX_HOME`. Preserve failed campaign evidence;
+repair the cause before choosing a new standalone worker campaign. Keep existing
+campaigns on their matching frozen source/runtime. Setup does not configure Pi
+mathematical provider authentication or establish remote model availability.
+
 ## Core priorities
 
 - Simplicity and correctness take precedence over feature count and speculative

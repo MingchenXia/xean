@@ -78,6 +78,78 @@ bun examples/deterministic.ts
 The deterministic example returns `{"status":"completed","result":25}`.
 Repeating it reopens the same committed result.
 
+### Managed cloud and account changes
+
+On Linux x86_64 cloud machines with Node, npm, curl, and tar already installed,
+the repository can bootstrap its own tools from any checkout path:
+
+```sh
+bash scripts/cloud.sh setup
+bash scripts/cloud.sh check
+bash scripts/cloud.sh xean --help
+```
+
+The entry point installs Bun 1.4.2 and Tini 0.19.0 with pinned checksums, verifies
+bundled dependency provenance, and repairs a missing or stale installation through
+the frozen `setup` command. Repeated setup reuses a valid dependency receipt.
+Tini reaps orphaned Codex processes even when the container's PID 1 does not.
+Other commands also prepare missing tools and dependencies before running.
+Local tools, caches, and generated Codex settings live under ignored `.xean/cloud/`;
+set `XEAN_CLOUD_DIR` to select another writable directory. No model call or login
+occurs during setup, checks, or completed-campaign reopening.
+
+Authentication always comes from the executing account's native Codex CLI and
+inherited environment. This setup never reads, copies, or saves credentials and
+does not set `HOME` or `CODEX_HOME`. It preserves proxy and CA configuration.
+Use the platform Codex CLI; `XEAN_CODEX_COMMAND` can select another installed
+native executable. If it is unavailable, install the official CLI separately.
+
+After switching ChatGPT accounts, explicitly authorize the intended account:
+
+```sh
+bash scripts/cloud.sh login
+bash scripts/cloud.sh doctor
+```
+
+`login` runs official `codex login --device-auth`. Complete its browser authorization
+with the new account and wait for successful login. `doctor` checks the local
+installation and native login status without spending a model call. A local
+"logged in" result does not establish remote authorization; inspect a real
+completed turn. If an actual request returns 401 or cannot refresh authentication,
+use `login` again. Browser consent cannot be automated by repository configuration.
+Do not put tokens into Git, task/settings files, snapshots, or cloud setup scripts.
+
+Some managed execution sandboxes mount the native Codex directory read-only.
+Codex still writes initialization files there even with redirected logs and
+ephemeral execution. The wrapper diagnoses this before a live invocation.
+An agent must use its supported `exec_command` `require_escalated` review for
+the exact login/worker command. Keep the native coding session's `workspace-write`
+sandbox and research session's `read-only` sandbox. Shell scripts cannot grant
+that platform permission.
+
+The generated `.xean/cloud/codex-settings.json` follows the current checkout path
+and selects `gpt-6.1-sol` with `xhigh` for a standalone implementation worker.
+It is regenerated; copy it before customizing settings. Its Pi profile is unused
+by standalone Codex and does not configure the mathematical solver's credentials.
+Run the example only when you intend to make a real model call, using a new database:
+
+```sh
+bash scripts/cloud.sh xean --records role codex examples/codex-worker-input.json runs/my-coding-task/campaign.sqlite .xean/cloud/codex-settings.json
+bash scripts/cloud.sh xean status runs/my-coding-task/campaign.sqlite
+```
+
+Keep the database, artifacts, frozen inputs, matching source revision and Bun
+together. Reopen completed work with `xean run` without another model call. After
+a standalone worker fails terminally, repair its cause and create a new campaign;
+`resume` does not rerun failed workers. The example permits one attempt and one
+provider call. Choose explicit limits for new work instead of silently retrying
+or removing caps. Native token counts do not reconcile subscription credits or bills.
+
+For cloud environment settings, use `bash scripts/cloud.sh setup` as the install
+command and the startup guidance in [AGENTS.md](AGENTS.md). Publication restores
+filesystem state, not guaranteed runtime login. Recheck credentials in each new
+task and use official login recovery when necessary.
+
 The [example settings](examples/solver-settings.json) use the public OpenAI API
 with `gpt-6-astra` at max reasoning. Supply `OPENAI_API_KEY` through your shell
 or secret manager. Source checking and independent review use the separately
