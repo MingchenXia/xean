@@ -197,3 +197,34 @@ mathematical provider authentication or establish remote model availability.
 - Preserve historical results and reports. Do not commit credentials or large raw
   campaign databases; index external artifacts with their location and hash. This
   proof-output rule is separate from this repository's untracked development logs.
+
+## Writing papers from completed proofs
+
+- To prepare a paper from completed Xean proofs, use the writing module in
+  [MingchenXia/research-workspace](https://github.com/MingchenXia/research-workspace/tree/main/writing)
+  and its complete repository-local
+  [mingchen-writing skill](https://github.com/MingchenXia/research-workspace/blob/main/.agents/skills/mingchen-writing/SKILL.md).
+  This is the explicitly designated writing guidance; it does not depend on a
+  machine-specific skill installation. Read both bundled reference guides for
+  a full-paper task.
+- Start with the archived full proofs, their supporting statements and
+  dependency relationships, exact questions and hypotheses, and actual verifier
+  reports. Preserve this evidence while organizing exposition; writing cannot
+  silently strengthen claims or fill unresolved mathematical gaps.
+- In a research-workspace checkout, initialize a manuscript with
+  `python3 scripts/workspace.py paper --project <project> --slug <paper> --result <result-file>`.
+  Each result path is relative to that project's `results/`; repeat `--result`
+  for multiple inputs. Save papers under `projects/<project>/manuscripts/<paper>/`.
+  Initialization copies the bundled template, style, and complete bibliography
+  byte for byte, and records source paths, input hashes, and Git provenance.
+  Never overwrite an existing manuscript's modified local assets blindly.
+- Follow the skill's mathematical structure, exact citation checks, local
+  bibliography conventions, original TeX audit, LaTeX/Biber build, warning scan,
+  PDF inspection, and complete automatic second-pass revision with repeated
+  checks. Resolve the audit script relative to the repository-local `SKILL.md`
+  and invoke its absolute path; do not substitute a same-named manuscript script.
+- Keep theorem-to-source mapping and actual first/second-pass checks in the
+  manuscript's `SOURCES.md` and `CHECKS.md`. Archive paper sources, the PDF when
+  available, and remaining uncertainties in the private research repository,
+  preserving original proof verification history. Report the manuscript path,
+  archive commit, and what was actually verified.
