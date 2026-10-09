@@ -228,3 +228,24 @@ mathematical provider authentication or establish remote model availability.
   available, and remaining uncertainties in the private research repository,
   preserving original proof verification history. Report the manuscript path,
   archive commit, and what was actually verified.
+
+## Mandatory manuscript compilation before delivery
+
+- Every article produced from Xean proofs must compile successfully before it
+  is delivered as complete. In the research-workspace checkout, run
+  `python3 scripts/build_papers.py --docker --paper projects/<project>/manuscripts/<paper>`
+  using the digest-pinned LaTeX/Biber environment in `writing/toolchain.json`.
+  The repository's `Compile manuscripts` workflow compiles every manuscript and
+  a citation-bearing template, saving PDFs, logs, and exact-input build reports.
+- Require a clean full build, a generated PDF, and no unresolved citations,
+  references, duplicate labels, or pending Biber/rerun requests. Compile again
+  after the complete second writing pass, then inspect the final PDF.
+- If native tools are unavailable or incompatible, use the GitHub compilation
+  workflow and inspect the successful run for the exact final source commit.
+  A compilation failure blocks article delivery: repair the document or its
+  supported build environment and rebuild. Merely reporting an environment
+  failure does not fulfill the writing task.
+- Archive the final PDF and build report with the manuscript, and record the
+  exact source commit, successful build/CI evidence, and remaining mathematical
+  or citation uncertainties in `CHECKS.md`. Do not approve changed sources using
+  an earlier draft's build, or equate compilation with mathematical correctness.
