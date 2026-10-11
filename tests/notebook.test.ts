@@ -23,6 +23,7 @@ import {
   validatePlan,
 } from "../src/math/notes.ts";
 import type { Check, Note, SolverResult } from "../src/math/contracts.ts";
+import { mergeExploration } from "../src/math/results.ts";
 
 const pass = { verdict: "PASS" as const, report: "Checked." };
 const content = (text: string) => ({
@@ -117,10 +118,14 @@ async function seed(owner: Awaited<ReturnType<typeof fixture>>) {
     (
       await owner.run({
         kind: "notes",
-        candidate: true,
         notes: [
           { id: "n1", ...content("Lemma proof"), support: [] },
-          { id: "n2", ...content("Consumer proof"), support: ["n1"] },
+          {
+            id: "n2",
+            ...content("Consumer proof"),
+            support: ["n1"],
+            candidate: true,
+          },
         ],
       })
     ).status,
@@ -186,7 +191,6 @@ test("mathematical proof edits invalidate consumers even when the statement is r
         await owner.run({
           kind: "notes",
           notes: [],
-          candidate: false,
           edits: [
             {
               id: base!.id,
@@ -230,7 +234,6 @@ test("a changed exported statement invalidates retained consumers before new evi
     await owner.run({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: base!.id,
@@ -264,7 +267,6 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     await owner.run({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: base!.id,
@@ -291,7 +293,6 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     await owner.run({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         { id: base!.id, revision: summaryEdited.revision, text: "New proof" },
       ],
@@ -322,7 +323,6 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     await owner.run({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: assessed.id,
@@ -338,7 +338,6 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     await owner.run({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: assessed.id,
@@ -366,7 +365,6 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
         publishCommand(tx, owner.root.id, {
           kind: "submit",
           id: "grant",
-          candidate: false,
           notes: [{ id: "n1", ...content("Caller theorem"), support: [] }],
         }),
       context,
@@ -391,7 +389,6 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
               kind: "submit",
               id: "format",
               notes: [],
-              candidate: false,
               edits: [edit],
             }),
           context,
@@ -401,7 +398,6 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
           (
             await owner.run({
               kind: "notes",
-              candidate: false,
               notes: [],
               edits: [edit],
             })
@@ -420,7 +416,6 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
       (
         await owner.run({
           kind: "notes",
-          candidate: false,
           notes: [{ id: "n2", ...content("New dependency"), support: [] }],
           edits: [
             {
@@ -451,8 +446,14 @@ test("caller edits preserve import trust; Explorer edits revoke it and cycles pu
         publishCommand(tx, owner.root.id, {
           kind: "submit",
           id: "grant",
-          candidate: true,
-          notes: [{ id: "n1", ...content("Caller theorem"), support: [] }],
+          notes: [
+            {
+              id: "n1",
+              ...content("Caller theorem"),
+              support: [],
+              candidate: true,
+            },
+          ],
         }),
       context,
     );
@@ -464,7 +465,6 @@ test("caller edits preserve import trust; Explorer edits revoke it and cycles pu
           kind: "submit",
           id: "change",
           notes: [],
-          candidate: false,
           edits: [
             {
               id: imported.id,
@@ -481,7 +481,6 @@ test("caller edits preserve import trust; Explorer edits revoke it and cycles pu
     const before = await owner.view();
     const outcome = await owner.run({
       kind: "notes",
-      candidate: false,
       notes: [
         { id: "n1", ...content("New dependency"), support: [revised.id] },
       ],
@@ -494,7 +493,6 @@ test("caller edits preserve import trust; Explorer edits revoke it and cycles pu
       (
         await owner.run({
           kind: "notes",
-          candidate: false,
           notes: [],
           edits: [
             {
@@ -521,7 +519,6 @@ test.each([false, true])(
       await owner.run({
         kind: "notes",
         notes: [],
-        candidate: false,
         edits: [
           {
             id: base!.id,
@@ -599,10 +596,9 @@ test("retirement hides direct work while existing consumers can finish verificat
   try {
     await owner.run({
       kind: "notes",
-      candidate: true,
       notes: [
         { id: "n1", ...content("Supporting lemma"), support: [] },
-        { id: "n2", ...content("Candidate"), support: ["n1"] },
+        { id: "n2", ...content("Candidate"), support: ["n1"], candidate: true },
       ],
     });
     const [base, consumer] = (await owner.view()).notes;
@@ -617,7 +613,6 @@ test("retirement hides direct work while existing consumers can finish verificat
     await owner.run({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: base!.id,
@@ -678,7 +673,6 @@ test("a coherent changed-claim batch installs its newly checked consumers after 
     await owner.run({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         { id: base!.id, revision: base!.revision, text: "Repaired claim" },
       ],
@@ -800,12 +794,43 @@ test("current stage checks retain dominant evidence and workers keep their resul
   }
 });
 
+test("private merging preserves each new note's candidate flag without granting evidence", async () => {
+  const owner = await fixture();
+  try {
+    const merged = mergeExploration([
+      {
+        notes: [
+          { id: "n1", ...content("Candidate"), support: [], candidate: true },
+          {
+            id: "n2",
+            ...content("Observation"),
+            support: [],
+            candidate: false,
+          },
+        ],
+      },
+      { notes: [{ id: "n3", ...content("Later observation"), support: [] }] },
+    ]);
+    expect((await owner.run({ kind: "notes", ...merged })).status).toBe(
+      "completed",
+    );
+    const notes = (await owner.view()).notes;
+    expect(notes.map((note) => note.candidate)).toEqual([true, false, false]);
+    for (const note of notes) {
+      expect(note.checks).toEqual({});
+      expect(note.verified).toBe(false);
+      expect(note.accepted).toBe(false);
+    }
+  } finally {
+    await owner.harness.close(context);
+  }
+});
+
 test("unchecked note edits and explicit candidate edits do not manufacture evidence", async () => {
   const owner = await fixture();
   try {
     await owner.run({
       kind: "notes",
-      candidate: false,
       notes: [{ id: "n1", ...content("Unchecked argument"), support: [] }],
     });
     const note = (await owner.view()).notes[0]!;
@@ -813,7 +838,6 @@ test("unchecked note edits and explicit candidate edits do not manufacture evide
       (
         await owner.run({
           kind: "notes",
-          candidate: false,
           notes: [],
           edits: [
             {
@@ -830,9 +854,6 @@ test("unchecked note edits and explicit candidate edits do not manufacture evide
     expect(edited.candidate).toBe(true);
     expect(edited.accepted).toBe(false);
     expect(edited.checks).toEqual({});
-    expect(
-      (await owner.run({ kind: "notes", candidate: true, notes: [] })).status,
-    ).toBe("faulted");
   } finally {
     await owner.harness.close(context);
   }
@@ -843,8 +864,14 @@ test("source approval cannot bind premises from an ignored correctness extractio
   try {
     await owner.run({
       kind: "notes",
-      candidate: true,
-      notes: [{ id: "n1", ...content("Argument under P"), support: [] }],
+      notes: [
+        {
+          id: "n1",
+          ...content("Argument under P"),
+          support: [],
+          candidate: true,
+        },
+      ],
     });
     const note = (await owner.view()).notes[0]!;
     await owner.run({
@@ -909,7 +936,6 @@ test.each([false, true])(
         (
           await owner.run({
             kind: "notes",
-            candidate: false,
             notes: [],
             edits: reverse ? edits.reverse() : edits,
           })
@@ -932,8 +958,14 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
   try {
     await owner.run({
       kind: "notes",
-      candidate: true,
-      notes: [{ id: "n1", ...content("Uses premise P"), support: [] }],
+      notes: [
+        {
+          id: "n1",
+          ...content("Uses premise P"),
+          support: [],
+          candidate: true,
+        },
+      ],
     });
     const target = (await owner.view()).notes[0]!;
     const uncertain = {
@@ -954,7 +986,6 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
     const addEvidence = async (premise: string, quote: string) => {
       await owner.run({
         kind: "notes",
-        candidate: false,
         notes: [{ id: "n1", ...content("Source note"), support: [] }],
       });
       const note = (await owner.view()).notes.at(-1)!;
@@ -1005,7 +1036,6 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
     const evidenceNote = (await owner.view()).notes.at(-1)!;
     await owner.run({
       kind: "notes",
-      candidate: false,
       notes: [],
       edits: [
         {
@@ -1037,7 +1067,6 @@ test.each(["conflict", "batch", "identical", "replaced", "activated"])(
     try {
       await owner.run({
         kind: "notes",
-        candidate: false,
         notes: [
           { id: "n1", ...content("First source"), support: [] },
           { id: "n2", ...content("Second source"), support: [] },
@@ -1114,7 +1143,6 @@ test.each([false, true])(
     try {
       await owner.run({
         kind: "notes",
-        candidate: false,
         notes: [
           { id: "n1", ...content("Uses X"), support: [] },
           { id: "n2", ...content("Uses X and Y"), support: [] },

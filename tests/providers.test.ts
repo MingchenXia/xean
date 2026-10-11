@@ -149,8 +149,7 @@ test.each([false, true])(
     for (let index = 0; index < (recoveredSuccess ? 3 : 2); index++) {
       const accepted = index === 2;
       const call = fauxToolCall("submit_explorer", {
-        notes: [],
-        candidate: !accepted,
+        notes: accepted ? [] : [{ candidate: true }],
       });
       history.push(fauxAssistantMessage([call], { stopReason: "toolUse" }), {
         role: "toolResult",
@@ -159,7 +158,7 @@ test.each([false, true])(
         content: [
           {
             type: "text",
-            text: accepted ? "Recorded" : "A solution claim needs a new note",
+            text: accepted ? "Recorded" : "A note needs its full content",
           },
         ],
         isError: !accepted,
@@ -214,7 +213,6 @@ const selection = {
       support: [],
     },
   ],
-  candidate: false,
 };
 function response(answers: string[], status = "completed") {
   return Response.json({
@@ -300,7 +298,7 @@ test("direct ChatGPT Explorer sends the index once and accepts only its final an
       profiles: createRuntime(settings).profiles,
     });
     const result = await roles.explorer(
-      { task, notes: [note], guidance: "Continue" },
+      { task, notes: [note], assignment: "Continue" },
       invocation,
       context,
     );
@@ -374,7 +372,7 @@ test("native worker recovery refuses to resend an interrupted ChatGPT request", 
       create: {
         task,
         settings,
-        mode: { role: "explorer", input: { notes: [], guidance: "Solve" } },
+        mode: { role: "explorer", input: { notes: [], assignment: "Solve" } },
       },
     });
     await Promise.race([

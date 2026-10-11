@@ -328,7 +328,7 @@ test("a repaired support is rechecked with consumers before downstream verificat
     switch (++decision) {
       case 1:
       case 3:
-        return { work: { kind: "explorer", guidance: "Create or repair" } };
+        return { work: { kind: "explorer", assignment: "Create or repair" } };
       case 2:
       case 4:
         return {
@@ -344,8 +344,9 @@ test("a repaired support is rechecked with consumers before downstream verificat
   };
   provider.roles.explorer = async (input) => ({
     kind: "notes",
-    candidate: !input.notes.length,
-    notes: input.notes.length ? [] : [draft("n1"), draft("n2", ["n1"])],
+    notes: input.notes.length
+      ? []
+      : [draft("n1"), { ...draft("n2", ["n1"]), candidate: true }],
     ...(input.notes.length
       ? {
           edits: [
@@ -433,12 +434,11 @@ test("Explorer retains frozen reads and private submissions across native reopen
           text: inputNote.text,
         },
       ]);
-      if (response === 2)
-        return { notes: [draft("n1", ["prior"])], candidate: false };
+      if (response === 2) return { notes: [draft("n1", ["prior"])] };
       expect(JSON.stringify(transcript)).toContain(
         "prior secret original proof",
       );
-      return { notes: [draft("n2", ["n1"])], candidate: true };
+      return { notes: [{ ...draft("n2", ["n1"]), candidate: true }] };
     },
     { research: false, maxExplorerReads: 1, maxExplorerResponses: 4 },
   );
@@ -452,7 +452,7 @@ test("Explorer retains frozen reads and private submissions across native reopen
     },
     mode: {
       role: "explorer",
-      input: { notes: [inputNote], guidance: "Continue." },
+      input: { notes: [inputNote], assignment: "Continue." },
     },
   });
   try {
@@ -502,8 +502,10 @@ test("Explorer retains frozen reads and private submissions across native reopen
     const outcome = await resultOf(current.harness, id);
     const expected = {
       kind: "notes",
-      candidate: true,
-      notes: [draft("n1", ["prior"]), draft("n2", ["n1"])],
+      notes: [
+        draft("n1", ["prior"]),
+        { ...draft("n2", ["n1"]), candidate: true },
+      ],
     };
     expect(outcome).toEqual({
       status: "completed",
@@ -541,8 +543,8 @@ test("Explorer retains frozen reads and private submissions across native reopen
         return message.details;
       }),
     ).toEqual([
-      { notes: [draft("n1", ["prior"])], candidate: false },
-      { notes: [draft("n2", ["n1"])], candidate: true },
+      { notes: [draft("n1", ["prior"])] },
+      { notes: [{ ...draft("n2", ["n1"]), candidate: true }] },
     ]);
     expect(
       retained.filter(
@@ -1182,17 +1184,15 @@ test("late Explorer model error publishes only validated submissions and keeps t
         case 1:
           return {
             notes: [draft("n1", [id])],
-            candidate: false,
             edits: [
               { id, revision, text: "Repaired proof", summary: "Repair" },
             ],
           };
         case 2:
-          return { notes: [draft("n2", ["missing"])], candidate: false };
+          return { notes: [draft("n2", ["missing"])] };
         case 3:
           return {
             notes: [],
-            candidate: false,
             edits: [{ id, revision, detailedSummary: "Final repair detail" }],
           };
         default:
@@ -1202,7 +1202,7 @@ test("late Explorer model error publishes only validated submissions and keeps t
                 type: "toolCall",
                 id: "failed-response-submission",
                 name: "submit_explorer",
-                arguments: { notes: [draft("n3")], candidate: true },
+                arguments: { notes: [{ ...draft("n3"), candidate: true }] },
               },
             ],
             { stopReason: "error", errorMessage: error },
@@ -1217,7 +1217,7 @@ test("late Explorer model error publishes only validated submissions and keeps t
     return {
       work: input.failures.length
         ? null
-        : { kind: "explorer", guidance: "Repair and extend the argument" },
+        : { kind: "explorer", assignment: "Repair and extend the argument" },
     };
   };
   let current = await provider.open(directory, {
@@ -1231,7 +1231,6 @@ test("late Explorer model error publishes only validated submissions and keeps t
           kind: "submit",
           id: "seed",
           notes: [draft("n1")],
-          candidate: false,
         }),
       context,
     );
@@ -1347,9 +1346,9 @@ test.each([
               {
                 ...draft("n2", ["n1"]),
                 text: `${draft("n2").text}\n\n${"Original proof detail. ".repeat(75)}`,
+                candidate: true,
               },
             ],
-            candidate: true,
           };
         if (name === "proof" && ++proofs > 1 && !retry) {
           if (failure === "continuation")
@@ -1421,7 +1420,7 @@ test.each([
     );
     provider.roles.coordinator = async (input) => {
       if (!input.notes.length)
-        return { work: { kind: "explorer", guidance: "Prove" } };
+        return { work: { kind: "explorer", assignment: "Prove" } };
       if (input.failures.length) {
         expect(input.failures[0]!.error).toEqual(
           failure === "continuation"
@@ -2068,15 +2067,83 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
   },
 );
 
-async function fakeCodex(directory: string) {
+async function fakeCodex(directory: string, candidate = false) {
   const executable = join(directory, "codex-fixture");
   await writeFile(
     executable,
-    `#!${process.execPath}\nconst input = await Bun.stdin.json();\nif (input.assignment && !process.argv.includes('web_search="disabled"')) throw new Error("Worker enabled web search");\nif (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Partial opaque work"}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }\nlet value;\nif (input.query || input.assignment) value = {notes:[{id:"n1",summary:"Finding",detailedSummary:"Exact finding",text:"Finding. Evidence.",support:[]}],...(input.assignment?{candidate:false}:{})};\nelse if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};\nelse value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};\nconsole.log(JSON.stringify({type:"item.completed",item:{type:"web_search"}}));\nconsole.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:JSON.stringify(value)}}));\nconsole.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:17,output_tokens:5,cached_input_tokens:0}}));\n`,
+    `#!${process.execPath}
+const input = await Bun.stdin.json();
+const worker = process.argv.includes('web_search="disabled"');
+if (!worker && !process.argv.includes('web_search="live"')) throw new Error("Research disabled web search");
+if (worker && !input.assignment) throw new Error("Worker has no assignment");
+if (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Partial opaque work"}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }
+let value;
+if (input.assignment) value = {notes:[{id:"n1",summary:"Finding",detailedSummary:"Exact finding",text:"Finding. Evidence.",support:[],...(${candidate}?{candidate:true}:{})}]};
+else if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};
+else value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};
+if (!worker) console.log(JSON.stringify({type:"item.completed",item:{type:"web_search"}}));
+console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:JSON.stringify(value)}}));
+console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:17,output_tokens:5,cached_input_tokens:0}}));
+`,
   );
   await chmod(executable, 0o700);
   return executable;
 }
+
+test.each(["codex", "custom"] as const)(
+  "Literature rejects candidate notes from %s research",
+  async (backend) => {
+    const directory = await temporaryDirectory("pi-literature-candidate-");
+    const assignment = "Find the precise theorem";
+    const command =
+      backend === "codex" ? await fakeCodex(directory, true) : undefined;
+    let customCalls = 0;
+    const research: Research | undefined =
+      backend === "custom"
+        ? {
+            ...closedBookResearch,
+            retrieval: true,
+            async literature(input) {
+              customCalls++;
+              expect(input.assignment).toBe(assignment);
+              return { notes: [{ ...draft("n1"), candidate: true }] };
+            },
+          }
+        : undefined;
+    const provider = fixture(
+      () => {
+        throw new Error("Literature called a native model");
+      },
+      {
+        research: command ? { model: "fixture", command } : false,
+        literature: true,
+      },
+      undefined,
+      research,
+    );
+    const current = await provider.open(join(directory, "storage"));
+    try {
+      const id = await current.invoke({
+        role: "literature",
+        input: { task, assignment, notes: [] },
+      });
+      const outcome = await resultOf(current.harness, id);
+      expect(outcome.status).toBe("faulted");
+      if (backend === "codex")
+        expect(JSON.stringify(outcome)).toContain("candidate");
+      expect(outcome).not.toHaveProperty("result");
+      expect(provider.calls).toHaveLength(0);
+      expect(customCalls).toBe(backend === "custom" ? 1 : 0);
+      const view = await current.root.commit(
+        (tx) => readView(tx, current.root.id),
+        context,
+      );
+      expect(view.notes).toEqual([]);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
 
 test("Coordinator capabilities survive retry and reopen; fresh decisions get fresh conversations", async () => {
   const directory = await temporaryDirectory("pi-role-coordinator-");
@@ -2103,7 +2170,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
       count++;
       if (count === 1)
         return {
-          work: { kind: "explorer", guidance: "Unavailable Explorer" },
+          work: { kind: "explorer", assignment: "Unavailable Explorer" },
         };
       if (count === 2)
         expect(
@@ -2175,7 +2242,6 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
     provider.roles.codex = async () => ({
       kind: "notes",
       notes: [],
-      candidate: false,
     });
     const id = await current.invoke({ role: "coordinator", input });
     expect(await resultOf(current.harness, id)).toMatchObject({
@@ -2194,7 +2260,6 @@ test.each([false, true])(
     const prior = note("prior");
     const answer = {
       notes: [draft("n1", [prior.id])],
-      candidate: false,
       edits: edit
         ? [
             {
@@ -2243,7 +2308,7 @@ test.each([false, true])(
     try {
       const id = await current.invoke({
         role: "explorer",
-        input: { task, notes: [prior], guidance: "Develop useful findings." },
+        input: { task, notes: [prior], assignment: "Develop useful findings." },
       });
       const result = await resultOf(current.harness, id);
       expect(result).toMatchObject(
@@ -2287,13 +2352,13 @@ test("Coordinator rejects used literature and multiple workers", async () => {
       });
       if (response === 1)
         return {
-          work: { kind: "literature", query: "Repeat a completed search" },
+          work: { kind: "literature", assignment: "Repeat a completed search" },
         };
       if (response === 3)
         return {
           work: [
-            { kind: "explorer", guidance: "First" },
-            { kind: "explorer", guidance: "Second" },
+            { kind: "explorer", assignment: "First" },
+            { kind: "explorer", assignment: "Second" },
           ],
         };
       expect(
@@ -2301,7 +2366,7 @@ test("Coordinator rejects used literature and multiple workers", async () => {
           (message) => message.role === "toolResult" && message.isError,
         ),
       ).toBe(true);
-      return { work: { kind: "explorer", guidance: "Continue" } };
+      return { work: { kind: "explorer", assignment: "Continue" } };
     },
     { research: false, literature: true },
     131072,
@@ -2325,7 +2390,7 @@ test("Coordinator rejects used literature and multiple workers", async () => {
       expect(await resultOf(current.harness, id)).toEqual({
         status: "completed",
         result: {
-          work: { kind: "explorer", guidance: "Continue" },
+          work: { kind: "explorer", assignment: "Continue" },
         },
       });
     }
@@ -2351,13 +2416,11 @@ test.each([
     const provider = fixture(
       () => {
         response++;
-        if (submitted && response === 1)
-          return { notes: [draft("n1")], candidate: false };
+        if (submitted && response === 1) return { notes: [draft("n1")] };
         return fauxAssistantMessage(
           [
             fauxToolCall("submit_explorer", {
-              notes: [draft("n2")],
-              candidate: true,
+              notes: [{ ...draft("n2"), candidate: true }],
             }),
           ],
           { stopReason: "length" },
@@ -2373,7 +2436,7 @@ test.each([
       },
       mode: {
         role: "explorer",
-        input: { notes: [], guidance: "Continue" },
+        input: { notes: [], assignment: "Continue" },
       },
     });
     try {
@@ -2395,7 +2458,6 @@ test.each([
               status: "completed",
               result: {
                 kind: "notes",
-                candidate: false,
                 notes: [{ id: "n1" }],
               },
             }
@@ -2431,7 +2493,7 @@ test("capacity after a frozen read hands off valid private notes without another
   const provider = fixture(
     () =>
       ++count === 1
-        ? { notes: [draft("n1")], candidate: false }
+        ? { notes: [draft("n1")] }
         : { tool: "read_notes", arguments: { ids: ["large"], level: "full" } },
     { research: false, maxExplorerReads: 1, maxExplorerResponses: 4 },
     32768,
@@ -2446,12 +2508,12 @@ test("capacity after a frozen read hands off valid private notes without another
     };
     const id = await current.invoke({
       role: "explorer",
-      input: { task, notes: [large], guidance: "Continue" },
+      input: { task, notes: [large], assignment: "Continue" },
     });
     const outcome = await resultOf(current.harness, id);
     expect(outcome).toMatchObject({
       status: "completed",
-      result: { kind: "notes", candidate: false, notes: [{ id: "n1" }] },
+      result: { kind: "notes", notes: [{ id: "n1" }] },
     });
     expect(provider.calls).toHaveLength(2);
   } finally {
@@ -2461,15 +2523,16 @@ test("capacity after a frozen read hands off valid private notes without another
 
 test("invalid submissions consume the response allowance and cannot publish partial results", async () => {
   const directory = await temporaryDirectory("pi-role-allowance-");
-  const provider = fixture(
-    () => ({ notes: [draft("n1", ["unknown"])], candidate: false }),
-    { research: false, maxExplorerReads: 1, maxExplorerResponses: 2 },
-  );
+  const provider = fixture(() => ({ notes: [draft("n1", ["unknown"])] }), {
+    research: false,
+    maxExplorerReads: 1,
+    maxExplorerResponses: 2,
+  });
   const current = await provider.open(directory);
   try {
     const id = await current.invoke({
       role: "explorer",
-      input: { task, notes: [], guidance: "Continue" },
+      input: { task, notes: [], assignment: "Continue" },
     });
     const outcome = await resultOf(current.harness, id);
     expect(outcome).toMatchObject({
@@ -2505,7 +2568,7 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
       expect(text).toContain("0 reads and 3 responses remain");
       expect(text).toContain("Reading is disabled");
       expect(text).not.toContain("sensitive full argument");
-      return { notes: [draft("n1")], candidate: true };
+      return { notes: [{ ...draft("n1"), candidate: true }] };
     },
     { research: false, maxExplorerReads: 1, maxExplorerResponses: 5 },
   );
@@ -2516,7 +2579,7 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
       input: {
         task,
         notes: [{ ...note("prior"), text: "sensitive full argument" }],
-        guidance: "Continue",
+        assignment: "Continue",
       },
     });
     expect((await resultOf(current.harness, id)).status).toBe("completed");
@@ -2545,7 +2608,7 @@ test("Coordinator admits four reads by default and can hand off after a denied f
           tool: "read_notes",
           arguments: { ids: ["prior"], level: "full" },
         }
-      : { work: { kind: "explorer", guidance: "Continue" } },
+      : { work: { kind: "explorer", assignment: "Continue" } },
   );
   const current = await provider.open(directory);
   try {
@@ -2562,7 +2625,7 @@ test("Coordinator admits four reads by default and can hand off after a denied f
     });
     expect(await resultOf(current.harness, id)).toEqual({
       status: "completed",
-      result: { work: { kind: "explorer", guidance: "Continue" } },
+      result: { work: { kind: "explorer", assignment: "Continue" } },
     });
     expect(calls).toBe(6);
     const reads = provider.calls
@@ -2770,12 +2833,12 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
     expect(
       await run("literature", {
         task,
-        query: "Find the precise theorem",
+        assignment: "Find the precise theorem",
         notes: [],
       }),
     ).toMatchObject({
       status: "completed",
-      result: { kind: "notes", candidate: false },
+      result: { kind: "notes" },
     });
     expect(
       await run("review", {
@@ -2849,7 +2912,7 @@ test.each([
           stopReason: "length",
         });
       const submit = fauxToolCall("submit_coordinator", {
-        work: { kind: "explorer", guidance: "Continue" },
+        work: { kind: "explorer", assignment: "Continue" },
       });
       const read = fauxToolCall("read_notes", {
         ids: validRead ? ["prior"] : [],
@@ -2874,7 +2937,7 @@ test.each([
       });
       expect(await resultOf(current.harness, id)).toEqual({
         status: "completed",
-        result: { work: { kind: "explorer", guidance: "Continue" } },
+        result: { work: { kind: "explorer", assignment: "Continue" } },
       });
       expect(calls).toBe(1);
       const retained = await entries(current.harness);
@@ -2901,7 +2964,6 @@ test("Explorer preserves dependencies and response limits across transcript page
       calls++;
       return {
         notes: [draft(`n${calls}`, calls > 1 ? [`n${calls - 1}`] : [])],
-        candidate: false,
       };
     },
     { research: false, maxExplorerResponses: 70 },
@@ -2910,7 +2972,7 @@ test("Explorer preserves dependencies and response limits across transcript page
   try {
     const id = await current.invoke({
       role: "explorer",
-      input: { task, notes: [], guidance: "Continue" },
+      input: { task, notes: [], assignment: "Continue" },
     });
     const completed = await resultOf(current.harness, id);
     expect(calls).toBe(70);
@@ -2918,7 +2980,6 @@ test("Explorer preserves dependencies and response limits across transcript page
       status: "completed",
       result: {
         kind: "notes",
-        candidate: false,
         notes: Array.from({ length: 70 }, (_, i) =>
           draft(`n${i + 1}`, i > 0 ? [`n${i}`] : []),
         ),
@@ -2928,6 +2989,59 @@ test("Explorer preserves dependencies and response limits across transcript page
     await current.harness.close(context);
   }
 });
+
+test.each([false, undefined])(
+  "Explorer hands off when a non-last new note is a candidate (last candidate=%s)",
+  async (lastCandidate) => {
+    const directory = await temporaryDirectory("pi-role-candidate-handoff-");
+    const provider = fixture(() => ({
+      notes: [
+        { ...draft("n1"), candidate: true },
+        {
+          ...draft("n2", ["n1"]),
+          ...(lastCandidate === undefined ? {} : { candidate: lastCandidate }),
+        },
+      ],
+    }));
+    provider.roles.coordinator = async (input) => ({
+      work: input.notes.length
+        ? null
+        : { kind: "explorer", assignment: "Prove the exact claim" },
+    });
+    const current = await provider.open(directory, {
+      task,
+      settings: {
+        profiles: { default: { provider: "openai", model: "roles" } },
+      },
+    });
+    try {
+      await current.root.commit(
+        (tx) => provider.workflow.initialize(tx, current.root.id),
+        context,
+      );
+      await current.root.waitForIdle(context);
+      expect(provider.calls).toHaveLength(1);
+      expect(provider.calls[0]!.input.assignment).toBe("Prove the exact claim");
+      const view = await current.root.commit(
+        (tx) => readView(tx, current.root.id),
+        context,
+      );
+      expect(view.notes).toHaveLength(2);
+      expect(view.notes.map(({ candidate }) => candidate)).toEqual([
+        true,
+        false,
+      ]);
+      for (const saved of view.notes) {
+        expect(saved.checks).toEqual({});
+        expect(saved.imported).toBe(false);
+        expect(saved.verified).toBe(false);
+        expect(saved.accepted).toBe(false);
+      }
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
 
 test("Explorer continues private work until an empty submission", async () => {
   const directory = await temporaryDirectory("pi-role-mixed-continue-");
@@ -2946,7 +3060,6 @@ test("Explorer continues private work until an empty submission", async () => {
             [
               fauxToolCall("submit_explorer", {
                 notes: [draft("n1", ["prior"])],
-                candidate: false,
               }),
               read,
             ],
@@ -2957,8 +3070,7 @@ test("Explorer continues private work until an empty submission", async () => {
             [
               read,
               fauxToolCall("submit_explorer", {
-                notes: [draft("n2", ["missing"])],
-                candidate: true,
+                notes: [{ ...draft("n2", ["missing"]), candidate: true }],
               }),
             ],
             { stopReason: "toolUse" },
@@ -2966,10 +3078,9 @@ test("Explorer continues private work until an empty submission", async () => {
         case 4:
           return {
             notes: [draft("n2", ["n1"])],
-            candidate: false,
           };
         default:
-          return { notes: [], candidate: false };
+          return { notes: [] };
       }
     },
     { research: false, maxExplorerReads: 4, maxExplorerResponses: 6 },
@@ -2978,7 +3089,7 @@ test("Explorer continues private work until an empty submission", async () => {
   try {
     const id = await current.invoke({
       role: "explorer",
-      input: { task, notes: [note("prior")], guidance: "Continue" },
+      input: { task, notes: [note("prior")], assignment: "Continue" },
     });
     const completed = await resultOf(current.harness, id);
     expect(completed).toEqual({
@@ -2986,7 +3097,6 @@ test("Explorer continues private work until an empty submission", async () => {
       result: {
         kind: "notes",
         notes: [draft("n1", ["prior"]), draft("n2", ["n1"])],
-        candidate: false,
       },
     });
     expect(calls).toBe(5);
@@ -3022,7 +3132,6 @@ test("Explorer coalesces private edits at the frozen public revision across reop
       if (calls === 1)
         return {
           notes: [],
-          candidate: false,
           edits: [
             {
               id: existing.id,
@@ -3035,7 +3144,6 @@ test("Explorer coalesces private edits at the frozen public revision across reop
       if (calls === 2)
         return {
           notes: [],
-          candidate: false,
           edits: [
             {
               id: existing.id,
@@ -3062,7 +3170,7 @@ test("Explorer coalesces private edits at the frozen public revision across reop
     );
     const id = await current.invoke({
       role: "explorer",
-      input: { task, notes: [existing], guidance: "Repair the argument." },
+      input: { task, notes: [existing], assignment: "Repair the argument." },
     });
     current.harness.resume();
     await closed.promise;
@@ -3073,7 +3181,6 @@ test("Explorer coalesces private edits at the frozen public revision across reop
       result: {
         kind: "notes",
         notes: [],
-        candidate: false,
         edits: [
           {
             id: existing.id,
@@ -3111,7 +3218,6 @@ test("Explorer rejects a private edit that changes the expected public revision"
       if (calls === 1)
         return {
           notes: [],
-          candidate: false,
           edits: [
             { id: "prior", revision: 3, summary: "Retained private summary" },
           ],
@@ -3119,7 +3225,6 @@ test("Explorer rejects a private edit that changes the expected public revision"
       if (calls === 2)
         return {
           notes: [],
-          candidate: false,
           edits: [{ id: "prior", revision: 4, text: "Invalid revision" }],
         };
       expect(
@@ -3127,7 +3232,7 @@ test("Explorer rejects a private edit that changes the expected public revision"
           (message) => message.role === "toolResult" && message.isError,
         ),
       ).toBe(true);
-      return { notes: [], candidate: false };
+      return { notes: [] };
     },
     { research: false, maxExplorerResponses: 4 },
   );
@@ -3138,7 +3243,7 @@ test("Explorer rejects a private edit that changes the expected public revision"
       input: {
         task,
         notes: [{ ...note("prior"), revision: 3 }],
-        guidance: "Repair.",
+        assignment: "Repair.",
       },
     });
     expect(await resultOf(current.harness, id)).toMatchObject({
@@ -3164,7 +3269,7 @@ test("Coordinator can idle with Explorer available", async () => {
       completed: true,
       failed: false,
       error: null,
-      request: { kind: "explorer", guidance: "Investigate" },
+      request: { kind: "explorer", assignment: "Investigate" },
     },
   ];
   const provider = fixture(

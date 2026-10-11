@@ -85,7 +85,7 @@ test.each(["worker", "input"] as const)(
           return {
             work:
               next === "worker"
-                ? { kind: "explorer", guidance: "Prove the claim" }
+                ? { kind: "explorer", assignment: "Prove the claim" }
                 : null,
           };
         },
@@ -116,7 +116,10 @@ test.each(["worker", "input"] as const)(
               kind: "submit",
               id: "seed",
               ...noteResult,
-              candidate: false,
+              notes: noteResult.notes.map((note) => ({
+                ...note,
+                candidate: false,
+              })),
             }),
           context,
         );
@@ -143,7 +146,6 @@ test.each(["worker", "input"] as const)(
               kind: "submit",
               id: "while-waiting",
               notes: [],
-              candidate: false,
               edits: [
                 {
                   id: "input/seed/n1",
@@ -202,7 +204,7 @@ test("closing at private submission and worker publication reuses each committed
       : {
           work: input.notes.length
             ? null
-            : { kind: "explorer", guidance: "prove" },
+            : { kind: "explorer", assignment: "prove" },
         },
   );
   let owner = await open(path, {

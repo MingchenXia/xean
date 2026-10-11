@@ -66,6 +66,7 @@ export const noteDraftSchema = object({
   id: Type.String({ pattern: "^n[1-9][0-9]*$" }),
   ...noteContentSchema.properties,
   support: Type.Array(text),
+  candidate: Type.Optional(Type.Boolean()),
 });
 const revision = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 export const noteEditSchema = object({
@@ -79,16 +80,21 @@ export const noteEditSchema = object({
   ),
   ...Type.Partial(noteContentSchema).properties,
   support: Type.Optional(Type.Array(text)),
-  candidate: Type.Optional(Type.Boolean()),
+  candidate: noteDraftSchema.properties.candidate,
   retired: Type.Optional(Type.Boolean()),
 });
 export type NoteEdit = Static<typeof noteEditSchema>;
 export const explorationSchema = object({
   edits: Type.Optional(Type.Array(noteEditSchema)),
   notes: Type.Array(noteDraftSchema),
-  candidate: Type.Boolean(),
 });
 export type Exploration = Static<typeof explorationSchema>;
+export const literatureResultSchema = object({
+  notes: Type.Array(
+    Type.Omit(noteDraftSchema, ["candidate"], { additionalProperties: false }),
+  ),
+});
+export type LiteratureResult = Static<typeof literatureResultSchema>;
 const correctionSchema = object({
   summary: Type.Union([noteContentSchema.properties.summary, Type.Null()]),
   detailedSummary: Type.Union([
@@ -213,7 +219,7 @@ export type Note = Exploration["notes"][number] & {
 };
 export const explorePlan = object({
   kind: Type.Literal("explorer"),
-  guidance: text,
+  assignment: text,
 });
 export const verificationStages = [
   "correctness",
@@ -230,7 +236,7 @@ export const verifyPlan = object({
 });
 export const literaturePlan = object({
   kind: Type.Literal("literature"),
-  query: text,
+  assignment: text,
 });
 export const codexPlan = object({
   kind: Type.Literal("codex", {
@@ -295,7 +301,7 @@ export type NoteInfo = Pick<
   | "retired"
 > & { passed: VerificationStage[]; feedback: string[] };
 export type ExplorerInput = SolverInput & {
-  guidance: string;
+  assignment: string;
 };
 export type CodexInput = SolverInput & { assignment: string };
 export type VerifierInput = SolverInput & {

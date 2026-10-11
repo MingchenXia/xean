@@ -65,7 +65,6 @@ test.each([
     const result = mergeExploration(
       edits.map((edit) => ({
         notes: [],
-        candidate: false,
         edits: [{ id: "n1", revision: 1, ...edit }],
       })),
     );
@@ -116,6 +115,18 @@ test("caller edits reject the removed correct command", () => {
   ).toThrow("Invalid value");
 });
 
+test("caller and worker submissions reject batch-level candidate flags", () => {
+  const notes = [{ id: "n1", ...content("Claim"), support: [] }];
+  for (const candidate of [false, true]) {
+    expect(() =>
+      readCommand({ kind: "submit", id: "old", notes, candidate }),
+    ).toThrow("Invalid value");
+    expect(() =>
+      validateResult({ kind: "notes", notes, candidate }, []),
+    ).toThrow("Invalid value");
+  }
+});
+
 test("completed uncertain checks stay closed on unchanged inputs", () => {
   const candidate = refresh([note("candidate")])[0]!;
   const report = "The completion criterion is not established.";
@@ -163,7 +174,7 @@ test.each(["correctness", "source", "reconstruction"] as const)(
 
 test("Coordinator plans contain one worker or an intentional wait", () => {
   const plan: Plan = {
-    work: { kind: "explorer", guidance: "Explore the combinatorial route" },
+    work: { kind: "explorer", assignment: "Explore the combinatorial route" },
   };
   expect(validatePlan(plan, [], capabilities)).toEqual(plan);
   expect(() =>
@@ -172,6 +183,13 @@ test("Coordinator plans contain one worker or an intentional wait", () => {
   expect(validatePlan({ work: null }, [], capabilities)).toEqual({
     work: null,
   });
+  for (const work of [
+    { kind: "explorer", guidance: "Explore" },
+    { kind: "literature", query: "Find the theorem" },
+  ])
+    expect(() =>
+      validatePlan({ work }, [], { ...capabilities, literature: true }),
+    ).toThrow("Invalid value");
 });
 
 test("correctness targets still establish sources when they support another target", () => {
@@ -666,11 +684,10 @@ test("stable edits preserve summaries and independent evidence while repairing a
   try {
     const initial = await owner.publish({
       kind: "notes",
-      candidate: true,
       notes: [
         { id: "n1", ...content("Original lemma"), support: [] },
         { id: "n2", ...content("Independent lemma"), support: [] },
-        { id: "n3", ...content("Candidate"), support: ["n1"] },
+        { id: "n3", ...content("Candidate"), support: ["n1"], candidate: true },
       ],
     });
     const ids = [1, 2, 3].map((index) => `${initial}/n${index}`);
@@ -690,7 +707,6 @@ test("stable edits preserve summaries and independent evidence while repairing a
     await owner.publish({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: ids[0]!,
@@ -708,7 +724,6 @@ test("stable edits preserve summaries and independent evidence while repairing a
 
     await owner.publish({
       kind: "notes",
-      candidate: false,
       notes: [],
       edits: [
         {
@@ -743,7 +758,6 @@ test("stable edits preserve summaries and independent evidence while repairing a
 
     await owner.publish({
       kind: "notes",
-      candidate: false,
       notes: [
         { id: "n1", ...content("Missing replacement lemma"), support: [] },
       ],
@@ -767,10 +781,9 @@ test("conflicting and cyclic edit batches publish nothing, while retirement keep
     await owner.command({
       kind: "submit",
       id: "seed",
-      candidate: true,
       notes: [
         { id: "n1", ...content("Lemma"), support: [] },
-        { id: "n2", ...content("Candidate"), support: ["n1"] },
+        { id: "n2", ...content("Candidate"), support: ["n1"], candidate: true },
       ],
     });
     const before = await owner.view();
@@ -786,7 +799,6 @@ test("conflicting and cyclic edit batches publish nothing, while retirement keep
     ]) {
       const failed = await owner.run({
         kind: "notes",
-        candidate: false,
         notes: [{ id: "n1", ...content("Must not leak"), support: [] }],
         edits,
       });
@@ -796,7 +808,6 @@ test("conflicting and cyclic edit batches publish nothing, while retirement keep
     await owner.publish({
       kind: "notes",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: "input/seed/n2",
@@ -844,8 +855,9 @@ test("Pi snapshots survive reopen and stale verification cannot restore current 
     await owner.command({
       kind: "submit",
       id: "seed",
-      candidate: true,
-      notes: [{ id: "n1", ...content("Original"), support: [] }],
+      notes: [
+        { id: "n1", ...content("Original"), support: [], candidate: true },
+      ],
     });
     const frozenAt = await owner.checkpoint();
     const frozen = await owner.snapshot(frozenAt);
@@ -853,7 +865,6 @@ test("Pi snapshots survive reopen and stale verification cannot restore current 
       kind: "submit",
       id: "edit",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: "input/seed/n1",

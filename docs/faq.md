@@ -122,8 +122,8 @@ trying to strengthen the bound. Preserve the original hypotheses and record any
 failed approaches."
 
 The guidance is saved with the campaign and included in Coordinator's context.
-Coordinator chooses the next work and writes guidance for each Explorer
-assignment. This is campaign-level guidance, not a direct message to an Explorer
+Coordinator chooses the next work and writes an assignment for Explorer.
+This is campaign-level guidance, not a direct message to an Explorer
 already running. A running worker finishes its current assignment before the
 next decision uses the new input. Coordinator chooses how to act on the advice.
 
@@ -155,7 +155,6 @@ from `inspect`, then put the fields to change in a JSON file. For example,
 ```json
 {
   "notes": [],
-  "candidate": false,
   "edits": [
     {
       "id": "input/lemmas/n1",
@@ -179,8 +178,28 @@ do not grant caller trust to generated notes. Mathematical edits invalidate
 affected checks.
 Use imports for premises you intend to grant, rather than to validate unchecked
 computational output. Keep the proof, hypotheses, and provenance when reusing
-a result from another campaign. Use `review` for an independent assessment of
-a supplied argument and its supporting proofs.
+a result from another campaign. Set `candidate: true` on a new note or in an
+existing note's edit when it claims a complete solution. Candidate status grants
+no verification evidence.
+
+For an independent assessment, put the task and complete argument, including its
+supporting proofs, into a JSON file such as `review.json`:
+
+```json
+{
+  "task": {
+    "problem": "Prove 1 = 1.",
+    "completionCriteria": "Give a self-contained proof."
+  },
+  "argument": "By reflexivity of equality, 1 = 1."
+}
+```
+
+Use a fresh database and settings with the research backend enabled:
+
+```sh
+bun run xean role review review.json .xean/review/campaign.sqlite settings.json
+```
 
 ## Can Xean reorganize a cluttered notebook?
 
@@ -221,7 +240,7 @@ procedure. An ordinary worker failure can instead lead to another Coordinator
 decision. A paused campaign retains its progress. Inspect the reported failures
 and verification issues before deciding whether to add guidance or resume.
 
-For standalone procedures such as `role` and `review`, `completed` describes
+For standalone procedures run with `role`, `completed` describes
 execution. Read the returned assessment separately: it may be FAIL or
 INCONCLUSIVE.
 

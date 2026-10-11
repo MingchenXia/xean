@@ -1,7 +1,7 @@
 import { temporaryDirectory } from "./directory.ts";
 import { expect, spyOn, test } from "bun:test";
 import { $ } from "bun";
-import { realpath } from "node:fs/promises";
+import { chmod, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   awaitWithContext,
@@ -221,7 +221,10 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
     input = join(directory, "input.json");
   await Bun.write(taskFile, JSON.stringify(task));
   await Bun.write(settingsFile, JSON.stringify(settings));
-  await Bun.write(input, JSON.stringify({ notes: [draft], candidate: true }));
+  await Bun.write(
+    input,
+    JSON.stringify({ notes: [{ ...draft, candidate: true }] }),
+  );
   const prefix = ["--campaign-dir", directory];
   const initialized = await cli(
     ...prefix,
@@ -254,6 +257,7 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
   expect(full.notes[0]).toMatchObject({
     id: "input/import/n1",
     imported: true,
+    candidate: true,
   });
   expect(full.work).toEqual([]);
   expect(full.status.calls.recordedResponses).toBe(0);
@@ -286,6 +290,73 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
   expect(noRecords).not.toHaveProperty("records");
 }, 30_000);
 
+test("CLI role review executes and reopens an independent review without the retired command", async () => {
+  const directory = await temporaryDirectory("xean-cli-review-");
+  const input = join(directory, "input.json");
+  const settingsFile = join(directory, "settings.json");
+  const database = join(directory, "review.sqlite");
+  const executable = join(directory, "codex-fixture");
+  const requests = join(directory, "requests.jsonl");
+  const argument = "1 = 1.\nBy reflexivity.\n";
+  const result = { ...pass, premises: [], passages: [] };
+  const events = [
+    {
+      type: "item.completed",
+      item: { type: "agent_message", text: JSON.stringify(result) },
+    },
+    { type: "turn.completed", usage: { output_tokens: 7 } },
+  ];
+  await Bun.write(
+    executable,
+    `#!${process.execPath}\nimport { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(requests)}, (await Bun.stdin.text()) + "\\n");\nfor (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));\n`,
+  );
+  await chmod(executable, 0o700);
+  await Bun.write(input, JSON.stringify({ task, argument }));
+  await Bun.write(
+    settingsFile,
+    JSON.stringify({
+      profiles: { default: { provider: "openai", model: "unavailable" } },
+      research: { model: "fixture", command: executable },
+    }),
+  );
+  const obsolete = await cli("review", input, input, database, settingsFile);
+  expect(obsolete.code).not.toBe(0);
+  expect(obsolete.stderr).toContain("unknown command 'review'");
+  expect(await Bun.file(database).exists()).toBe(false);
+  expect(await Bun.file(requests).exists()).toBe(false);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const completed = await cli(
+      "role",
+      "review",
+      input,
+      database,
+      settingsFile,
+    );
+    expect(completed.code).toBe(0);
+    expect(completed.stderr).toBe("");
+    expect(JSON.parse(completed.stdout)).toMatchObject({
+      status: "completed",
+      acceptedNoteId: null,
+    });
+    expect(
+      (await Bun.file(requests).text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([{ task, argument }]);
+  }
+  expect(await inspect(database, readDefinition)).toMatchObject({
+    task,
+    mode: { role: "review", input: { argument } },
+  });
+  const report = await inspect(database, readReport);
+  expect(report.kind).toBe("review");
+  expect(report.result).toMatchObject(result);
+  expect(report.status.calls.codexInvocations).toBe(1);
+  expect(report.notes).toEqual([]);
+}, 30_000);
+
 test("sealed acceptance, native note IDs, and latest standalone results reach reports and CLI export", async () => {
   const directory = await temporaryDirectory("xean-apps-");
   const trace: string[] = [];
@@ -302,7 +373,7 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
                 notes: [input.notes[0].id],
                 through: "reconstruction",
               }
-            : { kind: "explorer", guidance: "Prove equality." },
+            : { kind: "explorer", assignment: "Prove equality." },
         };
       },
       explorer: async (_input, runtime, ctx) => {
@@ -320,7 +391,7 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
                 toolCallId: "fixture",
                 toolName: "submit_explorer",
                 content: [],
-                details: { notes: [draft], candidate: true },
+                details: { notes: [{ ...draft, candidate: true }] },
                 isError: false,
                 timestamp: Date.now(),
               },
@@ -367,6 +438,7 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
     ).toEqual(expected);
     expect(report.notes[0]!.text).toBe("");
     expect(full.notes[0]!.text).toBe(draft.text);
+    expect(full.work[0]).toMatchObject({ assignment: "Prove equality." });
     expect(report.status.status).toBe("completed");
     expect(await controlCommand(owner, { kind: "pause" })).toEqual(expected);
     expect(report.status.acceptedNoteId).toMatch(/^\d+\/n1$/);
@@ -699,12 +771,12 @@ test("live owner controls admit revision-checked submissions and reject foreign 
     expect(receipt).toMatchObject({ command: { id: "live" } });
     expect((await inspect(path, readReport)).inputs).toHaveLength(1);
     const file = join(directory, "submission.json");
-    await Bun.write(file, JSON.stringify({ notes: [draft], candidate: false }));
+    await Bun.write(file, JSON.stringify({ notes: [draft] }));
     expect((await cli("submit", path, file, "--id", "seed")).code).toBe(0);
     const original = (await inspect(path, readReport)).notes[0]!;
+    expect(original.candidate).toBe(false);
     const submission = {
       notes: [],
-      candidate: false,
       edits: [
         {
           id: original.id,
@@ -831,12 +903,12 @@ test("round allowance counts workers, excludes empty waits, and resumes only ext
       work:
         calls === 1
           ? null
-          : { kind: "explorer" as const, guidance: "Next worker." },
+          : { kind: "explorer" as const, assignment: "Next worker." },
     };
   };
   const roles = {
     coordinator: limitRounds(role, 1),
-    explorer: async () => ({ kind: "notes", notes: [], candidate: false }),
+    explorer: async () => ({ kind: "notes", notes: [] }),
   };
   const path = join(directory, "campaign.sqlite");
   let owner = await open(path, { create: definition, roles: () => roles });
@@ -885,7 +957,6 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
   const explorer = async () => ({
     kind: "notes",
     notes: [],
-    candidate: false,
   });
   for (const outcome of ["rejected", "paused", "cancelled"] as const) {
     let decisions = 0;
@@ -898,7 +969,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
         return {
           work: {
             kind: "explorer",
-            guidance: outcome === "rejected" ? "" : "Explore.",
+            assignment: outcome === "rejected" ? "" : "Explore.",
           },
         };
       }, 1),
@@ -954,7 +1025,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
     const next: Pick<Roles, "coordinator" | "explorer"> = {
       coordinator: limitRounds(async (_input, runtime) => {
         recovered.push(runtime.taskId);
-        return { work: { kind: "explorer", guidance: "Explore." } };
+        return { work: { kind: "explorer", assignment: "Explore." } };
       }, 1),
       explorer,
     };

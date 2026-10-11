@@ -73,7 +73,6 @@ export function mergeExploration(
     }
   return {
     notes: submissions.flatMap((value) => value.notes),
-    candidate: submissions.at(-1)?.candidate ?? false,
     ...(edits.size ? { edits: [...edits.values()] } : {}),
   };
 }

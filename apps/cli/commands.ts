@@ -170,25 +170,6 @@ program
       });
     },
   );
-program
-  .command("review <task> <argument> <campaign> <settings>")
-  .action(
-    async (
-      task: string,
-      argument: string,
-      campaign: string,
-      settings: string,
-    ) => {
-      await runCampaign(campaign, {
-        task: await read(task),
-        settings: await read(settings),
-        mode: {
-          role: "review",
-          input: { argument: await Bun.file(resolve(argument)).text() },
-        },
-      });
-    },
-  );
 for (const kind of ["submit", "guide"] as const)
   program
     .command(`${kind} <campaign> <file>`)

@@ -103,13 +103,14 @@ Campaign arguments accept explicit paths or names under `--campaign-dir`, which
 defaults to `.xean` relative to the calling directory.
 
 The same CLI provides `pause`, `resume`, `cancel`, `inspect [--records]`, and
-accepted-only Markdown `export`. `submit` takes a JSON file containing `notes`,
-optional `edits`, and `candidate`. Explorer uses the same submission structure.
+accepted-only Markdown `export`. `submit` takes a JSON file containing `notes`
+and optional `edits`. Explorer uses the same submission structure. Set
+`candidate: true` on a note or its edit when it claims a complete solution.
 `guide` takes a text file. Both commands require a stable `--id` for exact retries.
-The [FAQ](docs/faq.md#can-i-supply-my-own-results) includes an edit example.
 Live mutations reach the active owner.
-`role NAME INPUT CAMPAIGN SETTINGS` runs a standalone procedure, and
-`review TASK ARGUMENT CAMPAIGN SETTINGS` records an independent review. Use
+`role NAME INPUT CAMPAIGN SETTINGS` runs a standalone procedure. Use `role review`
+with a JSON input containing `task` and `argument` for independent review. The
+[FAQ](docs/faq.md#can-i-supply-my-own-results) includes edit and review examples. Use
 `--help` for arguments and owner, credential, and usage-attribution options.
 
 [Settings](src/config.ts) use native Pi profiles for OpenAI, `openai-codex`,
@@ -162,6 +163,8 @@ and `close`. Coordinator returns one `work` request, or `work: null` to become i
 Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`, a `roles` callback that
 receives the built-in functions, and a custom `Research` implementation through
 `research`. Register custom tools and tasks through Pi's native `registry` option.
+Coordinator supplies an `assignment` to Explorer, Literature, and Codex. Caller
+guidance remains campaign input for Coordinator.
 Call `open` for separate databases to run several campaigns in one process.
 Pass the same Pi `models` instance to share its provider registry. Each campaign
 keeps its own Harness and sequential workflow. The CLI runs one campaign per invocation.
@@ -289,7 +292,7 @@ bun run xean export .xean/demo/campaign.sqlite
 ```
 
 Use `status` for compact JSON with progress, failures, and verification issues.
-The `init`, `run`, `role`, `review`, `pause`, `resume`, and `cancel` commands also
+The `init`, `run`, `role`, `pause`, `resume`, and `cancel` commands also
 return compact status. These responses skip transcript accounting and full
 work-history details. Use `inspect` for usage, full notes, checks, dependencies,
 and standalone results.

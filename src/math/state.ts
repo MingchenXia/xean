@@ -313,7 +313,7 @@ async function applyNotes(
       revision: marker,
       mathRevision: marker,
       imported,
-      candidate: value.candidate && draft === value.notes.at(-1),
+      candidate: draft.candidate ?? false,
       retired: false,
       checks: {},
     });

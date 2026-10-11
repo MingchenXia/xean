@@ -7,6 +7,14 @@
   expected `revision`, and changed fields. Caller trust rules, revision checks,
   and atomic publication are unchanged. Keep historical campaigns with their
   frozen runtimes.
+- Candidate status is a per-note field for both new notes and edits. The
+  batch-level flag and its last-note convention are removed. Omitting the flag
+  on a new note means `false`. Literature findings cannot designate candidates.
+- Coordinator-issued worker instructions use `assignment` for Explorer,
+  Literature, and Codex, including standalone inputs and worker reports.
+  Caller campaign guidance remains unchanged.
+- The dedicated `review` command is removed. Use `role review` with a JSON
+  input containing `task` and `argument`.
 
 ## 3.1.0 — 2026-10-10
 

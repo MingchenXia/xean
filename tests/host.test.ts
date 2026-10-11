@@ -320,7 +320,7 @@ test("usage overrides preserve frozen settings and completed custom-provider wor
       request = options;
       return fauxAssistantMessage(
         fauxToolCall("submit_coordinator", {
-          work: { kind: "explorer", guidance: "Prove the task." },
+          work: { kind: "explorer", assignment: "Prove the task." },
         }),
         { stopReason: "toolUse" },
       );
@@ -453,10 +453,9 @@ test("custom role extensions compose with built-in mathematical conversations", 
     auth: { apiKey: envApiKeyAuth("Fixture", []) },
   });
   faux.setResponses([
-    fauxAssistantMessage(
-      fauxToolCall("submit_explorer", { notes: [], candidate: false }),
-      { stopReason: "toolUse" },
-    ),
+    fauxAssistantMessage(fauxToolCall("submit_explorer", { notes: [] }), {
+      stopReason: "toolUse",
+    }),
     (_input, options) => {
       expect(options?.apiKey).toBe("stored-fixture");
       return fauxAssistantMessage("Native conversation authenticated.");
@@ -495,7 +494,7 @@ test("custom role extensions compose with built-in mathematical conversations", 
       ...definition,
       mode: {
         role: "explorer",
-        input: { notes: [], guidance: "Use the custom task." },
+        input: { notes: [], assignment: "Use the custom task." },
       },
       settings: {
         profiles: { default: { provider: "custom", model: "fixture" } },
@@ -632,7 +631,7 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
     explorerUsed: boolean;
     capabilities: { explorer: boolean; codex: boolean };
   }[] = [];
-  const empty = () => ({ kind: "notes" as const, notes: [], candidate: false });
+  const empty = () => ({ kind: "notes" as const, notes: [] });
   const owner = await open(path, {
     create: {
       ...definition,
@@ -655,7 +654,7 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
         return {
           work:
             decisions === 1
-              ? { kind: "explorer", guidance: "first" }
+              ? { kind: "explorer", assignment: "first" }
               : decisions === 2
                 ? {
                     kind: "codex",

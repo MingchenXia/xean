@@ -46,7 +46,7 @@ const task = {
 const settings = {
   profiles: { default: { provider: "openai" as const, model: "gpt-6-astra" } },
 };
-const empty = () => ({ kind: "notes" as const, notes: [], candidate: false });
+const empty = () => ({ kind: "notes" as const, notes: [] });
 const draft = (id = "n1") => ({
   id,
   summary: "Reflexivity",
@@ -194,10 +194,10 @@ test.each(["empty", "independent", "retired-support"] as const)(
       capabilities: () => ({ explorer: true, literature: true, codex: false }),
       coordinator: async ({ notes }) => ({
         work: !notes.find((note: Note) => note.id === retiredId)?.retired
-          ? { kind: "explorer", guidance: "Retire the old supporting note." }
+          ? { kind: "explorer", assignment: "Retire the old supporting note." }
           : searched
             ? null
-            : { kind: "literature", query: "Find independent evidence." },
+            : { kind: "literature", assignment: "Find independent evidence." },
       }),
       explorer: async ({ notes }) => ({
         ...empty(),
@@ -218,7 +218,6 @@ test.each(["empty", "independent", "retired-support"] as const)(
           owner.research.input(tx, owner.root.id, {
             kind: "submit",
             id: "seed",
-            candidate: false,
             notes: [draft("n1"), { ...draft("n2"), support: ["n1"] }],
           }),
         context,
@@ -277,7 +276,6 @@ test("input admission reads only edited bodies and keeps command IDs in native e
       kind: "submit",
       id: "seed",
       notes: [draft("n1"), draft("n2")],
-      candidate: false,
     });
     const note = (await owner.view()).notes[0]!;
     const guide = { kind: "guide", id: "hint", text: "Check the proof." };
@@ -293,7 +291,6 @@ test("input admission reads only edited bodies and keeps command IDs in native e
       kind: "submit",
       id: "same",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: note.id,
@@ -348,7 +345,7 @@ test.each(["completed", "stale"])(
       coordinator: async () => ({
         work: invoked
           ? null
-          : { kind: "explorer", guidance: "Improve the proof." },
+          : { kind: "explorer", assignment: "Improve the proof." },
       }),
       explorer: async ({ notes }, runtime, invocation) => {
         invoked = true;
@@ -361,7 +358,6 @@ test.each(["completed", "stale"])(
           for (const details of [
             {
               notes: [],
-              candidate: false,
               edits: [
                 {
                   id: note.id,
@@ -372,7 +368,6 @@ test.each(["completed", "stale"])(
             },
             {
               notes: [draft()],
-              candidate: false,
               edits: [
                 {
                   id: note.id,
@@ -415,7 +410,6 @@ test.each(["completed", "stale"])(
             kind: "submit",
             id: "seed",
             notes: [draft()],
-            candidate: false,
           }),
         context,
       );
@@ -432,7 +426,6 @@ test.each(["completed", "stale"])(
               kind: "submit",
               id: "concurrent",
               notes: [],
-              candidate: false,
               edits: [
                 {
                   id: note.id,
@@ -486,7 +479,6 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
       kind: "submit",
       id: "seed",
       notes: [draft()],
-      candidate: false,
       edits: undefined,
     };
     try {
@@ -507,16 +499,15 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
       await expect(
         input({ ...seed, id: "invalid", edits: null }),
       ).rejects.toThrow("Invalid value");
-      await expect(input({ ...seed, candidate: true })).rejects.toThrow(
-        "Input ID already has another value",
-      );
+      await expect(
+        input({ ...seed, notes: [{ ...draft(), candidate: true }] }),
+      ).rejects.toThrow("Input ID already has another value");
       const note = before.notes[0]!;
       await expect(
         input({
           kind: "submit",
           id: "late",
           notes: [],
-          candidate: false,
           edits: [
             {
               id: note.id,
@@ -552,7 +543,7 @@ test("standalone resume serializes and reuses completed work", async () => {
     await root.commit(async (tx) => {
       (await tx.doc(DefinitionDoc, root.id)).mode = {
         role: "explorer",
-        input: { notes: [], guidance: "Prove the claim" },
+        input: { notes: [], assignment: "Prove the claim" },
       };
       return research.initialize(tx, root.id);
     }, context);
@@ -586,7 +577,7 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
       return {
         work: input.notes.length
           ? null
-          : { kind: "explorer", guidance: "Complete the claim" },
+          : { kind: "explorer", assignment: "Complete the claim" },
       };
     },
     explorer: async () => {
@@ -595,7 +586,7 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
       started.resolve();
       await release.promise;
       working = false;
-      return { kind: "notes", notes: [draft()], candidate: false };
+      return { kind: "notes", notes: [draft()] };
     },
   });
   try {
@@ -642,7 +633,7 @@ test("inputs during a decision share one fresh successor and discard its stale p
       if (decisions.length === 1) {
         started.resolve();
         await release.promise;
-        return { work: { kind: "explorer", guidance: "This plan is stale" } };
+        return { work: { kind: "explorer", assignment: "This plan is stale" } };
       }
       return { work: null };
     },
@@ -756,7 +747,7 @@ test("Coordinator waits for a completing worker until its child drains", async (
     await root.commit(async (tx) => {
       (await tx.doc(DefinitionDoc, root.id)).mode = {
         role: "explorer",
-        input: { notes: [], guidance: "Prove the claim" },
+        input: { notes: [], assignment: "Prove the claim" },
       };
       await research.initialize(tx, root.id);
     }, context);
@@ -797,14 +788,14 @@ test("a worker fault wakes Coordinator after reopening without repeating the fai
       return {
         work: {
           kind: "explorer",
-          guidance: input.failures.length ? "revised approach" : "prove",
+          assignment: input.failures.length ? "revised approach" : "prove",
         },
       };
     },
     explorer: async (input) => {
       if (++attempt === 1) throw new Error("fixture failure");
-      expect(input.guidance).toBe("revised approach");
-      return { kind: "notes", notes: [draft()], candidate: true };
+      expect(input.assignment).toBe("revised approach");
+      return { kind: "notes", notes: [{ ...draft(), candidate: true }] };
     },
   };
   let owner = await setup(
@@ -883,7 +874,7 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
           });
         if (mode === "invalid kind")
           Object.assign(failure, {
-            result: { kind: "notes", notes: [draft()], candidate: false },
+            result: { kind: "notes", notes: [draft()] },
           });
         started.resolve();
         await release.promise;
@@ -897,7 +888,6 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
             kind: "submit",
             id: "import",
             notes: [draft()],
-            candidate: false,
           }),
         context,
       );
@@ -996,7 +986,6 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
       kind: "submit",
       id: "import",
       notes: [draft()],
-      candidate: false,
     };
     const admitted = await root.commit(
       (tx) => research.input(tx, root.id, command),
@@ -1010,7 +999,11 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
     ).toBe(admitted);
     await expect(
       root.commit(
-        (tx) => research.input(tx, root.id, { ...command, candidate: true }),
+        (tx) =>
+          research.input(tx, root.id, {
+            ...command,
+            notes: [{ ...draft(), candidate: true }],
+          }),
         context,
       ),
     ).rejects.toThrow("another value");
@@ -1031,7 +1024,6 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
       kind: "submit",
       id: "fix",
       notes: [],
-      candidate: false,
       edits: [
         {
           id: "input/import/n1",
@@ -1107,7 +1099,7 @@ test("an edit after Coordinator freezes a checked candidate prevents stale accep
   const owner = await setup({
     coordinator: async (input) => ({
       work: !input.notes.length
-        ? { kind: "explorer", guidance: "Prove the exact equality." }
+        ? { kind: "explorer", assignment: "Prove the exact equality." }
         : input.notes[0].summary.includes("unresolved extension")
           ? null
           : {
@@ -1118,8 +1110,7 @@ test("an edit after Coordinator freezes a checked candidate prevents stale accep
     }),
     explorer: async () => ({
       kind: "notes",
-      notes: [draft()],
-      candidate: true,
+      notes: [{ ...draft(), candidate: true }],
     }),
     verifier: async (input) => {
       const note = input.notes[0];
@@ -1169,7 +1160,6 @@ test("an edit after Coordinator freezes a checked candidate prevents stale accep
                 kind: "submit",
                 id: "edit-before-acceptance",
                 notes: [],
-                candidate: false,
                 edits: [
                   {
                     id: target!.id,
@@ -1302,8 +1292,8 @@ test("multiple-worker plans are rejected before any worker is created", async ()
   const { research, harness, root } = await setup({
     coordinator: async () => ({
       work: [
-        { kind: "explorer", guidance: "first" },
-        { kind: "explorer", guidance: "second" },
+        { kind: "explorer", assignment: "first" },
+        { kind: "explorer", assignment: "second" },
       ],
     }),
     explorer: async () => {
@@ -1404,7 +1394,7 @@ test("pause retains worker failures and input for the next Coordinator on resume
     coordinator: async (input) => {
       decisions++;
       if (decisions === 1)
-        return { work: { kind: "explorer", guidance: "prove" } };
+        return { work: { kind: "explorer", assignment: "prove" } };
       expect(input.guidance.at(-1)).toBe("held");
       expect(input.failures[0].error).toContain("failure while paused");
       return { work: null };
@@ -1415,7 +1405,7 @@ test("pause retains worker failures and input for the next Coordinator on resume
         await releaseWorker.promise;
         throw new Error("failure while paused");
       }
-      return { kind: "notes", notes: [draft()], candidate: false };
+      return { kind: "notes", notes: [draft()] };
     },
   });
   try {

@@ -22,7 +22,9 @@ async function run(scenario: "retry" | "repair" | "idle") {
             !candidate.support.length &&
             Object.keys(candidate.checks).length)
         )
-          return { work: { kind: "explorer", guidance: "Repair the proof." } };
+          return {
+            work: { kind: "explorer", assignment: "Repair the proof." },
+          };
         return {
           work: {
             kind: "verifier",
@@ -37,8 +39,10 @@ async function run(scenario: "retry" | "repair" | "idle") {
         return candidate
           ? {
               kind: "notes",
-              candidate: false,
-              notes: noteResult.notes,
+              notes: noteResult.notes.map((note) => ({
+                ...note,
+                candidate: false,
+              })),
               edits: [
                 {
                   id: candidate.id,
@@ -50,11 +54,11 @@ async function run(scenario: "retry" | "repair" | "idle") {
             }
           : {
               kind: "notes",
-              candidate: true,
               notes: [
                 {
                   ...noteResult.notes[0]!,
                   text: "Claim: 1 = 1. Proof missing.",
+                  candidate: true,
                 },
               ],
             };

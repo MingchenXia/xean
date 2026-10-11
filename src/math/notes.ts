@@ -57,10 +57,6 @@ export function validateExploration(
   value: Exploration,
   known: readonly Note[],
 ): void {
-  if (value.candidate && value.notes.length === 0)
-    throw new Error(
-      "Batch candidate=true needs a new note; mark an existing candidate in its edit",
-    );
   const edited = known.map((note) => ({ ...note }));
   const ids = new Set<string>();
   for (const edit of value.edits ?? []) {

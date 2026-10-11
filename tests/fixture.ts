@@ -44,9 +44,9 @@ export const noteResult = {
       detailedSummary: "Equality is reflexive.",
       text: "1 = 1\n\nBy reflexivity, 1 = 1.",
       support: [],
+      candidate: true,
     },
   ],
-  candidate: true,
 };
 
 export function fixture(

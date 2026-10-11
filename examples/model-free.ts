@@ -25,14 +25,14 @@ const owner = await open(path, {
             notes: [input.notes[0].id],
             through: "reconstruction",
           }
-        : { kind: "explorer", guidance: "Use reflexivity." },
+        : { kind: "explorer", assignment: "Use reflexivity." },
     }),
     explorer: async () => ({
       kind: "notes",
-      candidate: true,
       notes: [
         {
           id: "n1",
+          candidate: true,
           summary: "Equality is reflexive.",
           detailedSummary: "Reflexivity proves the equality.",
           text: "1 = 1.\n\nBy reflexivity, 1 = 1.",

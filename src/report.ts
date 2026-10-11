@@ -189,15 +189,10 @@ async function readOverview(
             : "active",
       retryOf: input.retryOf === undefined ? null : String(input.retryOf),
       error: errorOf(task),
-      guidance: !details
-        ? null
-        : request?.kind === "explorer"
-          ? request.guidance
-          : request?.kind === "literature"
-            ? request.query
-            : request?.kind === "codex"
-              ? request.assignment
-              : null,
+      assignment:
+        details && request && "assignment" in request
+          ? request.assignment
+          : null,
       noteIds: !request
         ? []
         : result?.kind === "verification"

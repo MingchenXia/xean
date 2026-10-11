@@ -248,11 +248,9 @@ export function conversations(profiles: Profiles) {
                 ]),
                 available,
               );
-              if (draft.candidate && draft.notes.length === 0)
-                throw new Error("A solution claim needs a new note");
               return {
                 done:
-                  draft.candidate ||
+                  draft.notes.some((note) => note.candidate) ||
                   draft.edits?.some((edit) => edit.candidate) ||
                   (draft.notes.length === 0 && !draft.edits?.length) ||
                   history.responses >= call.maxResponses!,
