@@ -11,6 +11,40 @@ representation, and implementation unless a concrete requirement justifies a
 difference. Use Pi's native tasks, conversations, entries, documents, outcomes,
 and commits before adding application machinery.
 
+## Reference scenario: improve a mathematical bound
+
+[Towards Solving the Gilbert-Pollak Conjecture via Large Language Models](https://arxiv.org/html/2601.22365v3)
+illustrates the research workflow Xean should eventually support. The authors
+report improving the Steiner-ratio lower bound from 0.824 to 0.8559, toward the
+conjectured $\sqrt{3}/2$. A mathematical reduction makes candidate bounds
+computationally checkable. The computation identifies regions it cannot yet
+certify, and the LLM proposes geometric lemmas targeting those regions. Validated
+lemmas strengthen the next attempt.
+
+The authors supply the mathematical framework and manually check each generated
+lemma. The final bound rests on proved lemmas and a covering certificate. Their
+[code](https://github.com/keyisi2006/Steiner-Ratio) separates discovery from
+certificate checking. This is a human-supervised example of the eventual
+workflow. An uncertified region is an unresolved obligation, not a counterexample.
+
+For Xean, the scenario spans these stages:
+
+- **M4:** delegate computations, use returned evidence and unresolved obligations
+  to choose further mathematical work, and continue after checked improvements.
+  Long computations can run externally while other useful research proceeds.
+- **M5:** organize the resulting claims, proofs, certificates, and useful failed
+  approaches so they support further research and a coherent paper.
+- **Further research capability, unscheduled:** develop and revise the
+  mathematical reduction, lemma families, and computational checking method
+  that the authors supplied in this example.
+
+An eventual demonstration should start from a bound-improvement problem,
+develop a method, obtain an independently checked improvement, explain the
+remaining obstacles, and produce a readable mathematical account. Problem-specific
+mathematics and programs belong in campaign materials and external artifacts.
+Xean supplies general execution, evidence, and knowledge facilities through Pi.
+M4's release qualification remains the small known case in M4-05.
+
 ## M4 / 4.0: Continued research and external computation
 
 Xean preserves partial notes, checks their mathematical claims,
@@ -107,6 +141,8 @@ checkable answers. The scenario requests an external computation, continues
 useful reasoning while it runs, recovers after interruption, and turns the
 returned evidence into a checked improvement. It also exercises an input
 revision, duplicate delivery, cancellation, and a false or unsupported claim.
+An unresolved computational obligation guides a further lemma or a revised
+approach. Exhausting a computation budget leaves that obligation unresolved.
 
 **Done when:** the resulting records demonstrate correct recovery, sequential
 publication, evidence invalidation, claim checking, and stopping semantics.
