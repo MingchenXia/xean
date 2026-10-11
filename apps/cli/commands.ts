@@ -133,10 +133,7 @@ program
 program.command("run <campaign>").action(async (campaign: string) => {
   await runCampaign(campaign);
 });
-program.command("resume <campaign>").action(async (campaign: string) => {
-  await send(campaign, { kind: "resume" });
-});
-for (const kind of ["pause", "cancel"] as const)
+for (const kind of ["resume", "pause", "cancel"] as const)
   program.command(`${kind} <campaign>`).action(async (campaign: string) => {
     await send(campaign, { kind });
   });

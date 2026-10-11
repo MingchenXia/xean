@@ -2072,15 +2072,23 @@ async function fakeCodex(directory: string, candidate = false) {
   await writeFile(
     executable,
     `#!${process.execPath}
+import assert from "node:assert/strict";
 const input = await Bun.stdin.json();
 const worker = process.argv.includes('web_search="disabled"');
 if (!worker && !process.argv.includes('web_search="live"')) throw new Error("Research disabled web search");
 if (worker && !input.assignment) throw new Error("Worker has no assignment");
+function strict(schema) {
+  if (!schema || typeof schema !== "object") return;
+  if (schema.type === "object") { assert.deepEqual([...schema.required].sort(), Object.keys(schema.properties).sort()); assert.equal(schema.additionalProperties, false); }
+  Object.values(schema).forEach(strict);
+}
+if (worker) strict(await Bun.file(process.argv[process.argv.indexOf("--output-schema") + 1]).json());
 if (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Partial opaque work"}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }
 let value;
 if (input.assignment) value = {notes:[{id:"n1",summary:"Finding",detailedSummary:"Exact finding",text:"Finding. Evidence.",support:[],...(${candidate}?{candidate:true}:{})}]};
 else if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};
 else value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};
+if (worker) { value.edits = null; for (const note of value.notes) note.candidate ??= null; }
 if (!worker) console.log(JSON.stringify({type:"item.completed",item:{type:"web_search"}}));
 console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:JSON.stringify(value)}}));
 console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:17,output_tokens:5,cached_input_tokens:0}}));
@@ -2867,6 +2875,7 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
     expect(worker.result).toMatchObject({
       notes: [{ text: expect.stringContaining(`Artifacts: ${workspace}`) }],
     });
+    expect(worker.result).not.toHaveProperty("edits");
     expect(await readFile(join(workspace, "input.json"), "utf8")).toContain(
       "finite construction",
     );

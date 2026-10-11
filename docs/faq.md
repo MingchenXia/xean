@@ -36,12 +36,12 @@ absolute workspace path. Coordinator decides when to use the worker. Selecting
 The separate `research` setting controls source retrieval and independent review.
 Setting `research: false` does not disable a configured `codex` worker. For a
 closed-book run, the [bounded runner](../scripts/bounded-solve.ts) provides
-`--offline` and rejects coding and ChatGPT Web settings.
+`--offline` and rejects enabled literature, Codex implementation, and ChatGPT Web.
 
 ## Can I ask for a better bound or a generalization?
 
-Yes. A task has free-form `problem` and `completionCriteria` fields. The endpoint
-can leave the result for Explorer to discover:
+Yes. A task has free-form `problem` and `completionCriteria` fields. The task can
+ask Explorer to discover an improvement or generalization:
 
 - To improve a lower bound, state the domain, hypotheses, and current bound
   `c0`, then require a proof of an explicit bound `c > c0` under those same
@@ -172,15 +172,15 @@ bun run xean submit .xean/demo/campaign.sqlite edit.json --id clarify-lemma
 ```
 
 Each edit preserves the note's ID and rejects a stale revision. A submission
-publishes its new notes and edits atomically. New caller notes carry trust for
-correctness and sources. Caller edits preserve an existing import grant and
-do not grant caller trust to generated notes. Mathematical edits invalidate
-affected checks.
-Use imports for premises you intend to grant, rather than to validate unchecked
-computational output. Keep the proof, hypotheses, and provenance when reusing
-a result from another campaign. Set `candidate: true` on a new note or in an
-existing note's edit when it claims a complete solution. Candidate status grants
-no verification evidence.
+publishes its new notes and edits atomically. New caller notes are imports: the
+caller grants their mathematical result and sources. Before an import serves as
+verified support, its correctness check must record a faithful exact statement
+with PASS, and its declared dependencies must be verified. Caller edits preserve
+an existing import grant but do not grant one to generated notes. Mathematical
+edits invalidate affected checks. Submit only results you intend to grant. Keep
+the proof, hypotheses, and provenance when reusing a result from another campaign.
+Set `candidate: true` on a new note or in an existing note's edit when it claims
+a complete solution. Candidate status grants no verification evidence.
 
 For an independent assessment, put the task and complete argument, including its
 supporting proofs, into a JSON file such as `review.json`:
@@ -199,7 +199,11 @@ Use a fresh database and settings with the research backend enabled:
 
 ```sh
 bun run xean role review review.json .xean/review/campaign.sqlite settings.json
+bun run xean inspect .xean/review/campaign.sqlite
 ```
+
+`role review` returns compact execution status. Read `result.verdict` and
+`result.report` in the `inspect` output for the independent assessment.
 
 ## Can Xean reorganize a cluttered notebook?
 
@@ -240,9 +244,9 @@ procedure. An ordinary worker failure can instead lead to another Coordinator
 decision. A paused campaign retains its progress. Inspect the reported failures
 and verification issues before deciding whether to add guidance or resume.
 
-For standalone procedures run with `role`, `completed` describes
-execution. Read the returned assessment separately: it may be FAIL or
-INCONCLUSIVE.
+For standalone procedures run with `role`, `completed` describes execution.
+Use `inspect` to read the standalone `result`. An assessment may be FAIL or
+INCONCLUSIVE even when execution completed.
 
 The [bounded runner](../scripts/bounded-solve.ts) can stop after a chosen number
 of worker admissions. Reaching that allowance does not establish impossibility

@@ -24,7 +24,7 @@ import { inspect, open } from "../src/host.ts";
 import { readDefinition, type Definition } from "../src/definition.ts";
 import { Control, type Roles } from "../src/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
-import { Bodies } from "../src/math/state.ts";
+import { Bodies, Catalog } from "../src/math/state.ts";
 import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
@@ -261,7 +261,13 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
   });
   expect(full.work).toEqual([]);
   expect(full.status.calls.recordedResponses).toBe(0);
-  const compact = JSON.parse((await cli(...prefix, "status", "named")).stdout);
+  // Status must not need a temporary snapshot directory.
+  const compact = JSON.parse(
+    await $`${process.execPath} --no-install --no-env-file ${join(root, "apps/cli/index.ts")} ${prefix} status named < /dev/null`
+      .env({ ...process.env, TMPDIR: taskFile, PI_CODING_AGENT_DIR: directory })
+      .quiet()
+      .text(),
+  );
   const { observedAt: _observedAt, ...status } = compact;
   const { calls: _calls, usageNote: _usageNote, ...expected } = full.status;
   expect(status).toEqual(expected);
@@ -519,6 +525,11 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
     }),
   });
   try {
+    expect(
+      await standalone.harness.snapshot(Catalog, standalone.root.id, context),
+    ).toEqual({ notes: [], inputs: [] });
+    expect((await inspect(standalonePath, readStatus)).status).toBe("running");
+    expect(attempts).toBe(0);
     await standalone.root.waitForIdle(context);
     expect((await reportOf(standalone)).status.status).toBe("blocked");
     expect(

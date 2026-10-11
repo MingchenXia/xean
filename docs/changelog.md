@@ -1,20 +1,60 @@
 # Changelog
 
-## Unreleased
+## 3.2.0 — 2026-10-11
 
+Xean unifies note submissions and worker assignments, inspects campaign databases
+in place, and moves to a newer Pi snapshot.
+
+### Compatibility and interfaces
+
+- Start fresh campaigns. Pi document versioning rejects 3.0.0 and 3.1.0
+  databases. Keep existing campaigns with their frozen runtimes. This release
+  includes no database migration.
 - Caller `submit` and Explorer use the same `notes` and `edits` schema. The
-  redundant `correct` command is removed. Submit an edit with the note's `id`,
-  expected `revision`, and changed fields. Caller trust rules, revision checks,
-  and atomic publication are unchanged. Keep historical campaigns with their
-  frozen runtimes.
-- Candidate status is a per-note field for both new notes and edits. The
-  batch-level flag and its last-note convention are removed. Omitting the flag
-  on a new note means `false`. Literature findings cannot designate candidates.
-- Coordinator-issued worker instructions use `assignment` for Explorer,
-  Literature, and Codex, including standalone inputs and worker reports.
+  `correct` command is removed. Submit an edit with the note's `id`, expected
+  `revision`, and changed fields. Caller import grants, revision checks, and
+  atomic publication retain their existing rules.
+- Candidate status is a per-note field for new notes and edits. The batch-level
+  flag and its last-note convention are removed. Omitting the flag on a new
+  note means `false`. Literature findings cannot designate candidates.
+- Explorer's `guidance` and Literature's `query` become `assignment` in
+  Coordinator work plans and standalone inputs. Codex keeps `assignment`.
+  In `inspect` output, `work[].guidance` becomes `work[].assignment`.
   Caller campaign guidance remains unchanged.
-- The dedicated `review` command is removed. Use `role review` with a JSON
-  input containing `task` and `argument`.
+- The dedicated `review` command is removed. Use `role review` with a JSON input
+  containing `task` and `argument`, then `inspect` to read the assessment.
+
+### Inspection and Pi
+
+- `status`, `inspect`, and `export` read the database through a read-only Pi
+  Session, holding a consistent SQLite read transaction without recovering work
+  or calling models. Pi rejects writes from inspection callbacks, which 3.1.0
+  applied to a disposable copy.
+- Initialization creates the notebook catalog in the same commit as campaign
+  control.
+- Bundled Pi moves to source commit `ea448f454af474f3e2fe9733b331e17b0662f5d6`,
+  an unreleased snapshot after 1.1.0. Its scheduler retains ownership metadata
+  only while live work needs it and reloads it from storage when needed.
+  Existing patches remain, including the separate document tracker cache bound.
+- A new Pi Durable patch supplies read-only SQLite storage. It reuses the caller's
+  read transaction, checks the schema version without migrating, rejects writes
+  and ID allocation, and skips Pi's explicit closing WAL checkpoint.
+  [Pi integration](parity.md#pi-integration) records its removal condition.
+
+### Research
+
+- Fix Codex implementation calls rejected with `invalid_json_schema` when output
+  fields are optional. Xean now uses Pi's strict-schema conversion and result
+  validation.
+- Coordinator instructions explain how to repair a checked statement that
+  misstates the intended claim: request a mathematical Explorer edit of the
+  authoritative note text, then a new correctness check. Correctness checks
+  record checked statements.
+- The optional native Codex profile in `examples/xean-research.config.toml` sets
+  `features.plugins = false` for source checking, literature, and independent
+  review while preserving native web search. Implementation workers select their
+  profile separately. The [setup instructions](../README.md#run-a-campaign)
+  describe how to select the profile.
 
 ## 3.1.0 — 2026-10-10
 

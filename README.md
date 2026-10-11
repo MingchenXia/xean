@@ -6,9 +6,10 @@ further work. Each campaign runs Coordinator, one worker, then Coordinator again
 A worker may parallelize its own internal work. Pi owns tasks, conversations,
 checkpoints, cancellation, and storage.
 
-Use fresh campaigns with this release. Keep existing campaigns with their frozen
-runtimes. Pi document versioning rejects 3.0.0 databases. The qualification results
-below identify the revisions and provider configurations tested.
+Use fresh campaigns with this release. Pi document versioning rejects 3.0.0 and
+3.1.0 databases. Keep existing campaigns with their frozen runtimes. This release
+includes no database migration. The qualification results below identify the
+revisions and provider configurations tested.
 
 The implementation includes staged verification, blind reconstruction, imported
 notes, stable-ID edits, optional literature and Codex implementation work,
@@ -140,6 +141,14 @@ alone leaves source checking and review enabled. External premises remain
 INCONCLUSIVE when research is disabled. `settings.codex` separately enables
 implementation work in a retained workspace.
 
+To run research without Codex plugins, copy
+[xean-research.config.toml](examples/xean-research.config.toml) into `CODEX_HOME`
+(normally `~/.codex`) and set `research.profile` to `"xean-research"` alongside
+the chosen model. This native Codex profile disables plugins for source checking,
+literature, and independent review while preserving native web search.
+Implementation workers use `codex.profile` separately. Set `research.profile` to
+a plugin-enabled profile when research needs installed plugin tools.
+
 For a one-response ChatGPT Web Explorer, set
 `chatgpt: {"baseUrl":"http://127.0.0.1:17841/v1","model":"chatgpt-web/gpt-6-pro"}`
 in settings. Xean calls the external
@@ -152,7 +161,7 @@ could not confirm the requested model and left the prompt unsent. Repair the
 bridge before starting a fresh campaign. This Explorer receives the note index
 and has no note reader or further browser attempt. It can create new notes.
 Coordinator can select it only once per campaign. Edits to existing notes require
-the native Pi Explorer or caller `submit.edits`.
+the native Pi Explorer or an `edits` entry in a caller `submit` file.
 
 ## Library
 
@@ -252,8 +261,9 @@ The host uses Pi's native SQLite adapter with FULL synchronization and excludes
 a second owner. A rewindable Pi catalog and per-note body Documents hold the
 current notebook. Native submissions and outcomes retain execution receipts.
 Workers read the notebook at their frozen Entry cutoff.
-`inspect` reads a consistent backup without recovering live work. Acceptance
-atomically checks the current dependency closure and pins its snapshot for export.
+`inspect` uses a read-only Pi Session and holds a SQLite read transaction.
+Pi rejects writes from inspection callbacks. Acceptance atomically checks the
+current dependency closure and pins its snapshot for export.
 Closing suspends unfinished execution. Reopening reuses Pi's committed private
 progress. A request interrupted before its answer commits may repeat, except
 that an ambiguously sent ChatGPT Web request is rejected on recovery.
@@ -298,9 +308,14 @@ work-history details. Use `inspect` for usage, full notes, checks, dependencies,
 and standalone results.
 Request `--records` only when native tasks and transcripts are needed. `export`
 returns the accepted argument and its dependency chain from the pinned snapshot
-as Markdown. These reads
-use consistent snapshots without recovering work or calling models. Inspect
-historical campaigns with their matching frozen runtime.
+as Markdown. `status`, `inspect`, and `export` read the campaign database directly
+through a read-only Pi Session. Each call holds a consistent SQLite read
+transaction without recovering work or calling models. Inspect historical
+campaigns with their matching frozen runtime.
+
+Retain the campaign database as the transcript record. For routine monitoring,
+keep only the latest compact status. Run `inspect --records` on demand for
+diagnostics instead of retaining repeated transcript copies.
 
 Usage reports count committed assistant responses and recorded Codex invocations.
 They cannot establish every outbound request or provider retry. Direct ChatGPT
@@ -353,7 +368,18 @@ Run the full check and distribution checks when the change is ready for review.
 including the Pi and role contract tests, model-free workflow, CLI inspection
 and export, and licenses.
 `pack` runs the same distribution check and writes the source archive under
-`dist/`. The 3.1 qualification passed 203 scripted tests on fresh production
+`dist/`.
+
+The 3.2.0 qualification passed 213 scripted tests and 2,044 assertions on each
+tested platform: macOS ARM64 with Bun 1.4.3, and Linux ARM64 and x86-64 with
+Bun 1.4.2. Source-distribution checks also passed 66 Pi and role tests.
+A live Codex CLI implementation screen with `gpt-5.6-luna` at `low` reasoning
+passed strict-schema handling and independent execution of the generated artifact.
+The completed role reopened without credentials or new calls. This live check
+covered one standalone implementation role. Full-campaign qualifications below
+retain their original revisions.
+
+The 3.1.0 qualification passed 203 scripted tests on fresh production
 installs on macOS ARM64, Linux ARM64, and Linux x86-64 with Bun 1.4.2 and no
 provider credentials. The x86-64 suite used tmpfs. On Btrfs, 26 tests exceeded
 the default five-second timeout. With longer allowances, all cases passed
@@ -361,7 +387,7 @@ across a full run and an isolated rerun.
 Sixteen additional SQLite cases passed crash recovery, writer exclusion,
 dependency invalidation, and unchanged-INCONCLUSIVE checks.
 
-The 3.1 native-provider smoke passed note reading, an elementary campaign,
+The 3.1.0 native-provider smoke passed note reading, an elementary campaign,
 and credential-free reopening with a saved Pi OpenAI Codex login and
 `openai-codex/gpt-5.6-luna` at `max` reasoning. At the release qualification
 snapshot, two of six fresh `gpt-6-astra`/`max` golden campaigns through
@@ -410,11 +436,12 @@ Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the sou
 package.
 
 Pi packages are built together from upstream commit
-`eba849739511223c51a62bbd7e3f1c00f99fb1d0` using Pi's `pack:packages` command.
+`ea448f454af474f3e2fe9733b331e17b0662f5d6` using Pi's `pack:packages` command.
 This is an unreleased snapshot after the 1.1.0 release. The packages include frozen
 model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
-[Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
-the Pi Durable request hook used to select a profile's stream.
+[Pi integration](docs/parity.md#pi-integration) records each retained patch,
+including the adapter fixes, the request hook used to select a profile's stream,
+and read-only SQLite inspection.
 This is an [MIT-licensed](LICENSE) source package. Bun and provider access suffice
 for the core workflow. Fleet, Nix, and private Xean Lab are not required for installation.

@@ -119,3 +119,142 @@ index c388076..396adfa 100644
      #enqueue(job) {
          const run = this.#tail.then(job);
          this.#tail = run.then(() => undefined, () => undefined);
+diff --git a/dist/storage/sqlite/node.js b/dist/storage/sqlite/node.js
+index 7770888..e9d9f31 100644
+--- a/dist/storage/sqlite/node.js
++++ b/dist/storage/sqlite/node.js
+@@ -105,8 +105,9 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
+ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+     access = new SerialOperationQueue();
+     closed = false;
+-    constructor(database) {
++    constructor(database, { readOnly = false } = {}) {
+         super(database, new Map());
++        this.readOnly = readOnly;
+     }
+     transaction(callback) {
+         return this.access.runAsync(async () => {
+@@ -137,7 +138,8 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+             this.closed = true;
+             this.statements.clear();
+             try {
+-                this.database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
++                if (!this.readOnly || this.database.isTransaction)
++                    this.database.exec(this.readOnly ? "ROLLBACK" : "PRAGMA wal_checkpoint(TRUNCATE)");
+             }
+             finally {
+                 this.database.close();
+diff --git a/dist/storage/sqlite/node.d.ts b/dist/storage/sqlite/node.d.ts
+index 45c897f..922a09e 100644
+--- a/dist/storage/sqlite/node.d.ts
++++ b/dist/storage/sqlite/node.d.ts
+@@ -28,7 +28,8 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
+ export declare class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
+     private readonly access;
+     private closed;
+-    constructor(database: DatabaseSync);
++    private readonly readOnly;
++    constructor(database: DatabaseSync, options?: { readOnly?: boolean });
+     transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T>;
+     close(): Promise<void>;
+     protected runOperation<T>(operation: () => T): Promise<T>;
+diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
+index 86b5fe4..10a12ea 100644
+--- a/dist/storage/sqlite/storage.js
++++ b/dist/storage/sqlite/storage.js
+@@ -2,7 +2,7 @@ import { apply } from "@earendil-works/chord/delta";
+ import { StorageRequestError } from "../../errors.js";
+ import { idFromNumber, seqFromNumber } from "../../ids.js";
+ import { nextCursor, scanStart } from "../scan.js";
+-import { applySqliteMigrations } from "./migrations.js";
++import { applySqliteMigrations, CURRENT_SQLITE_SCHEMA_VERSION } from "./migrations.js";
+ const parseJson = (value) => JSON.parse(value);
+ const encodeJson = (value) => JSON.stringify(value);
+ // Some SQLite bindings replace lone UTF-16 surrogates. JSON encoding keeps indexed identities lossless.
+@@ -77,18 +77,23 @@ export class SqliteStorage {
+     closing;
+     admittedReads = 0;
+     readsDrained;
+-    constructor(db, nextId) {
++    constructor(db, nextId, readOnly) {
++        this.readOnly = readOnly;
+         this.db = db;
+         this.nextId = nextId;
+     }
+-    /** Initialize storage over an owned SQLite database facade. */
+-    static async open(db) {
++    /** readOnly requires the caller to hold a SQLite read transaction until close. */
++    static async open(db, { readOnly = false } = {}) {
+         try {
+-            await applySqliteMigrations(db);
++            if (readOnly) {
++                const schema = await db.get("SELECT version FROM durable_schema WHERE singleton = 1");
++                if (schema?.version !== CURRENT_SQLITE_SCHEMA_VERSION)
++                    throw new Error("Unsupported durable SQLite schema version");
++            } else await applySqliteMigrations(db);
+             const metadata = await db.get("SELECT next_id, next_seq FROM durable_metadata WHERE singleton = 1");
+             if (metadata === undefined)
+                 throw new Error("Durable SQLite metadata is missing");
+-            return new SqliteStorage(db, Number(metadata.next_id));
++            return new SqliteStorage(db, Number(metadata.next_id), readOnly);
+         }
+         catch (error) {
+             try {
+@@ -101,7 +106,7 @@ export class SqliteStorage {
+         }
+     }
+     async commit(writes, _context) {
+-        this.assertOpen();
++        this.assertOpen(true);
+         const documentActions = this.prepareDocumentActions(writes);
+         const candidateNextId = this.candidateNextId(writes);
+         const seq = await this.db.transaction(async (transaction) => {
+@@ -121,7 +126,7 @@ export class SqliteStorage {
+         return seq;
+     }
+     async mintId() {
+-        this.assertOpen();
++        this.assertOpen(true);
+         if (!Number.isSafeInteger(this.nextId))
+             throw new Error("ID space is exhausted");
+         return idFromNumber(this.nextId++);
+@@ -362,6 +367,8 @@ export class SqliteStorage {
+     }
+     async document(id, at, _context) {
+         this.assertOpen();
++        if (this.readOnly)
++            return this.admitRead(() => this.materializeDocument(this.db, id, at));
+         // The record and revision queries must observe one committed state; a commit between them can replace the base.
+         return this.db.transaction((transaction) => this.materializeDocument(transaction, id, at));
+     }
+@@ -662,9 +669,11 @@ export class SqliteStorage {
+             }
+         }
+     }
+-    assertOpen() {
++    assertOpen(write = false) {
+         if (this.closed)
+             throw new Error("SqliteStorage is closed");
++        if (write && this.readOnly)
++            throw new Error("SqliteStorage is read-only");
+     }
+ }
+ //# sourceMappingURL=storage.js.map
+\ No newline at end of file
+diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
+index 8c323ba..f99bd92 100644
+--- a/dist/storage/sqlite/storage.d.ts
++++ b/dist/storage/sqlite/storage.d.ts
+@@ -10,9 +10,10 @@ export declare class SqliteStorage implements Storage {
+     private closing;
+     private admittedReads;
+     private readsDrained;
++    private readonly readOnly;
+     private constructor();
+-    /** Initialize storage over an owned SQLite database facade. */
+-    static open(db: SqliteDatabase): Promise<SqliteStorage>;
++    /** readOnly requires the caller to hold a SQLite read transaction until close. */
++    static open(db: SqliteDatabase, options?: { readOnly?: boolean }): Promise<SqliteStorage>;
+     commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq>;
+     mintId<I extends Id<string>>(): Promise<I>;
+     conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;

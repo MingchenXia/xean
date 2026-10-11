@@ -1,6 +1,7 @@
 import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   cleanupSessionResources,
   createModels,
@@ -26,7 +27,46 @@ import {
   type ConversationId,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import {
+  NodeSqliteDatabase,
+  openNodeSqliteStorage,
+} from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+
+test("native read-only storage rejects ID allocation and commits even on a writable connection", async () => {
+  const directory = await temporaryDirectory("pi-readonly-");
+  const path = join(directory, "campaign.sqlite");
+  await (await openNodeSqliteStorage(path)).close(context);
+  using database = new DatabaseSync(path);
+  database.exec("BEGIN");
+  const retained = database.prepare("SELECT * FROM durable_metadata");
+  const metadata = () => retained.get();
+  const before = metadata();
+  const storage = await SqliteStorage.open(
+    new NodeSqliteDatabase(database, { readOnly: true }),
+    { readOnly: true },
+  );
+  try {
+    await expect(storage.mintId()).rejects.toThrow("read-only");
+    await expect(storage.commit([], context)).rejects.toThrow("read-only");
+    expect(metadata()).toEqual(before);
+    using writer = new DatabaseSync(path);
+    writer.exec("UPDATE durable_metadata SET next_seq = next_seq + 1");
+    await storage.close(context);
+    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toEqual({
+      busy: 0,
+      log: 0,
+      checkpointed: 0,
+    });
+    expect(retained).toBeDefined();
+  } finally {
+    await storage.close(context);
+  }
+  using ended = new DatabaseSync(path);
+  ended.exec("BEGIN; ROLLBACK");
+  await new NodeSqliteDatabase(ended, { readOnly: true }).close();
+  expect(ended.isOpen).toBe(false);
+});
 
 test("native document caching releases old values while preserving committed state", async () => {
   const directory = await temporaryDirectory("pi-document-cache-");

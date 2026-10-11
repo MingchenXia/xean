@@ -1,8 +1,7 @@
 import { lstatSync } from "node:fs";
-import { mkdir, mkdtempDisposable, realpath, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { backup, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -21,7 +20,7 @@ import {
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
   openNodeSqliteDatabase,
-  openNodeSqliteStorage,
+  NodeSqliteDatabase,
 } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createRuntime } from "./config.ts";
 import {
@@ -40,7 +39,7 @@ import {
   type RoleName,
   type Roles,
 } from "./workflow.ts";
-import { readSnapshot, type SnapshotReader } from "./math/state.ts";
+import { Catalog, readSnapshot, type SnapshotReader } from "./math/state.ts";
 import { acceptedArgument } from "./math/argument.ts";
 
 export class ResearchOwnedError extends Error {
@@ -213,6 +212,7 @@ export async function open(path: string, options: OpenOptions = {}) {
       init: async (tx, root) => {
         Object.assign(await tx.doc(DefinitionDoc, root), definition);
         await tx.doc(Control, root);
+        await tx.doc(Catalog, root);
         if (options.initialize) await options.initialize(tx, root);
         else await workflow.initialize(tx, root);
       },
@@ -232,30 +232,26 @@ export async function open(path: string, options: OpenOptions = {}) {
   }
 }
 
-/** Inspect a consistent backup through a fresh Session without recovering work. */
+/** Inspect one SQLite read transaction through Pi without recovering work. */
 async function inspectSession<T>(
   path: string,
   read: (session: Session, root: ConversationId) => T | Promise<T>,
 ): Promise<T> {
   assertSingleLink((await stat(path)).nlink);
-  await using directory = await mkdtempDisposable(
-    join(tmpdir(), "research-snapshot-"),
+  if (!recognize(path)) throw new UninitializedResearchError();
+  using database = openReadDatabase(path);
+  database.exec("BEGIN");
+  const storage = await SqliteStorage.open(
+    new NodeSqliteDatabase(database, { readOnly: true }),
+    { readOnly: true },
   );
-  const database = join(directory.path, "snapshot.sqlite");
-  {
-    using source = openReadDatabase(path);
-    await backup(source, database);
-  }
-  if (!recognize(database)) throw new UninitializedResearchError();
-  const storage = await openNodeSqliteStorage(database);
   const session = createSession(storage);
   try {
-    await session.commit(async (tx) => {
-      if (!(await tx.conversation(ROOT_CONVERSATION_ID)))
-        throw new UninitializedResearchError();
-      await readDefinition(tx, ROOT_CONVERSATION_ID);
-      await tx.doc(Control, ROOT_CONVERSATION_ID);
-    }, context);
+    validateDefinition(
+      (await session.snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context)) ??
+        {},
+    );
+    await session.snapshot(Control, ROOT_CONVERSATION_ID, context);
     return await read(session, ROOT_CONVERSATION_ID);
   } finally {
     await session.close(context);

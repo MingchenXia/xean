@@ -133,9 +133,10 @@ test.each(["stdout", "stderr"] as const)(
       ]
         .map((event) => JSON.stringify(event))
         .join("\n") + "\n";
+    // Bun can report a closed subprocess pipe as ECONNRESET on Linux.
     await writeFile(
       command,
-      `#!${process.execPath}\nimport {writeSync} from "node:fs";\nprocess.on("SIGTERM",()=>{});\nwriteSync(1,${JSON.stringify(output)});\nsetInterval(()=>{},1000);\nconst chunk="x".repeat(65536);\ntry { for(let i=0;i<300;i++)writeSync(${stream === "stdout" ? 1 : 2},chunk); } catch(error) { if(error.code!=="EPIPE") throw error; }\n`,
+      `#!${process.execPath}\nimport {writeSync} from "node:fs";\nprocess.on("SIGTERM",()=>{});\nwriteSync(1,${JSON.stringify(output)});\nsetInterval(()=>{},1000);\nconst chunk="x".repeat(65536);\ntry { for(let i=0;i<300;i++)writeSync(${stream === "stdout" ? 1 : 2},chunk); } catch(error) { if(!["EPIPE","ECONNRESET"].includes(error.code)) throw error; }\n`,
     );
     await chmod(command, 0o700);
     const path = join(directory, "campaign.sqlite");

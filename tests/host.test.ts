@@ -40,6 +40,7 @@ import {
   UninitializedResearchError,
 } from "../src/definition.ts";
 import { Control } from "../src/workflow.ts";
+import { Catalog } from "../src/math/state.ts";
 
 const definition = {
   task: {
@@ -50,34 +51,42 @@ const definition = {
 };
 const Event = defineEntry<string>("fixture.event");
 
-test("older standalone note formats require their matching runtime", async () => {
-  const directory = await temporaryDirectory("host-old-definition-");
-  const path = join(directory, "campaign.sqlite");
-  const legacy = defineDoc({
-    ...DefinitionDoc.definition,
-    version: 1,
-    history: "latest",
-    fork: "current",
-  });
-  const harness = await Harness.open(
-    await openNodeSqliteStorage(path),
-    { registry: createRegistry(), models: createModels() },
-    context,
-  );
-  await harness.root(context, {
-    init: async (tx, root) => {
-      Object.assign(await tx.doc(legacy, root), {
-        ...definition,
-        mode: { role: "verifier", input: { notes: [{ checks: [] }] } },
-      });
-    },
-  });
-  await harness.close(context);
-  await expect(open(path)).rejects.toThrow("requires migration from version 1");
-  await expect(inspect(path, readDefinition)).rejects.toThrow(
-    "requires migration from version 1",
-  );
-});
+test.each([1, 2])(
+  "older definition version %s requires its matching runtime",
+  async (version) => {
+    const directory = await temporaryDirectory("host-old-definition-");
+    const path = join(directory, "campaign.sqlite");
+    const legacy = defineDoc({
+      ...DefinitionDoc.definition,
+      version,
+      history: "latest",
+      fork: "current",
+    });
+    const harness = await Harness.open(
+      await openNodeSqliteStorage(path),
+      { registry: createRegistry(), models: createModels() },
+      context,
+    );
+    await harness.root(context, {
+      init: async (tx, root) => {
+        Object.assign(await tx.doc(legacy, root), {
+          ...definition,
+          mode: {
+            role: "explorer",
+            input: { notes: [], guidance: "Keep the original assignment." },
+          },
+        });
+      },
+    });
+    await harness.close(context);
+    await expect(open(path)).rejects.toThrow(
+      `requires migration from version ${version}`,
+    );
+    await expect(inspect(path, readDefinition)).rejects.toThrow(
+      `requires migration from version ${version}`,
+    );
+  },
+);
 
 test("definition and initialization commit atomically once and freeze on reopen", async () => {
   const directory = await temporaryDirectory("host-atomic-");
@@ -99,6 +108,9 @@ test("definition and initialization commit atomically once and freeze on reopen"
     create: definition,
     initialize: (tx, root) => tx.appendEntry(Event, root, { data: "once" }),
   });
+  expect(await owner.harness.snapshot(Catalog, owner.root.id, context)).toEqual(
+    { notes: [], inputs: [] },
+  );
   await owner.close();
   const reopened = await open(path, {
     create: definition,
@@ -182,9 +194,22 @@ test("one owner excludes aliases while inspection uses a consistent snapshot", a
         async (tx, root) => (await tx.doc(Control, root)).paused,
       ),
     ).toBe(true);
-    await inspect(path, (tx, root) =>
-      tx.appendEntry(Event, root, { data: "snapshot only" }),
-    );
+    await expect(
+      inspect(path, (tx, root) =>
+        tx.appendEntry(Event, root, { data: "must not publish" }),
+      ),
+    ).rejects.toThrow("read-only");
+    await expect(
+      inspect(path, async (tx, root) => {
+        (await tx.doc(Control, root)).paused = false;
+      }),
+    ).rejects.toThrow("read-only");
+    expect(
+      await inspect(
+        path,
+        async (tx, root) => (await tx.doc(Control, root)).paused,
+      ),
+    ).toBe(true);
     expect(
       before!
         .filter((entry) => entry.kind === Event.kind)
@@ -266,8 +291,12 @@ test("reopening recorded cancellation aborts an interrupted decision and nested 
           decisions++;
           let child!: TaskId<null>;
           await runtime.commit(async (tx) => {
-            child = await tx.createTask(Child, null, {
+            const conversation = await tx.createConversation({
               ownership: { kind: "task", taskId: runtime.taskId },
+            });
+            child = await tx.createTask(Child, null, {
+              conversationId: conversation.id,
+              ownership: { kind: "conversation" },
             });
           }, invocation);
           await runtime.waitForTask(child, invocation);
@@ -543,6 +572,13 @@ test("custom role extensions compose with built-in mathematical conversations", 
     expect(
       tasks.items.every((task) => task.state.outcome?.status === "completed"),
     ).toBe(true);
+    // Durable records remain; ended role owners must leave the scheduler's cache.
+    const sizes = Reflect.get(
+      owner.harness,
+      Symbol.for("pi-durable.schedulerIndexSizes"),
+    ) as { live: number; settled: number; edges: number };
+    expect(sizes).toMatchObject({ live: 0, settled: 0 });
+    expect(sizes.edges).toBeLessThanOrEqual(1);
   } finally {
     await owner.close();
   }
@@ -739,12 +775,16 @@ test("inspection does not recover work or alter unsupported databases", async ()
   await expect(inspect(uninitialized, readDefinition)).rejects.toBeInstanceOf(
     UninitializedResearchError,
   );
-  const future = new DatabaseSync(uninitialized);
-  future.exec("UPDATE durable_schema SET version = 999");
-  future.close();
-  await expect(inspect(uninitialized, readDefinition)).rejects.toThrow(
-    "newer than supported",
-  );
+  for (const version of [0, 999]) {
+    const unsupported = new DatabaseSync(uninitialized);
+    unsupported.prepare("UPDATE durable_schema SET version = ?").run(version);
+    unsupported.close();
+    const original = await readFile(uninitialized);
+    await expect(inspect(uninitialized, readDefinition)).rejects.toThrow(
+      "Unsupported durable SQLite schema version",
+    );
+    expect(await readFile(uninitialized)).toEqual(original);
+  }
   const corrupt = join(directory, "corrupt.sqlite");
   await Bun.write(corrupt, "not a database");
   await expect(inspect(corrupt, readDefinition)).rejects.not.toBeInstanceOf(

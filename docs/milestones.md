@@ -13,15 +13,15 @@ and commits before adding application machinery.
 
 ## M4 / 4.0: Continued research and external computation
 
-Xean 3.1 already preserves partial notes, checks their mathematical claims,
+Xean preserves partial notes, checks their mathematical claims,
 reports progress, delegates implementation to Codex, and supports pause and
 resume. Its ordinary verification path ties full reconstruction to task
 requirements, and acceptance ends the campaign. The proposed changes separate
 checking a useful result from completing or stopping the research task.
 
-Explorer concentrates on mathematical reasoning. Coordinator arranges requested
-work. An existing durable external service owns computation and agentic jobs.
-Mathematical workers and notebook publication remain sequential.
+Under M4, Explorer concentrates on mathematical reasoning. Coordinator arranges
+requested work. An existing durable external service owns computation and
+agentic jobs. Mathematical workers and notebook publication remain sequential.
 
 ### M4-01: Fully check intermediate claims
 
@@ -91,9 +91,9 @@ Callers can retrieve those updates without reading the entire transcript.
 
 **Done when:** a campaign records a checked improvement, continues research,
 then stops or pauses at the caller's request without labeling the mathematical
-objective complete. A proved endpoint can still establish completion. An
-exhausted allowance, failed search, or apparent plateau does not establish
-optimality. Existing valid results remain available when a stronger result is
+objective complete. A proof reaching the task's stated target can still establish
+completion. An exhausted allowance, failed search, or apparent plateau does not
+establish optimality. Existing valid results remain available when a stronger result is
 found. Task representation and stopping controls will be chosen during design
 review, without committing here to a new schema or optimization framework.
 Significance remains a mathematical judgment, with no generic numerical score.
@@ -115,9 +115,8 @@ the implemented workflow, not a guarantee of solving open problems.
 
 ### M4 scope
 
-M4-01 and M4-02 can proceed independently. Background work follows the external
-service contract, and open-ended improvement follows independent claim checking.
-The combined qualification follows both paths.
+M4-01 and M4-02 can proceed independently. M4-03 follows M4-02, and M4-04 follows
+M4-01. The combined qualification follows both paths.
 
 Project hierarchies, cross-task planning, and shared budgets stay with the user
 or an existing external agent. Xean 4.0 adds no Lab work, general parallel
