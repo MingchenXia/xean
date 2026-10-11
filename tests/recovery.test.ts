@@ -140,14 +140,20 @@ test.each(["worker", "input"] as const)(
         await owner.root.commit(
           (tx) =>
             owner.workflow.input(tx, owner.root.id, {
-              kind: "correct",
+              kind: "submit",
               id: "while-waiting",
-              note: "input/seed/n1",
-              revision: seedRevision!,
-              summary: "Caller correction",
-              detailedSummary:
-                "The caller changed the admitted note while the worker waits.",
-              text: "A caller correction after admission.",
+              notes: [],
+              candidate: false,
+              edits: [
+                {
+                  id: "input/seed/n1",
+                  revision: seedRevision!,
+                  summary: "Caller correction",
+                  detailedSummary:
+                    "The caller changed the admitted note while the worker waits.",
+                  text: "A caller correction after admission.",
+                },
+              ],
             }),
           context,
         );

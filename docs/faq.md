@@ -1,7 +1,8 @@
 # Frequently asked questions
 
 Xean develops and checks mathematical arguments for one task. These answers
-describe Xean 3.1. Proposed changes are in the [milestones](milestones.md).
+describe this checkout. The [changelog](changelog.md) identifies changes since
+the latest release. Proposed changes are in the [milestones](milestones.md).
 
 ## Can Xean write and run code?
 
@@ -146,12 +147,40 @@ target belongs in a new campaign.
 
 ## Can I supply my own results?
 
-`submit` imports notes and `correct` revises them. Imported notes carry caller
-trust for correctness and sources. Use imports for premises you intend to grant,
-rather than as a way to validate unchecked computational output. Keep the proof,
-hypotheses, and provenance when reusing a result from another campaign.
-Use `review` for an independent assessment of a supplied argument and its
-supporting proofs.
+`submit` accepts new `notes` and changes to existing notes through `edits`, using
+the same structure as Explorer. To edit a note, get its ID and current revision
+from `inspect`, then put the fields to change in a JSON file. For example,
+`edit.json` could contain:
+
+```json
+{
+  "notes": [],
+  "candidate": false,
+  "edits": [
+    {
+      "id": "input/lemmas/n1",
+      "revision": 42,
+      "summary": "A lower bound under the original hypotheses."
+    }
+  ]
+}
+```
+
+Replace the example ID and revision with the current values, then run:
+
+```sh
+bun run xean submit .xean/demo/campaign.sqlite edit.json --id clarify-lemma
+```
+
+Each edit preserves the note's ID and rejects a stale revision. A submission
+publishes its new notes and edits atomically. New caller notes carry trust for
+correctness and sources. Caller edits preserve an existing import grant and
+do not grant caller trust to generated notes. Mathematical edits invalidate
+affected checks.
+Use imports for premises you intend to grant, rather than to validate unchecked
+computational output. Keep the proof, hypotheses, and provenance when reusing
+a result from another campaign. Use `review` for an independent assessment of
+a supplied argument and its supporting proofs.
 
 ## Can Xean reorganize a cluttered notebook?
 

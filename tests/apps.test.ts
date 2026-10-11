@@ -668,7 +668,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
   }
 });
 
-test("live owner controls reject foreign identity and execution overrides without a second writer", async () => {
+test("live owner controls admit revision-checked submissions and reject foreign ownership", async () => {
   const directory = await temporaryDirectory("xean-apps-");
   const path = join(directory, "campaign.sqlite");
   const owner = await open(path, {
@@ -698,6 +698,44 @@ test("live owner controls reject foreign identity and execution overrides withou
     );
     expect(receipt).toMatchObject({ command: { id: "live" } });
     expect((await inspect(path, readReport)).inputs).toHaveLength(1);
+    const file = join(directory, "submission.json");
+    await Bun.write(file, JSON.stringify({ notes: [draft], candidate: false }));
+    expect((await cli("submit", path, file, "--id", "seed")).code).toBe(0);
+    const original = (await inspect(path, readReport)).notes[0]!;
+    const submission = {
+      notes: [],
+      candidate: false,
+      edits: [
+        {
+          id: original.id,
+          revision: original.revision,
+          text: "1 = 1\n\nEquality is reflexive.",
+        },
+      ],
+    };
+    await Bun.write(file, JSON.stringify(submission));
+    const editedReceipt = await cli("submit", path, file, "--id", "edit");
+    expect(editedReceipt.code).toBe(0);
+    expect(JSON.parse(editedReceipt.stdout)).toMatchObject({
+      command: { id: "edit" },
+    });
+    const edited = (await inspect(path, readReport)).notes[0]!;
+    expect(edited).toMatchObject({
+      id: original.id,
+      summary: original.summary,
+      detailedSummary: original.detailedSummary,
+      text: submission.edits[0]!.text,
+      imported: true,
+    });
+    expect(edited.revision).toBeGreaterThan(original.revision);
+    expect((await cli("submit", path, file, "--id", "edit")).code).toBe(0);
+    const stale = await cli("submit", path, file, "--id", "stale");
+    expect(stale.code).not.toBe(0);
+    expect(stale.stderr).toContain("Stale note revision");
+    expect((await inspect(path, readReport)).notes).toEqual([edited]);
+    const obsolete = await cli("correct", path, file, "--id", "obsolete");
+    expect(obsolete.code).not.toBe(0);
+    expect(obsolete.stderr).toContain("unknown command 'correct'");
     expect(
       (await cli("--usage-prefix", "new-owner", "pause", path)).stderr,
     ).toContain("already has an owner");

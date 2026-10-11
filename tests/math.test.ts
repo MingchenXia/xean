@@ -104,6 +104,18 @@ const note = (id: string, support: string[] = [], imported = false): Note => ({
 });
 const capabilities = { explorer: true, literature: false, codex: false };
 
+test("caller edits reject the removed correct command", () => {
+  expect(() =>
+    readCommand({
+      kind: "correct",
+      id: "obsolete",
+      note: "input/seed/n1",
+      revision: 1,
+      ...content("Revised"),
+    }),
+  ).toThrow("Invalid value");
+});
+
 test("completed uncertain checks stay closed on unchanged inputs", () => {
   const candidate = refresh([note("candidate")])[0]!;
   const report = "The completion criterion is not established.";
@@ -838,11 +850,17 @@ test("Pi snapshots survive reopen and stale verification cannot restore current 
     const frozenAt = await owner.checkpoint();
     const frozen = await owner.snapshot(frozenAt);
     await owner.command({
-      kind: "correct",
+      kind: "submit",
       id: "edit",
-      note: "input/seed/n1",
-      revision: frozen.notes[0]!.revision,
-      ...content("Revised"),
+      notes: [],
+      candidate: false,
+      edits: [
+        {
+          id: "input/seed/n1",
+          revision: frozen.notes[0]!.revision,
+          ...content("Revised"),
+        },
+      ],
     });
     const worker = await owner.run(
       {

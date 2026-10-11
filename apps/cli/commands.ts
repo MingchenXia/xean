@@ -31,9 +31,7 @@ const program = new Command("xean")
   .hook("preAction", (_program, action) => {
     if (
       program.opts<Flags>().expectedOwnerId !== undefined &&
-      !["resume", "pause", "cancel", "submit", "guide", "correct"].includes(
-        action.name(),
-      )
+      !["resume", "pause", "cancel", "submit", "guide"].includes(action.name())
     )
       throw new Error("--expected-owner-id requires a live control command");
   });
@@ -191,7 +189,7 @@ program
       });
     },
   );
-for (const kind of ["submit", "guide", "correct"] as const)
+for (const kind of ["submit", "guide"] as const)
   program
     .command(`${kind} <campaign> <file>`)
     .requiredOption("--id <id>", "Stable command ID for exact retries")

@@ -290,13 +290,19 @@ test("input admission reads only edited bodies and keeps command IDs in native e
     );
     expect([...bodies]).toEqual([]);
     const correction = {
-      kind: "correct",
+      kind: "submit",
       id: "same",
-      note: note.id,
-      revision: note.revision,
-      summary: note.summary,
-      detailedSummary: note.detailedSummary,
-      text: note.text,
+      notes: [],
+      candidate: false,
+      edits: [
+        {
+          id: note.id,
+          revision: note.revision,
+          summary: note.summary,
+          detailedSummary: note.detailedSummary,
+          text: note.text,
+        },
+      ],
     };
     await input(correction);
     expect([...bodies]).toEqual([note.id]);
@@ -304,7 +310,12 @@ test("input admission reads only edited bodies and keeps command IDs in native e
     await input({
       ...correction,
       id: "changed",
-      text: "A different proof of reflexivity.",
+      edits: [
+        {
+          ...correction.edits[0]!,
+          text: "A different proof of reflexivity.",
+        },
+      ],
     });
     expect([...bodies]).toEqual([note.id]);
     const edited = (await owner.view()).notes[0]!;
@@ -418,13 +429,19 @@ test.each(["completed", "stale"])(
         await owner.root.commit(
           (tx) =>
             owner.research.input(tx, owner.root.id, {
-              kind: "correct",
+              kind: "submit",
               id: "concurrent",
-              note: note.id,
-              revision: note.revision,
-              summary: note.summary,
-              detailedSummary: note.detailedSummary,
-              text: "Caller changed the frozen proof.",
+              notes: [],
+              candidate: false,
+              edits: [
+                {
+                  id: note.id,
+                  revision: note.revision,
+                  summary: note.summary,
+                  detailedSummary: note.detailedSummary,
+                  text: "Caller changed the frozen proof.",
+                },
+              ],
             }),
           context,
         );
@@ -496,13 +513,19 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
       const note = before.notes[0]!;
       await expect(
         input({
-          kind: "correct",
+          kind: "submit",
           id: "late",
-          note: note.id,
-          revision: note.revision,
-          summary: "Changed",
-          detailedSummary: "Changed",
-          text: "Changed mathematical content",
+          notes: [],
+          candidate: false,
+          edits: [
+            {
+              id: note.id,
+              revision: note.revision,
+              summary: "Changed",
+              detailedSummary: "Changed",
+              text: "Changed mathematical content",
+            },
+          ],
         }),
       ).rejects.toThrow(state === "blocked" ? "blocked" : "terminal");
       expect(await owner.view()).toEqual(before);
@@ -1005,13 +1028,19 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
       at,
     });
     const correction = {
-      kind: "correct",
+      kind: "submit",
       id: "fix",
-      note: "input/import/n1",
-      revision: initialRevision,
-      summary: "Equality",
-      detailedSummary: "Reflexivity proves equality.",
-      text: "1=1\n\nBy reflexivity, 1=1.",
+      notes: [],
+      candidate: false,
+      edits: [
+        {
+          id: "input/import/n1",
+          revision: initialRevision,
+          summary: "Equality",
+          detailedSummary: "Reflexivity proves equality.",
+          text: "1=1\n\nBy reflexivity, 1=1.",
+        },
+      ],
     };
     const revised = await root.commit(
       (tx) => research.input(tx, root.id, correction),
@@ -1048,7 +1077,7 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
     expect(seen).toHaveLength(3);
     expect(seen[2]).toMatchObject({
       revision: editedRevision,
-      text: correction.text,
+      text: correction.edits[0]!.text,
     });
     expect(seen[2]!.cutoff).toBeGreaterThan(at);
     expect((await owner.view()).notes[0]!.revision).toBe(editedRevision);
@@ -1137,13 +1166,19 @@ test("an edit after Coordinator freezes a checked candidate prevents stale accep
           .commit(
             (tx) =>
               research.input(tx, root.id, {
-                kind: "correct",
+                kind: "submit",
                 id: "edit-before-acceptance",
-                note: target!.id,
-                revision: target!.revision,
-                summary: "Equality with an unresolved extension",
-                detailedSummary: "The extension has not been checked.",
-                text: `${draft().text}\n\nUnproved addition: 1 = 2.`,
+                notes: [],
+                candidate: false,
+                edits: [
+                  {
+                    id: target!.id,
+                    revision: target!.revision,
+                    summary: "Equality with an unresolved extension",
+                    detailedSummary: "The extension has not been checked.",
+                    text: `${draft().text}\n\nUnproved addition: 1 = 2.`,
+                  },
+                ],
               }),
             context,
           )

@@ -531,22 +531,7 @@ export async function publishCommand(
   const exploration: Exploration | undefined =
     command.kind === "submit"
       ? normalize(command, `input/${command.id}`)
-      : command.kind === "correct"
-        ? {
-            notes: [],
-            candidate: false,
-            edits: [
-              {
-                id: command.note,
-                revision: command.revision,
-                cosmetic: command.cosmetic,
-                summary: command.summary,
-                detailedSummary: command.detailedSummary,
-                text: command.text,
-              },
-            ],
-          }
-        : undefined;
+      : undefined;
   if (exploration) validateExploration(exploration, current.notes);
   const marker = (
     await tx.appendEntry(Events, root, { data: { type: "input", command } })

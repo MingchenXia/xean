@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Caller `submit` and Explorer use the same `notes` and `edits` schema. The
+  redundant `correct` command is removed. Submit an edit with the note's `id`,
+  expected `revision`, and changed fields. Caller trust rules, revision checks,
+  and atomic publication are unchanged. Keep historical campaigns with their
+  frozen runtimes.
+
 ## 3.1.0 — 2026-10-10
 
 Xean adds an editable notebook, preserves useful work after provider failures,

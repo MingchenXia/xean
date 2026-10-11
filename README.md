@@ -55,7 +55,7 @@ Explorer repairs notes through `edits`, retaining their IDs. Each edit supplies
 the expected `revision` and only changed fields. A worker publishes its creations
 and edits atomically. Retiring a note hides it from routine discovery and preserves
 historical reads. Existing consumers can still verify their retired dependencies.
-Caller corrections preserve an existing import grant. Explorer edits to its
+Caller edits preserve an existing import grant. Explorer edits to its
 mathematical text or support revoke that grant. Mathematical edits clear affected
 checks. Explorer and caller edits may mark presentation-only text changes with
 `cosmetic: true`. Xean trusts that classification and preserves checks and import
@@ -103,8 +103,11 @@ Campaign arguments accept explicit paths or names under `--campaign-dir`, which
 defaults to `.xean` relative to the calling directory.
 
 The same CLI provides `pause`, `resume`, `cancel`, `inspect [--records]`, and
-accepted-only Markdown `export`. `submit`, `guide`, and `correct` take a file and
-a stable `--id` for exact retries. Live mutations reach the active owner.
+accepted-only Markdown `export`. `submit` takes a JSON file containing `notes`,
+optional `edits`, and `candidate`. Explorer uses the same submission structure.
+`guide` takes a text file. Both commands require a stable `--id` for exact retries.
+The [FAQ](docs/faq.md#can-i-supply-my-own-results) includes an edit example.
+Live mutations reach the active owner.
 `role NAME INPUT CAMPAIGN SETTINGS` runs a standalone procedure, and
 `review TASK ARGUMENT CAMPAIGN SETTINGS` records an independent review. Use
 `--help` for arguments and owner, credential, and usage-attribution options.
@@ -146,8 +149,9 @@ The bridge must preserve the original JSON answer text and support ChatGPT's
 current model picker. A `model_version_unavailable` error means the bridge
 could not confirm the requested model and left the prompt unsent. Repair the
 bridge before starting a fresh campaign. This Explorer receives the note index
-and has no note reader or further browser attempt. It can create new notes. Edits
-to existing notes require the native Pi Explorer or a caller correction.
+and has no note reader or further browser attempt. It can create new notes.
+Coordinator can select it only once per campaign. Edits to existing notes require
+the native Pi Explorer or caller `submit.edits`.
 
 ## Library
 

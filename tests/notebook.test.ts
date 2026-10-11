@@ -388,12 +388,11 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
         await owner.root.commit(
           (tx) =>
             publishCommand(tx, owner.root.id, {
-              ...edit,
-              summary: before.summary,
-              detailedSummary: before.detailedSummary,
-              kind: "correct",
+              kind: "submit",
               id: "format",
-              note: before.id,
+              notes: [],
+              candidate: false,
+              edits: [edit],
             }),
           context,
         );
@@ -444,7 +443,7 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
   }
 });
 
-test("caller corrections preserve import trust; Explorer edits revoke it and cycles publish nothing", async () => {
+test("caller edits preserve import trust; Explorer edits revoke it and cycles publish nothing", async () => {
   const owner = await fixture();
   try {
     await owner.root.commit(
@@ -462,11 +461,17 @@ test("caller corrections preserve import trust; Explorer edits revoke it and cyc
     await owner.root.commit(
       (tx) =>
         publishCommand(tx, owner.root.id, {
-          kind: "correct",
+          kind: "submit",
           id: "change",
-          note: imported.id,
-          revision: imported.revision,
-          ...content("Revised theorem"),
+          notes: [],
+          candidate: false,
+          edits: [
+            {
+              id: imported.id,
+              revision: imported.revision,
+              ...content("Revised theorem"),
+            },
+          ],
         }),
       context,
     );

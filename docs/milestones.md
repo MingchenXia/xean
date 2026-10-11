@@ -136,10 +136,10 @@ finding reusable results, separating claims, simplifying arguments, and retainin
 useful failed approaches. The long-term direction is a mathematical workspace
 connecting research, knowledge, and exposition.
 
-The current notebook already shares an edit path between Explorer, `submit`,
-and `correct`. Caller imports carry a distinct trust grant. Verifier records
-exact statements, source evidence, diagnoses, and reconstructed proofs, but can
-edit only note summaries. Useful mathematics inside those records is not fully
+Explorer and caller `submit` share the notebook's `notes` and `edits` structure
+and publication logic. Caller imports carry a distinct trust grant. Verifier
+records exact statements, source evidence, diagnoses, and reconstructed proofs,
+but can edit only note summaries. Useful mathematics inside those records is not fully
 exposed by the ordinary note-reading tools. Coordinator and Explorer receive
 the entire non-retired note index, which grows during a long campaign. These
 are organization and discovery limitations. Their performance cost remains
