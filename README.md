@@ -17,7 +17,9 @@ candidate and its generated support to pass the required checks. Independent
 review remains a separate result. The [capability inventory](docs/parity.md)
 maps this behavior to implementation and tests.
 See the [changelog](docs/changelog.md) for changes since 3.0.0.
-Unimplemented proposals live in [design ideas](docs/design-ideas.md).
+The [FAQ](docs/faq.md) covers computation, broader research goals, and current
+limits. Proposed [4.0 milestones](docs/milestones-4.0.md) and
+[design ideas](docs/design-ideas.md) describe future work.
 
 ## Principles
 
