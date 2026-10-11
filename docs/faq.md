@@ -1,7 +1,7 @@
 # Frequently asked questions
 
 Xean develops and checks mathematical arguments for one task. These answers
-describe Xean 3.1. Proposed changes are in the [4.0 milestones](milestones-4.0.md).
+describe Xean 3.1. Proposed changes are in the [milestones](milestones.md).
 
 ## Can Xean write and run code?
 
@@ -152,6 +152,37 @@ rather than as a way to validate unchecked computational output. Keep the proof,
 hypotheses, and provenance when reusing a result from another campaign.
 Use `review` for an independent assessment of a supplied argument and its
 supporting proofs.
+
+## Can Xean reorganize a cluttered notebook?
+
+Explorer can revise notes, change dependencies, and retire notes from routine
+discovery. Mathematical edits invalidate affected checks. Retirement preserves
+historical reads and existing dependencies. Explorer edits and caller commands
+already share the underlying note-editing path, with distinct trust rules for
+caller imports.
+
+The current system has no automatic phase for reorganizing accumulated knowledge.
+Coordinator and Explorer receive every non-retired note's index entry, so the
+index grows during long runs. Verification also produces knowledge, including
+reconstructed proofs and diagnoses. Those records are retained, but ordinary
+note reads do not expose all of that material for reuse.
+
+[M5 / 5.0](milestones.md#m5--50-mathematical-knowledge-and-paper-writing) proposes
+better discovery, reuse of verifier findings, and deliberate maintenance through
+ordinary edits and checks. Its aim is a notebook that helps further work, with
+exact claims and evidence still accessible.
+
+## Can Xean turn its research into a paper?
+
+`export` produces the accepted argument and its supporting notes as Markdown.
+The current system has no dedicated paper-writing workflow. A paper still needs
+a coherent exposition, consistent hypotheses and notation, accurate attribution,
+and review of the assembled argument.
+
+M5 proposes connecting paper writing to the maintained notebook. Writing may
+reveal gaps or better arguments that return to research and verification. This
+knowledge and writing component could become a separate system, with Xean as
+one of its users. Its scope and implementation remain open.
 
 ## Why did the campaign stop without an accepted result?
 

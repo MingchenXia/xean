@@ -18,7 +18,8 @@ review remains a separate result. The [capability inventory](docs/parity.md)
 maps this behavior to implementation and tests.
 See the [changelog](docs/changelog.md) for changes since 3.0.0.
 The [FAQ](docs/faq.md) covers computation, broader research goals, and current
-limits. Proposed [4.0 milestones](docs/milestones-4.0.md) and
+limits. The proposed [milestones](docs/milestones.md) cover 4.0 research and
+computation, then 5.0 knowledge maintenance and paper writing. Further
 [design ideas](docs/design-ideas.md) describe future work.
 
 ## Principles

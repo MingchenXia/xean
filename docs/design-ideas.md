@@ -26,8 +26,9 @@ coexisted with its earlier version because a supporting note bundled a general
 stability theorem with a consequence that used the earlier lemma. Later work
 needed only the general theorem but inherited the whole note's dependencies.
 
-Consider a model-led simplification pass that proposes replacement notes with
-separate reusable claims and a smaller dependency chain. Preserve the original
-notes and checks. Replacements require the usual verification before acceptance.
-This pass is unimplemented. When to run it and whether it saves more work than
-it costs remain open.
+This is a concrete case for
+[M5 knowledge maintenance](milestones.md#m5--50-mathematical-knowledge-and-paper-writing).
+Explorer could split the bundled claims and revise the affected dependencies
+through ordinary notebook edits and verification. Historical notes and checks
+remain accessible. Automatic maintenance is unimplemented, and its benefit
+must be assessed through later reuse.
