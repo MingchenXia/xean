@@ -86,14 +86,6 @@ test("one exact fact judgment maps to every local premise without rebinding evid
     runtime,
     context,
   );
-  expect(() =>
-    decode(sourceSchema, {
-      verdict: "PASS",
-      report: "Checked",
-      passages: [],
-      correction: { statement: "Repaired frozen claim" },
-    }),
-  ).toThrow();
   expect(calls).toBe(1);
   expect(results.map(({ noteId, verdict }) => [noteId, verdict])).toEqual([
     ["a", "PASS"],
@@ -123,7 +115,6 @@ test("one exact fact judgment maps to every local premise without rebinding evid
     premises: [shared, "Unsettled theorem."],
     passages: [{ ...evidence, premise: 0 }],
   });
-  expect(results.every((result) => !("correction" in result))).toBe(true);
   expect(results[4]!.report).toContain("lacked valid task or source evidence");
 });
 
@@ -152,4 +143,15 @@ test("self-contained notes need no source invocation", async () => {
   expect(
     await research.source({ task, notes: [note("a", [])] }, runtime, context),
   ).toMatchObject([{ noteId: "a", verdict: "PASS" }]);
+});
+
+test("source judgments cannot rewrite their frozen claim", () => {
+  expect(() =>
+    decode(sourceSchema, {
+      verdict: "PASS",
+      report: "Checked",
+      passages: [],
+      correction: { statement: "Repaired frozen claim" },
+    }),
+  ).toThrow();
 });

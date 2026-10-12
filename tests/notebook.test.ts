@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { temporaryDirectory } from "./directory.ts";
+import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
+import { readCommand } from "../src/math/commands.ts";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -8,6 +11,7 @@ import {
   Harness,
   MemoryStorage,
   type EntryId,
+  type Storage,
 } from "@earendil-works/pi-durable";
 import {
   publishCommand,
@@ -38,7 +42,7 @@ const checked = (note: Note, statement = note.id): Check => ({
   requirements: pass,
   reconstruction: { ...pass, proof: `Independent proof of ${statement}` },
 });
-async function fixture() {
+async function fixture(storage: Storage = new MemoryStorage()) {
   const Worker = defineTask<
     { value: SolverResult; frozen: MathView },
     { phase: "run" },
@@ -76,8 +80,8 @@ async function fixture() {
     defineExtension({ name: "notebook.fixture", tasks: [Worker] }),
   );
   const harness = await Harness.open(
-    new MemoryStorage(),
-    { registry, models: createModels() },
+    storage,
+    { registry, models: createModels(), settings: { documentRetentionMs: 0 } },
     context,
   );
   const root = await harness.root(context);
@@ -87,6 +91,19 @@ async function fixture() {
     entry: (id) => root.commit((tx) => tx.entry(id), context),
   };
   const view = () => root.commit((tx) => readView(tx, root.id), context);
+  const run = async (value: SolverResult, prior?: MathView) => {
+    const frozen = prior ?? (await view());
+    const id = await root.commit(
+      (tx) =>
+        tx.createTask(
+          Worker,
+          { value, frozen },
+          { ownership: { kind: "conversation" } },
+        ),
+      context,
+    );
+    return (await harness.waitForTask(id, context)).state.outcome;
+  };
   return {
     root,
     harness,
@@ -98,47 +115,37 @@ async function fixture() {
           (await tx.appendEntry(root.id, { kind: "notebook.marker" })).id,
         context,
       ),
-    async run(value: SolverResult, prior?: MathView) {
-      const frozen = prior ?? (await view());
-      const id = await root.commit(
-        (tx) =>
-          tx.createTask(
-            Worker,
-            { value, frozen },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
-      return (await harness.waitForTask(id, context)).state.outcome;
+    run,
+    async publish(value: SolverResult, prior?: MathView) {
+      const outcome = await run(value, prior);
+      if (outcome.status !== "completed")
+        throw new Error(JSON.stringify(outcome));
     },
+    command: (value: unknown) =>
+      root.commit(
+        (tx) => publishCommand(tx, root.id, readCommand(value)),
+        context,
+      ),
   };
 }
 async function seed(owner: Awaited<ReturnType<typeof fixture>>) {
-  expect(
-    (
-      await owner.run({
-        kind: "notes",
-        notes: [
-          { id: "n1", ...content("Lemma proof"), support: [] },
-          {
-            id: "n2",
-            ...content("Consumer proof"),
-            support: ["n1"],
-            candidate: true,
-          },
-        ],
-      })
-    ).status,
-  ).toBe("completed");
+  await owner.publish({
+    kind: "notes",
+    notes: [
+      { id: "n1", ...content("Lemma proof"), support: [] },
+      {
+        id: "n2",
+        ...content("Consumer proof"),
+        support: ["n1"],
+        candidate: true,
+      },
+    ],
+  });
   const notes = (await owner.view()).notes;
-  expect(
-    (
-      await owner.run({
-        kind: "verification",
-        checks: notes.map((note) => checked(note)),
-      })
-    ).status,
-  ).toBe("completed");
+  await owner.publish({
+    kind: "verification",
+    checks: notes.map((note) => checked(note)),
+  });
   return (await owner.view()).notes;
 }
 
@@ -146,15 +153,11 @@ test("note-only snapshots retain evidence without replaying caller inputs", asyn
   const owner = await fixture();
   try {
     await seed(owner);
-    await owner.root.commit(
-      (tx) =>
-        publishCommand(tx, owner.root.id, {
-          kind: "guide",
-          id: "hint",
-          text: "Review the proof",
-        }),
-      context,
-    );
+    await owner.command({
+      kind: "guide",
+      id: "hint",
+      text: "Review the proof",
+    });
     const at = await owner.marker();
     const full = await owner.snapshot(at);
     const lean = await readSnapshot(
@@ -179,81 +182,87 @@ test("note-only snapshots retain evidence without replaying caller inputs", asyn
   }
 });
 
-test("mathematical proof edits invalidate consumers even when the statement is retained", async () => {
+test("proof repairs invalidate only their dependency chain and retain stable note identities", async () => {
   const owner = await fixture();
   try {
     const [base, consumer] = await seed(owner);
+    await owner.publish({
+      kind: "notes",
+      notes: [{ id: "n1", ...content("Unrelated lemma"), support: [] }],
+    });
+    const independent = (await owner.view()).notes[2]!;
+    await owner.publish({
+      kind: "verification",
+      checks: [checked(independent)],
+    });
     const at = await owner.marker();
     const old = await owner.snapshot(at);
     expect(consumer!.accepted).toBe(true);
-    expect(
-      (
-        await owner.run({
-          kind: "notes",
-          notes: [],
-          edits: [
-            {
-              id: base!.id,
-              revision: base!.revision,
-              text: "A repaired proof of the same lemma",
-            },
-          ],
-        })
-      ).status,
-    ).toBe("completed");
-    const edited = (await owner.view()).notes;
-    expect(edited[0]!.checks).toEqual({});
-    expect(edited[1]!.checks).toEqual({});
-    expect(edited[1]!.verified).toBe(false);
-    expect(
-      (
-        await owner.run({
-          kind: "verification",
-          checks: [checked(edited[0]!, base!.id)],
-        })
-      ).status,
-    ).toBe("completed");
-    const repaired = await owner.view();
-    expect(repaired.notes[1]!.accepted).toBe(false);
-    expect(repaired.notes[1]!.checks).toEqual({});
-    await owner.run({
-      kind: "verification",
-      checks: [checked(consumer!)],
-    });
-    expect((await owner.view()).notes[1]!.accepted).toBe(true);
-    expect(await owner.snapshot(at)).toEqual(old);
-  } finally {
-    await owner.harness.close(context);
-  }
-});
 
-test("a changed exported statement invalidates retained consumers before new evidence installs", async () => {
-  const owner = await fixture();
-  try {
-    const [base] = await seed(owner);
-    await owner.run({
+    await owner.publish({
+      kind: "notes",
+      notes: [],
+      edits: [
+        { id: base!.id, revision: base!.revision, summary: "Clearer summary" },
+      ],
+    });
+    const summarized = (await owner.view()).notes[0]!;
+    expect(summarized.revision).toBeGreaterThan(base!.revision);
+    expect(summarized.checks).toEqual(base!.checks);
+    expect((await owner.view()).notes[1]!.accepted).toBe(true);
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
         {
           id: base!.id,
-          revision: base!.revision,
-          text: "A different claim and proof",
+          revision: summarized.revision,
+          text: "A repaired proof of the same lemma",
         },
       ],
     });
     const edited = (await owner.view()).notes;
-    expect(
-      (
-        await owner.run({
-          kind: "verification",
-          checks: [checked(edited[0]!, "A different theorem")],
-        })
-      ).status,
-    ).toBe("completed");
-    const current = (await owner.view()).notes;
-    expect(current[1]!.checks).toEqual({});
-    expect(current[1]!.verified).toBe(false);
+    expect(edited.map((note) => note.id)).toEqual(
+      old.notes.map((note) => note.id),
+    );
+    expect(edited[0]!.checks).toEqual({});
+    expect(edited[1]).toMatchObject({
+      checks: {},
+      accepted: false,
+      text: consumer!.text,
+      support: [base!.id],
+    });
+    expect(edited[2]).toEqual(old.notes[2]);
+    await owner.publish({
+      kind: "verification",
+      checks: [checked(edited[0]!, base!.id)],
+    });
+    expect((await owner.view()).notes[1]).toMatchObject({
+      accepted: false,
+      checks: {},
+    });
+    await owner.publish({ kind: "verification", checks: [checked(consumer!)] });
+    expect((await owner.view()).notes[1]!.accepted).toBe(true);
+
+    await owner.publish({
+      kind: "notes",
+      notes: [{ id: "n1", ...content("Replacement lemma"), support: [] }],
+      edits: [
+        {
+          id: consumer!.id,
+          revision: consumer!.revision,
+          support: ["n1"],
+        },
+      ],
+    });
+    const repaired = (await owner.view()).notes;
+    expect(repaired[1]).toMatchObject({
+      id: consumer!.id,
+      support: [repaired[3]!.id],
+      checks: {},
+      accepted: false,
+    });
+    expect(await owner.snapshot(at)).toEqual(old);
   } finally {
     await owner.harness.close(context);
   }
@@ -264,7 +273,7 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
   try {
     const [base] = await seed(owner);
     const frozen = await owner.view();
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
@@ -282,15 +291,11 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     expect(summaryEdited.checks).toEqual(base!.checks);
     expect(summaryEdited.revision).toBeGreaterThan(base!.revision);
     expect((await owner.view()).notes[1]!.accepted).toBe(true);
-    expect(
-      (
-        await owner.run(
-          { kind: "verification", checks: [checked(base!)] },
-          frozen,
-        )
-      ).status,
-    ).toBe("completed");
-    await owner.run({
+    await owner.publish(
+      { kind: "verification", checks: [checked(base!)] },
+      frozen,
+    );
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
@@ -305,7 +310,7 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     expect(stale.status).toBe("faulted");
     expect(await owner.view()).toEqual(afterEdit);
     const now = afterEdit.notes[0]!;
-    await owner.run({
+    await owner.publish({
       kind: "verification",
       checks: [
         {
@@ -320,7 +325,7 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
       ],
     });
     const assessed = (await owner.view()).notes[0]!;
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
@@ -335,7 +340,7 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     const unchanged = (await owner.view()).notes[0]!;
     expect(unchanged.revision).toBe(assessed.revision);
     expect(stagePending(unchanged, "correctness")).toBe(false);
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
@@ -360,16 +365,12 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
 test("caller and Explorer cosmetic edits preserve import trust, but support changes revoke it", async () => {
   const owner = await fixture();
   try {
-    await owner.root.commit(
-      (tx) =>
-        publishCommand(tx, owner.root.id, {
-          kind: "submit",
-          id: "grant",
-          notes: [{ id: "n1", ...content("Caller theorem"), support: [] }],
-        }),
-      context,
-    );
-    await owner.run({
+    await owner.command({
+      kind: "submit",
+      id: "grant",
+      notes: [{ id: "n1", ...content("Caller theorem"), support: [] }],
+    });
+    await owner.publish({
       kind: "verification",
       checks: (await owner.view()).notes.map((note) => checked(note)),
     });
@@ -383,26 +384,18 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
         cosmetic: true,
       };
       if (actor === "caller") {
-        await owner.root.commit(
-          (tx) =>
-            publishCommand(tx, owner.root.id, {
-              kind: "submit",
-              id: "format",
-              notes: [],
-              edits: [edit],
-            }),
-          context,
-        );
+        await owner.command({
+          kind: "submit",
+          id: "format",
+          notes: [],
+          edits: [edit],
+        });
       } else {
-        expect(
-          (
-            await owner.run({
-              kind: "notes",
-              notes: [],
-              edits: [edit],
-            })
-          ).status,
-        ).toBe("completed");
+        await owner.publish({
+          kind: "notes",
+          notes: [],
+          edits: [edit],
+        });
       }
       const after = (await owner.view()).notes[0]!;
       expect(after.revision).toBeGreaterThan(before.revision);
@@ -412,22 +405,18 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
       expect(after.verified).toBe(true);
     }
     const before = (await owner.view()).notes[0]!;
-    expect(
-      (
-        await owner.run({
-          kind: "notes",
-          notes: [{ id: "n2", ...content("New dependency"), support: [] }],
-          edits: [
-            {
-              id: before.id,
-              revision: before.revision,
-              support: ["n2"],
-              cosmetic: true,
-            },
-          ],
-        })
-      ).status,
-    ).toBe("completed");
+    await owner.publish({
+      kind: "notes",
+      notes: [{ id: "n2", ...content("New dependency"), support: [] }],
+      edits: [
+        {
+          id: before.id,
+          revision: before.revision,
+          support: ["n2"],
+          cosmetic: true,
+        },
+      ],
+    });
     const after = (await owner.view()).notes[0]!;
     expect(after.mathRevision).toBeGreaterThan(original.mathRevision!);
     expect(after.checks).toEqual({});
@@ -438,73 +427,100 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
   }
 });
 
-test("caller edits preserve import trust; Explorer edits revoke it and cycles publish nothing", async () => {
+test("caller mathematical edits preserve import trust; Explorer edits revoke it", async () => {
   const owner = await fixture();
   try {
-    await owner.root.commit(
-      (tx) =>
-        publishCommand(tx, owner.root.id, {
-          kind: "submit",
-          id: "grant",
-          notes: [
-            {
-              id: "n1",
-              ...content("Caller theorem"),
-              support: [],
-              candidate: true,
-            },
-          ],
-        }),
-      context,
-    );
+    await owner.command({
+      kind: "submit",
+      id: "grant",
+      notes: [
+        {
+          id: "n1",
+          ...content("Caller theorem"),
+          support: [],
+          candidate: true,
+        },
+      ],
+    });
     const imported = (await owner.view()).notes[0]!;
     expect(imported.imported).toBe(true);
-    await owner.root.commit(
-      (tx) =>
-        publishCommand(tx, owner.root.id, {
-          kind: "submit",
-          id: "change",
-          notes: [],
-          edits: [
-            {
-              id: imported.id,
-              revision: imported.revision,
-              ...content("Revised theorem"),
-            },
-          ],
-        }),
-      context,
-    );
+    await owner.command({
+      kind: "submit",
+      id: "change",
+      notes: [],
+      edits: [
+        {
+          id: imported.id,
+          revision: imported.revision,
+          ...content("Revised theorem"),
+        },
+      ],
+    });
     const revised = (await owner.view()).notes[0]!;
     expect(revised.imported).toBe(true);
     expect(revised.checks).toEqual({});
-    const before = await owner.view();
-    const outcome = await owner.run({
+    await owner.publish({
       kind: "notes",
-      notes: [
-        { id: "n1", ...content("New dependency"), support: [revised.id] },
+      notes: [],
+      edits: [
+        {
+          id: revised.id,
+          revision: revised.revision,
+          text: "Explorer proof",
+        },
       ],
-      edits: [{ id: revised.id, revision: revised.revision, support: ["n1"] }],
     });
-    expect(outcome.status).toBe("faulted");
-    expect(await owner.view()).toEqual(before);
-    expect(revised.checks.source).toBeUndefined();
-    expect(
-      (
-        await owner.run({
-          kind: "notes",
-          notes: [],
-          edits: [
-            {
-              id: revised.id,
-              revision: revised.revision,
-              text: "Explorer proof",
-            },
-          ],
-        })
-      ).status,
-    ).toBe("completed");
     expect((await owner.view()).notes[0]!.imported).toBe(false);
+  } finally {
+    await owner.harness.close(context);
+  }
+});
+
+test("stale and cyclic create-and-edit batches publish nothing", async () => {
+  const owner = await fixture();
+  try {
+    await owner.command({
+      kind: "submit",
+      id: "grant",
+      notes: [
+        { id: "n1", ...content("Imported lemma"), support: [] },
+        { id: "n2", ...content("Consumer"), support: ["n1"] },
+      ],
+    });
+    const [base, consumer] = (await owner.view()).notes;
+    await owner.publish({
+      kind: "verification",
+      checks: [checked(base!), checked(consumer!)],
+    });
+    const before = await owner.view();
+    for (const { support, edit, error } of [
+      {
+        support: [],
+        edit: { revision: base!.revision + 1, summary: "Stale" },
+        error: "Stale note revision",
+      },
+      {
+        support: [],
+        edit: { revision: base!.revision, support: [consumer!.id] },
+        error: "Cyclic support",
+      },
+      {
+        support: [base!.id],
+        edit: { revision: base!.revision, support: ["n1"] },
+        error: "Cyclic support",
+      },
+    ]) {
+      const outcome = await owner.run({
+        kind: "notes",
+        notes: [{ id: "n1", ...content("Must not leak"), support }],
+        edits: [{ id: base!.id, ...edit }],
+      });
+      expect(outcome).toMatchObject({
+        status: "faulted",
+        error: { message: expect.stringContaining(error) },
+      });
+      expect(await owner.view()).toEqual(before);
+    }
   } finally {
     await owner.harness.close(context);
   }
@@ -516,7 +532,7 @@ test.each([false, true])(
     const owner = await fixture();
     try {
       const [base, consumer] = await seed(owner);
-      await owner.run({
+      await owner.publish({
         kind: "notes",
         notes: [],
         edits: [
@@ -528,35 +544,31 @@ test.each([false, true])(
         ],
       });
       const notes = (await owner.view()).notes;
-      expect(
-        (
-          await owner.run({
-            kind: "verification",
-            checks: [
-              checked(notes[0]!, "Different supporting theorem"),
-              {
-                noteId: consumer!.id,
-                source: pass,
-                requirements: pass,
-                reconstruction: {
-                  ...pass,
-                  proof: "Proof of the old consumer statement",
-                },
-                ...(uncertain
-                  ? {
-                      correctness: {
-                        verdict: "INCONCLUSIVE" as const,
-                        report: "Unresolved",
-                        statement: consumer!.id,
-                        premises: [],
-                      },
-                    }
-                  : {}),
-              },
-            ],
-          })
-        ).status,
-      ).toBe("completed");
+      await owner.publish({
+        kind: "verification",
+        checks: [
+          checked(notes[0]!, "Different supporting theorem"),
+          {
+            noteId: consumer!.id,
+            source: pass,
+            requirements: pass,
+            reconstruction: {
+              ...pass,
+              proof: "Proof of the old consumer statement",
+            },
+            ...(uncertain
+              ? {
+                  correctness: {
+                    verdict: "INCONCLUSIVE" as const,
+                    report: "Unresolved",
+                    statement: consumer!.id,
+                    premises: [],
+                  },
+                }
+              : {}),
+          },
+        ],
+      });
       let current = (await owner.view()).notes[1]!;
       expect(current.checks.correctness?.verdict).toBe(
         uncertain ? "INCONCLUSIVE" : undefined,
@@ -564,24 +576,20 @@ test.each([false, true])(
       expect(current.checks.source).toBeUndefined();
       expect(current.checks.requirements).toBeUndefined();
       expect(current.checks.reconstruction).toBeUndefined();
-      expect(
-        (
-          await owner.run({
-            kind: "verification",
-            checks: [
-              {
-                noteId: consumer!.id,
-                correctness: {
-                  ...pass,
-                  statement: "A different consumer statement",
-                  premises: [],
-                },
-                source: pass,
-              },
-            ],
-          })
-        ).status,
-      ).toBe("completed");
+      await owner.publish({
+        kind: "verification",
+        checks: [
+          {
+            noteId: consumer!.id,
+            correctness: {
+              ...pass,
+              statement: "A different consumer statement",
+              premises: [],
+            },
+            source: pass,
+          },
+        ],
+      });
       current = (await owner.view()).notes[1]!;
       expect(current.verified).toBe(true);
       expect(current.accepted).toBe(false);
@@ -594,7 +602,7 @@ test.each([false, true])(
 test("retirement hides direct work while existing consumers can finish verification", async () => {
   const owner = await fixture();
   try {
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [
         { id: "n1", ...content("Supporting lemma"), support: [] },
@@ -602,7 +610,7 @@ test("retirement hides direct work while existing consumers can finish verificat
       ],
     });
     const [base, consumer] = (await owner.view()).notes;
-    await owner.run({
+    await owner.publish({
       kind: "verification",
       checks: [base!, consumer!].map((note) => ({
         noteId: note.id,
@@ -610,7 +618,7 @@ test("retirement hides direct work while existing consumers can finish verificat
         source: pass,
       })),
     });
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
@@ -621,11 +629,18 @@ test("retirement hides direct work while existing consumers can finish verificat
         },
       ],
     });
-    await owner.run({
+    await owner.publish({
       kind: "verification",
       checks: [{ noteId: consumer!.id, requirements: pass }],
     });
     const notes = (await owner.view()).notes;
+    expect(notes[0]).toMatchObject({
+      id: base!.id,
+      text: base!.text,
+      retired: true,
+      dead: false,
+    });
+    expect(stagePending(notes[0]!, "reconstruction")).toBe(true);
     expect(() =>
       validatePlan(
         {
@@ -646,20 +661,16 @@ test("retirement hides direct work while existing consumers can finish verificat
         notes,
       )("reconstruction").map((note) => note.id),
     ).toEqual([base!.id, consumer!.id]);
-    expect(
-      (
-        await owner.run({
-          kind: "verification",
-          checks: [base!, consumer!].map((note) => ({
-            noteId: note.id,
-            reconstruction: {
-              ...pass,
-              proof: `Independent proof of ${note.id}`,
-            },
-          })),
-        })
-      ).status,
-    ).toBe("completed");
+    await owner.publish({
+      kind: "verification",
+      checks: [base!, consumer!].map((note) => ({
+        noteId: note.id,
+        reconstruction: {
+          ...pass,
+          proof: `Independent proof of ${note.id}`,
+        },
+      })),
+    });
     expect((await owner.view()).notes[1]!.accepted).toBe(true);
   } finally {
     await owner.harness.close(context);
@@ -670,7 +681,7 @@ test("a coherent changed-claim batch installs its newly checked consumers after 
   const owner = await fixture();
   try {
     const [base] = await seed(owner);
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
@@ -678,39 +689,29 @@ test("a coherent changed-claim batch installs its newly checked consumers after 
       ],
     });
     const before = (await owner.view()).notes;
-    expect(
-      (
-        await owner.run({
-          kind: "verification",
-          checks: [
-            checked(before[0]!, "Repaired theorem"),
-            checked(before[1]!),
-          ],
-        })
-      ).status,
-    ).toBe("completed");
+    await owner.publish({
+      kind: "verification",
+      checks: [checked(before[0]!, "Repaired theorem"), checked(before[1]!)],
+    });
     expect((await owner.view()).notes[1]!.accepted).toBe(true);
     const stable = await owner.view();
-    expect(
-      (
-        await owner.run({
-          kind: "verification",
-          checks: [
-            {
-              noteId: base!.id,
-              source: {
-                ...pass,
-                premises: ["A different premise"],
-                passages: [],
-                kind: "codex-report",
-                operationId: "wrong",
-                reportedAt: "now",
-              },
-            },
-          ],
-        })
-      ).status,
-    ).toBe("faulted");
+    const rejected = await owner.run({
+      kind: "verification",
+      checks: [
+        {
+          noteId: base!.id,
+          source: {
+            ...pass,
+            premises: ["A different premise"],
+            passages: [],
+            kind: "codex-report",
+            operationId: "wrong",
+            reportedAt: "now",
+          },
+        },
+      ],
+    });
+    expect(rejected.status).toBe("faulted");
     expect(await owner.view()).toEqual(stable);
   } finally {
     await owner.harness.close(context);
@@ -721,7 +722,7 @@ test("an ignored inconclusive extraction cannot erase a consumer failure", async
   const owner = await fixture();
   try {
     const [base, consumer] = await seed(owner);
-    await owner.run({
+    await owner.publish({
       kind: "verification",
       checks: [
         {
@@ -738,25 +739,21 @@ test("an ignored inconclusive extraction cannot erase a consumer failure", async
     expect((await owner.view()).notes[1]!.checks.correctness?.verdict).toBe(
       "FAIL",
     );
-    expect(
-      (
-        await owner.run({
-          kind: "verification",
-          checks: [
-            {
-              noteId: base!.id,
-              correctness: {
-                verdict: "INCONCLUSIVE",
-                report: "Uncertain alternate extraction",
-                statement: "A different claim",
-                premises: [],
-              },
-            },
-            checked(consumer!),
-          ],
-        })
-      ).status,
-    ).toBe("completed");
+    await owner.publish({
+      kind: "verification",
+      checks: [
+        {
+          noteId: base!.id,
+          correctness: {
+            verdict: "INCONCLUSIVE",
+            report: "Uncertain alternate extraction",
+            statement: "A different claim",
+            premises: [],
+          },
+        },
+        checked(consumer!),
+      ],
+    });
     const current = (await owner.view()).notes;
     expect(current[0]!.checks.correctness?.statement).toBe(base!.id);
     expect(current[1]!.checks.correctness?.verdict).toBe("FAIL");
@@ -794,7 +791,7 @@ test("current stage checks retain dominant evidence and workers keep their resul
   }
 });
 
-test("private merging preserves each new note's candidate flag without granting evidence", async () => {
+test("candidate flags survive private merging and edits without granting evidence", async () => {
   const owner = await fixture();
   try {
     const merged = mergeExploration([
@@ -811,9 +808,7 @@ test("private merging preserves each new note's candidate flag without granting 
       },
       { notes: [{ id: "n3", ...content("Later observation"), support: [] }] },
     ]);
-    expect((await owner.run({ kind: "notes", ...merged })).status).toBe(
-      "completed",
-    );
+    await owner.publish({ kind: "notes", ...merged });
     const notes = (await owner.view()).notes;
     expect(notes.map((note) => note.candidate)).toEqual([true, false, false]);
     for (const note of notes) {
@@ -821,39 +816,25 @@ test("private merging preserves each new note's candidate flag without granting 
       expect(note.verified).toBe(false);
       expect(note.accepted).toBe(false);
     }
-  } finally {
-    await owner.harness.close(context);
-  }
-});
-
-test("unchecked note edits and explicit candidate edits do not manufacture evidence", async () => {
-  const owner = await fixture();
-  try {
-    await owner.run({
+    const observation = notes[1]!;
+    await owner.publish({
       kind: "notes",
-      notes: [{ id: "n1", ...content("Unchecked argument"), support: [] }],
+      notes: [],
+      edits: [
+        {
+          id: observation.id,
+          revision: observation.revision,
+          text: "New unchecked argument",
+          candidate: true,
+        },
+      ],
     });
-    const note = (await owner.view()).notes[0]!;
-    expect(
-      (
-        await owner.run({
-          kind: "notes",
-          notes: [],
-          edits: [
-            {
-              id: note.id,
-              revision: note.revision,
-              text: "New unchecked argument",
-              candidate: true,
-            },
-          ],
-        })
-      ).status,
-    ).toBe("completed");
-    const edited = (await owner.view()).notes[0]!;
-    expect(edited.candidate).toBe(true);
-    expect(edited.accepted).toBe(false);
-    expect(edited.checks).toEqual({});
+    expect((await owner.view()).notes[1]).toMatchObject({
+      candidate: true,
+      accepted: false,
+      verified: false,
+      checks: {},
+    });
   } finally {
     await owner.harness.close(context);
   }
@@ -862,7 +843,7 @@ test("unchecked note edits and explicit candidate edits do not manufacture evide
 test("source approval cannot bind premises from an ignored correctness extraction", async () => {
   const owner = await fixture();
   try {
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [
         {
@@ -874,7 +855,7 @@ test("source approval cannot bind premises from an ignored correctness extractio
       ],
     });
     const note = (await owner.view()).notes[0]!;
-    await owner.run({
+    await owner.publish({
       kind: "verification",
       checks: [
         {
@@ -932,15 +913,11 @@ test.each([false, true])(
         { id: base!.id, revision: base!.revision, support: [consumer!.id] },
         { id: consumer!.id, revision: consumer!.revision, support: [] },
       ];
-      expect(
-        (
-          await owner.run({
-            kind: "notes",
-            notes: [],
-            edits: reverse ? edits.reverse() : edits,
-          })
-        ).status,
-      ).toBe("completed");
+      await owner.publish({
+        kind: "notes",
+        notes: [],
+        edits: reverse ? edits.reverse() : edits,
+      });
       const current = (await owner.view()).notes;
       expect(current[0]!.support).toEqual([consumer!.id]);
       expect(current[1]!.support).toEqual([]);
@@ -956,7 +933,7 @@ test.each([false, true])(
 test("new relevant quotations reopen source checks but fresh receipt IDs do not", async () => {
   const owner = await fixture();
   try {
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [
         {
@@ -972,7 +949,7 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
       verdict: "INCONCLUSIVE" as const,
       report: "Need a source for P",
     };
-    await owner.run({
+    await owner.publish({
       kind: "verification",
       checks: [
         {
@@ -984,12 +961,12 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
     });
     expect(stagePending((await owner.view()).notes[0]!, "source")).toBe(false);
     const addEvidence = async (premise: string, quote: string) => {
-      await owner.run({
+      await owner.publish({
         kind: "notes",
         notes: [{ id: "n1", ...content("Source note"), support: [] }],
       });
       const note = (await owner.view()).notes.at(-1)!;
-      await owner.run({
+      await owner.publish({
         kind: "verification",
         checks: [
           {
@@ -1017,7 +994,7 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
     };
     await addEvidence("P", "P holds by the source theorem.");
     expect(stagePending((await owner.view()).notes[0]!, "source")).toBe(true);
-    await owner.run({
+    await owner.publish({
       kind: "verification",
       checks: [
         {
@@ -1034,7 +1011,7 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
     });
     expect(stagePending((await owner.view()).notes[0]!, "source")).toBe(false);
     const evidenceNote = (await owner.view()).notes.at(-1)!;
-    await owner.run({
+    await owner.publish({
       kind: "notes",
       notes: [],
       edits: [
@@ -1065,7 +1042,7 @@ test.each(["conflict", "batch", "identical", "replaced", "activated"])(
   async (scenario) => {
     const owner = await fixture();
     try {
-      await owner.run({
+      await owner.publish({
         kind: "notes",
         notes: [
           { id: "n1", ...content("First source"), support: [] },
@@ -1094,20 +1071,14 @@ test.each(["conflict", "batch", "identical", "replaced", "activated"])(
         },
       });
       if (scenario !== "batch")
-        expect(
-          (
-            await owner.run({
-              kind: "verification",
-              checks: [check(a!, "first")],
-            })
-          ).status,
-        ).toBe("completed");
+        await owner.publish({
+          kind: "verification",
+          checks: [check(a!, "first")],
+        });
       if (scenario === "activated") {
         const dormant = check(b!, "second");
         dormant.correctness!.verdict = "INCONCLUSIVE";
-        expect(
-          (await owner.run({ kind: "verification", checks: [dormant] })).status,
-        ).toBe("completed");
+        await owner.publish({ kind: "verification", checks: [dormant] });
       }
       const before = await owner.view();
       const checks: Check[] = [
@@ -1141,7 +1112,7 @@ test.each([false, true])(
   async (shared) => {
     const owner = await fixture();
     try {
-      await owner.run({
+      await owner.publish({
         kind: "notes",
         notes: [
           { id: "n1", ...content("Uses X"), support: [] },
@@ -1164,31 +1135,27 @@ test.each([false, true])(
         premises: ["X"],
         passages: [passage],
       };
-      expect(
-        (
-          await owner.run({
-            kind: "verification",
-            checks: [
-              {
-                noteId: a!.id,
-                correctness: { ...pass, statement: "A", premises: ["X"] },
-                source,
-              },
-              {
-                noteId: b!.id,
-                correctness: { ...pass, statement: "B", premises: ["X", "Y"] },
-                source: {
-                  ...source,
-                  verdict: "INCONCLUSIVE",
-                  report: "Y is missing",
-                  premises: ["X", "Y"],
-                  passages: shared ? [passage] : [],
-                },
-              },
-            ],
-          })
-        ).status,
-      ).toBe("completed");
+      await owner.publish({
+        kind: "verification",
+        checks: [
+          {
+            noteId: a!.id,
+            correctness: { ...pass, statement: "A", premises: ["X"] },
+            source,
+          },
+          {
+            noteId: b!.id,
+            correctness: { ...pass, statement: "B", premises: ["X", "Y"] },
+            source: {
+              ...source,
+              verdict: "INCONCLUSIVE",
+              report: "Y is missing",
+              premises: ["X", "Y"],
+              passages: shared ? [passage] : [],
+            },
+          },
+        ],
+      });
       const current = (await owner.view()).notes[1]!;
       expect(current.sourceChanged).toBe(!shared);
       expect(stagePending(current, "source")).toBe(!shared);
@@ -1201,3 +1168,82 @@ test.each([false, true])(
     }
   },
 );
+
+test("Pi snapshots survive reopen and stale verification cannot restore current checks or summaries", async () => {
+  const directory = await temporaryDirectory("pi-notebook-");
+  const start = async () =>
+    fixture(
+      await openNodeJsonlStorage(directory, context, {
+        fsync: true,
+      }),
+    );
+  let owner = await start();
+  try {
+    await owner.command({
+      kind: "submit",
+      id: "seed",
+      notes: [
+        { id: "n1", ...content("Original"), support: [], candidate: true },
+      ],
+    });
+    const frozenAt = await owner.marker();
+    const frozen = await owner.snapshot(frozenAt);
+    await owner.command({
+      kind: "submit",
+      id: "edit",
+      notes: [],
+      edits: [
+        {
+          id: "input/seed/n1",
+          revision: frozen.notes[0]!.revision,
+          ...content("Revised"),
+        },
+      ],
+    });
+    const worker = await owner.run(
+      {
+        kind: "verification",
+        checks: [
+          {
+            noteId: "input/seed/n1",
+            correction: {
+              revision: frozen.notes[0]!.revision,
+              summary: "Stale summary",
+            },
+            correctness: { ...pass, statement: "Original", premises: [] },
+            requirements: pass,
+          },
+        ],
+      },
+      frozen,
+    );
+    expect(worker).toMatchObject({
+      status: "faulted",
+      error: { message: expect.stringContaining("Stale mathematical input") },
+    });
+    // Cross the notebook catalog's 31-delta checkpoint before reopening.
+    for (let index = 0; index < 32; index++)
+      await owner.command({
+        kind: "guide",
+        id: `g-${index}`,
+        text: `Guidance ${index}`,
+      });
+    const current = await owner.view();
+    expect(current.notes[0]).toMatchObject({
+      ...content("Revised"),
+      checks: {},
+      verified: false,
+      accepted: false,
+    });
+    expect(current.notes[0]!.revision).toBeGreaterThan(
+      frozen.notes[0]!.revision,
+    );
+    expect(current.guidance).toHaveLength(32);
+    await owner.harness.close(context);
+    owner = await start();
+    expect(await owner.snapshot(frozenAt)).toEqual(frozen);
+    expect(await owner.view()).toEqual(current);
+  } finally {
+    await owner.harness.close(context);
+  }
+});

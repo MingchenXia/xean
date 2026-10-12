@@ -363,7 +363,6 @@ Install development dependencies to run checks and create a source archive:
 ```sh
 bun install --frozen-lockfile --ignore-scripts
 bun run check
-bun run check:distribution
 bun run pack
 ```
 
@@ -375,14 +374,27 @@ Use the golden problems after those checks pass.
 During development, run a selected test file with
 `bun scripts/dev.ts test ./tests/apps.test.ts`. Use
 `bun run check ./tests/apps.test.ts` to include types and formatting. Keep the `./` prefix so Bun treats the argument as a file path.
-Run the full check and distribution checks when the change is ready for review.
+Run the full check and `pack` when the change is ready for release.
 
 `check` runs TypeScript, formatting, and scripted tests.
 `check:distribution` checks an unpacked source archive with production dependencies,
 including the Pi and role contract tests, model-free workflow, CLI inspection
 and export, and licenses.
 `pack` runs the same distribution check and writes the source archive under
-`dist/`.
+`dist/`. Use `check:distribution` when you need that check without retaining an
+archive. Running both commands on unchanged code repeats the packaged checks.
+
+Tests cover mathematical validation, notebook publication, role protocols,
+workflow recovery, provider adapters, and CLI processes. Pure validation uses
+direct calls. Role tests use Pi's in-memory storage unless they need persistence.
+Reopening and crash tests use durable storage, and process tests retain actual
+subprocesses. Scripted model replies exercise protocol behavior. Research quality
+requires separate model experiments.
+
+Keep each test tied to a failure it can detect. Assert observable results and
+preserved data instead of exact prompt sentences. Share repeated setup while
+keeping scenario actions and expectations in the test. Preserve distinct
+publication, cancellation, and recovery boundaries when consolidating cases.
 
 Compatibility checks reopened representative paused and completed databases
 from 3.2.0 and the previous 3.3.0 candidate on Bun 1.4.2 with the updated Pi

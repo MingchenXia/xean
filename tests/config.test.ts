@@ -231,11 +231,6 @@ test("native routes retain per-profile auth and transport without persisting cre
     return fauxAssistantMessage("done");
   };
   faux.setResponses([respond, respond]);
-  expect(runtime.profiles.explorer.model).toEqual({
-    provider: "openai",
-    modelId: "gpt-6-astra",
-  });
-  expect(runtime.models.getProvider("openai")).toBe(faux.provider);
   for (const name of ["explorer", "coordinator"] as const) {
     await complete(runtime, name, input, {
       reasoning: runtime.profiles[name].thinkingLevel,

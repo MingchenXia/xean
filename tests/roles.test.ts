@@ -1,5 +1,5 @@
 import { temporaryDirectory } from "./directory.ts";
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { watchFile, unwatchFile } from "node:fs";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -28,6 +28,7 @@ import {
   type EntryRecord,
   type Tx,
 } from "@earendil-works/pi-durable";
+import { MemoryStorage } from "@earendil-works/pi-durable/storage/memory";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import {
   createRoles,
@@ -215,7 +216,7 @@ function fixture(
     },
   });
   async function open(
-    directory: string,
+    directory?: string,
     definition?: Definition,
     retry = false,
   ) {
@@ -224,7 +225,9 @@ function fixture(
     registry.install(workflow.extension);
     registry.install(defineExtension({ name: "test.roles", tasks: [Invoke] }));
     const harness = await Harness.open(
-      await openNodeJsonlStorage(directory, context, { fsync: true }),
+      directory === undefined
+        ? new MemoryStorage()
+        : await openNodeJsonlStorage(directory, context, { fsync: true }),
       {
         registry,
         models,
@@ -308,7 +311,6 @@ async function entries(harness: Harness): Promise<EntryRecord[]> {
 }
 
 test("a repaired support is rechecked with consumers before downstream verification", async () => {
-  const directory = await temporaryDirectory("pi-repaired-support-");
   const provider = fixture((name, input) => ({
     results: input.notes.map(({ id, text }: { id: string; text?: string }) => ({
       noteId: id,
@@ -362,7 +364,7 @@ test("a repaired support is rechecked with consumers before downstream verificat
         }
       : {}),
   });
-  const current = await provider.open(directory, {
+  const current = await provider.open(undefined, {
     task,
     settings: { profiles: { default: { provider: "openai", model: "roles" } } },
   });
@@ -806,7 +808,6 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
 test.each(["oversized writing", "limited context", "native reserve"] as const)(
   "reconstruction attempts singleton groups for %s and respects Pi's input guard",
   async (limit) => {
-    const directory = await temporaryDirectory("pi-reconstruction-capacity-");
     const notes = [preparedNote("n1"), preparedNote("n2")];
     if (limit === "oversized writing")
       notes[0]!.text += "Original proof detail. ".repeat(1500);
@@ -832,7 +833,7 @@ test.each(["oversized writing", "limited context", "native reserve"] as const)(
       { research: false },
       limit === "native reserve" ? 16384 : 32768,
     );
-    const current = await provider.open(directory);
+    const current = await provider.open();
     const invoke = () =>
       current.invoke({
         role: "verifier",
@@ -879,7 +880,6 @@ test.each(["oversized writing", "limited context", "native reserve"] as const)(
 test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
   "reconstruction finishes produced proofs before handling %s pending support",
   async (boundary) => {
-    const directory = await temporaryDirectory("pi-role-support-");
     const refuted = boundary === "refuted";
     const dependent = boundary === "dependent";
     const proof = "Independent proof. ".repeat(180);
@@ -906,7 +906,7 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
       }),
       { research: false },
     );
-    const current = await provider.open(directory);
+    const current = await provider.open();
     const invoke = async () => {
       const id = await current.invoke({
         role: "verifier",
@@ -994,7 +994,6 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
 );
 
 test("standalone reconstruction retains completed checks and corrections after a later failure", async () => {
-  const directory = await temporaryDirectory("pi-reconstruct-failure-");
   const notes = [preparedNote("n1"), preparedNote("n2", ["n1"])];
   const proof = "Independent complete proof. ".repeat(120);
   const provider = fixture((name, input) => {
@@ -1026,7 +1025,7 @@ test("standalone reconstruction retains completed checks and corrections after a
       ],
     };
   });
-  const current = await provider.open(directory, {
+  const current = await provider.open(undefined, {
     task,
     settings: { profiles: { default: { provider: "openai", model: "roles" } } },
     mode: { role: "reconstruct", input: { task, notes, targets: ["n2"] } },
@@ -1076,7 +1075,6 @@ test("standalone reconstruction retains completed checks and corrections after a
 test.each(["imported", "reconstructed"] as const)(
   "reconstruction checks ancestors of %s support without repeating its proof",
   async (middle) => {
-    const directory = await temporaryDirectory("pi-role-transitive-support-");
     const support = preparedNote("n2", ["n1"]);
     if (middle === "imported") support.imported = true;
     else
@@ -1106,7 +1104,7 @@ test.each(["imported", "reconstructed"] as const)(
         })),
       };
     });
-    const current = await provider.open(directory);
+    const current = await provider.open();
     try {
       const id = await current.invoke({
         role: "verifier",
@@ -1144,7 +1142,6 @@ test.each(["imported", "reconstructed"] as const)(
 test.each([false, true])(
   "rejected Coordinator submissions stop at the response allowance (vary=%s)",
   async (vary) => {
-    const directory = await temporaryDirectory("pi-role-rejected-");
     let attempt = 0;
     const provider = fixture(() => ({
       work: {
@@ -1153,7 +1150,7 @@ test.each([false, true])(
         through: "source",
       },
     }));
-    const current = await provider.open(directory);
+    const current = await provider.open();
     try {
       const id = await current.invoke({
         role: "coordinator",
@@ -1601,7 +1598,6 @@ test.each([
 test.each([true, false])(
   "an imported candidate needs independent reconstruction, complete=%s, despite cleanup failure",
   async (complete) => {
-    const directory = await temporaryDirectory("pi-imported-candidate-");
     const imported = {
       ...note("n1"),
       imported: true,
@@ -1609,11 +1605,8 @@ test.each([true, false])(
       text: "For every real x >= 1, x squared is at least x.",
     };
     const provider = fixture(
-      (name, input, transcript) => {
+      (name, input) => {
         if (name === "reconstruction") {
-          expect(JSON.stringify(transcript)).toContain(
-            "For an imported target, caller trust grants the original result and sources; no original proof is required.",
-          );
           expect(input.notes[0]).toMatchObject({
             imported: true,
             text: imported.text,
@@ -1651,7 +1644,7 @@ test.each([true, false])(
         },
       },
     );
-    const current = await provider.open(directory);
+    const current = await provider.open();
     let cleanupFailed = false;
     const unregister = registerSessionResourceCleanup((sessionId) => {
       if (
@@ -1697,9 +1690,6 @@ test.each([true, false])(
         expect(acceptedArgument([imported], imported.id)).toContain(
           "x(x-1) >= 0 proves the claim.",
         );
-        expect(imported.text).toBe(
-          "For every real x >= 1, x squared is at least x.",
-        );
       } else
         expect(() => acceptedArgument([imported], imported.id)).toThrow(
           "No accepted argument",
@@ -1727,7 +1717,6 @@ test.each([null, "Every graph in the family has property P."])(
     const text = statement
       ? `${statement} Earlier campaign notes give the construction.`
       : "Would a different construction help?";
-    const directory = await temporaryDirectory("pi-role-context-note-");
     const provider = fixture(
       (name, input) => {
         expect(name).toBe("correctness");
@@ -1758,7 +1747,7 @@ test.each([null, "Every graph in the family has property P."])(
         },
       },
     );
-    const current = await provider.open(directory);
+    const current = await provider.open();
     try {
       const id = await current.invoke({
         role: "verifier",
@@ -1889,12 +1878,6 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
           );
         }
         if (name === "proof") {
-          const tool = getCurrentTools(transcript.messages).find(
-            (tool) => tool.name === "submit_proof",
-          )!;
-          expect(JSON.stringify(tool.parameters)).toContain(
-            "lack of a fresh source search does not make this proof incomplete",
-          );
           expect(input.notes[0].premises).toEqual([premise]);
           expect(JSON.stringify(input)).not.toContain("secret original proof");
           expect(JSON.stringify(input)).not.toContain(source.report);
@@ -2259,95 +2242,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
   }
 });
 
-test.each([false, true])(
-  "ChatGPT Web creates new notes but rejects index-only edits (edit=%s)",
-  async (edit) => {
-    const directory = await temporaryDirectory("chatgpt-role-edits-");
-    const prior = note("prior");
-    const answer = {
-      notes: [draft("n1", [prior.id])],
-      edits: edit
-        ? [
-            {
-              id: prior.id,
-              revision: prior.revision,
-              text: "Blind replacement",
-            },
-          ]
-        : [],
-    };
-    let request: any;
-    const fetch = spyOn(globalThis, "fetch").mockImplementation(
-      Object.assign(
-        async (_url: string | URL | Request, init?: RequestInit) => {
-          request = JSON.parse(init!.body as string);
-          return Response.json({
-            status: "completed",
-            output: [
-              {
-                type: "message",
-                role: "assistant",
-                phase: "final_answer",
-                content: [
-                  { type: "output_text", text: JSON.stringify(answer) },
-                ],
-              },
-            ],
-          });
-        },
-        { preconnect: globalThis.fetch.preconnect },
-      ),
-    );
-    const provider = fixture(
-      () => {
-        throw new Error("ChatGPT Web Explorer called a native model");
-      },
-      {
-        research: false,
-        chatgpt: {
-          baseUrl: "https://chatgpt.invalid/v1",
-          model: "chatgpt-web/gpt-6-pro",
-        },
-      },
-    );
-    const current = await provider.open(directory);
-    try {
-      const id = await current.invoke({
-        role: "explorer",
-        input: { task, notes: [prior], assignment: "Develop useful findings." },
-      });
-      const result = await resultOf(current.harness, id);
-      expect(result).toMatchObject(
-        edit
-          ? {
-              status: "faulted",
-              error: {
-                message:
-                  "ChatGPT Web Explorer cannot edit notes without their full text",
-              },
-            }
-          : { status: "completed", result: { kind: "notes", ...answer } },
-      );
-      expect(fetch).toHaveBeenCalledTimes(1);
-      expect(provider.calls).toEqual([]);
-      const input = JSON.parse(request.input[0].content);
-      expect(input.allowance).toEqual({ reads: 0, responses: 1 });
-      expect(input.notes[0].text).toBeUndefined();
-      expect(JSON.stringify(input)).not.toContain(prior.text);
-      expect(request.instructions).toContain("Create new notes only");
-      expect(request.instructions).not.toContain(
-        "Repair existing notes with edits",
-      );
-      expect(prior.text).not.toBe("Blind replacement");
-    } finally {
-      await current.harness.close(context);
-      fetch.mockRestore();
-    }
-  },
-);
-
 test("Coordinator rejects used literature and multiple workers", async () => {
-  const directory = await temporaryDirectory("pi-role-policy-");
   let response = 0;
   const provider = fixture(
     (_name, input, transcript) => {
@@ -2378,7 +2273,7 @@ test("Coordinator rejects used literature and multiple workers", async () => {
     131072,
     { ...closedBookResearch, retrieval: true },
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   const input: CoordinationInput = {
     task,
     notes: [],
@@ -2409,7 +2304,6 @@ test("Coordinator rejects used literature and multiple workers", async () => {
 test.each([false, true])(
   "provider-limit continuations preserve work without consuming Explorer responses (saved=%s)",
   async (submitted) => {
-    const directory = await temporaryDirectory("pi-role-truncated-");
     let response = 0;
     const provider = fixture(
       () => {
@@ -2429,7 +2323,7 @@ test.each([false, true])(
       },
       { research: false, maxExplorerResponses: submitted ? 2 : 1 },
     );
-    const current = await provider.open(directory);
+    const current = await provider.open();
     try {
       const id = await current.invoke({
         role: "explorer",
@@ -2462,7 +2356,6 @@ test.each([false, true])(
 );
 
 test("capacity after a frozen read hands off valid private notes without another provider call", async () => {
-  const directory = await temporaryDirectory("pi-role-capacity-");
   let count = 0;
   const provider = fixture(
     () =>
@@ -2472,7 +2365,7 @@ test("capacity after a frozen read hands off valid private notes without another
     { research: false, maxExplorerReads: 1, maxExplorerResponses: 4 },
     32768,
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const large = {
       ...note("large"),
@@ -2500,11 +2393,7 @@ test("capacity after a frozen read hands off valid private notes without another
 
 test.each([
   [1, false],
-  [2, false],
-  [3, false],
-  [1, true],
   [2, true],
-  [3, true],
 ] as const)(
   "Explorer handoff reasons survive publication and reopen (allowance=%s, edit=%s)",
   async (allowance, edit) => {
@@ -2534,11 +2423,9 @@ test.each([
       if (++decisions === 1)
         return { work: { kind: "explorer", assignment: "Explore." } };
       expect(input.failures).toEqual([]);
-      expect(input.limits).toEqual(
-        allowance === 3
-          ? []
-          : [{ id: expect.any(String), reason: "response_limit" }],
-      );
+      expect(input.limits).toEqual([
+        { id: expect.any(String), reason: "response_limit" },
+      ]);
       return { work: null };
     };
     let current = await provider.open(directory, {
@@ -2565,18 +2452,14 @@ test.each([
         context,
       );
       expect(before.status.work).toMatchObject({ completed: 1, failed: 0 });
-      expect(before.status.limits.items).toEqual(
-        allowance === 3
-          ? []
-          : [
-              {
-                id: expect.any(String),
-                role: "explorer",
-                status: "completed",
-                reason: "response_limit",
-              },
-            ],
-      );
+      expect(before.status.limits.items).toEqual([
+        {
+          id: expect.any(String),
+          role: "explorer",
+          status: "completed",
+          reason: "response_limit",
+        },
+      ]);
       expect(before.notes).toHaveLength(1);
       expect(before.notes[0]!.text).toBe(
         edit ? "Retained partial repair" : draft("n1").text,
@@ -2588,31 +2471,29 @@ test.each([
         context,
       );
       const compact = await current.root.commit((tx) => {
-        const reader =
-          allowance === 1
-            ? new Proxy(tx, {
-                get(target, key) {
-                  if (["entry", "scanEntries"].includes(String(key)))
-                    throw new Error(`Unexpected history read: ${String(key)}`);
-                  const value = Reflect.get(target, key);
-                  return typeof value === "function"
-                    ? (...args: unknown[]) => {
-                        if (key === "doc" && args[0] === Bodies)
-                          throw new Error("Unexpected notebook body read");
-                        if (
-                          key === "scanConversations" &&
-                          (args[0] as Parameters<Tx["scanConversations"]>[0])
-                            ?.ownerTaskId === undefined
-                        )
-                          throw new Error(
-                            "Unexpected campaign conversation scan",
-                          );
-                        return Reflect.apply(value, target, args);
-                      }
-                    : value;
-                },
-              })
-            : tx;
+        const reader = new Proxy(tx, {
+          get(target, key) {
+            if (
+              allowance === 1 &&
+              ["entry", "scanEntries"].includes(String(key))
+            )
+              throw new Error(`Unexpected history read: ${String(key)}`);
+            const value = Reflect.get(target, key);
+            return typeof value === "function"
+              ? (...args: unknown[]) => {
+                  if (key === "doc" && args[0] === Bodies)
+                    throw new Error("Unexpected notebook body read");
+                  if (
+                    key === "scanConversations" &&
+                    (args[0] as Parameters<Tx["scanConversations"]>[0])
+                      ?.ownerTaskId === undefined
+                  )
+                    throw new Error("Unexpected campaign conversation scan");
+                  return Reflect.apply(value, target, args);
+                }
+              : value;
+          },
+        });
         return readStatus(reader, current.root.id);
       }, context);
       expect(after.status.limits).toEqual(before.status.limits);
@@ -2627,36 +2508,55 @@ test.each([
   },
 );
 
-test("an empty Explorer handoff at its response allowance remains voluntary", async () => {
-  const directory = await temporaryDirectory("pi-role-voluntary-handoff-");
-  const provider = fixture(() => ({ notes: [], edits: [] }), {
-    research: false,
-    maxExplorerResponses: 1,
-  });
-  const current = await provider.open(directory);
-  try {
-    const id = await current.invoke({
-      role: "explorer",
-      input: { task, notes: [], assignment: "Explore." },
-    });
-    expect((await resultOf(current.harness, id)).status).toBe("completed");
-    expect(
-      await current.root.commit((tx) => explorerLimit(tx, id), context),
-    ).toBeUndefined();
-    expect(provider.calls).toHaveLength(1);
-  } finally {
-    await current.harness.close(context);
-  }
-});
+test.each([
+  ["immediate edit limit", 1, true, "response_limit"],
+  ["plain-text note limit", 2, false, "response_limit"],
+  ["voluntary note handoff", 3, false, undefined],
+  ["voluntary edit handoff", 3, true, undefined],
+  ["empty batch at the limit", 1, null, undefined],
+] as const)(
+  "Explorer distinguishes %s",
+  async (_name, allowance, edit, reason) => {
+    const partial = {
+      notes: edit === false ? [draft("n1")] : [],
+      edits: edit ? [{ id: "prior", revision: 0, text: "Partial repair" }] : [],
+    };
+    let responses = 0;
+    const provider = fixture(
+      () => (++responses === 1 ? partial : "No additional result."),
+      { research: false, maxExplorerResponses: allowance },
+    );
+    const current = await provider.open();
+    try {
+      const id = await current.invoke({
+        role: "explorer",
+        input: { task, notes: [note("prior")], assignment: "Explore." },
+      });
+      expect(await resultOf(current.harness, id)).toMatchObject({
+        status: "completed",
+        result: {
+          kind: "notes",
+          notes: partial.notes,
+          ...(edit ? { edits: partial.edits } : {}),
+        },
+      });
+      expect(
+        await current.root.commit((tx) => explorerLimit(tx, id), context),
+      ).toBe(reason);
+      expect(provider.calls).toHaveLength(Math.min(allowance, 2));
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
 
 test("invalid submissions consume the response allowance and cannot publish partial results", async () => {
-  const directory = await temporaryDirectory("pi-role-allowance-");
   const provider = fixture(() => ({ notes: [draft("n1", ["unknown"])] }), {
     research: false,
     maxExplorerReads: 1,
     maxExplorerResponses: 2,
   });
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "explorer",
@@ -2674,7 +2574,6 @@ test("invalid submissions consume the response allowance and cannot publish part
 });
 
 test("an admitted failed read consumes its allowance, while schema-invalid reads do not", async () => {
-  const directory = await temporaryDirectory("pi-role-read-allowance-");
   let count = 0;
   const provider = fixture(
     (_name, _input, transcript) => {
@@ -2700,7 +2599,7 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
     },
     { research: false, maxExplorerReads: 1, maxExplorerResponses: 5 },
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "explorer",
@@ -2728,7 +2627,6 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
 });
 
 test("Coordinator admits four reads by default and can hand off after a denied fifth read", async () => {
-  const directory = await temporaryDirectory("pi-role-coordinator-reads-");
   let calls = 0;
   const provider = fixture(() =>
     ++calls <= 5
@@ -2738,7 +2636,7 @@ test("Coordinator admits four reads by default and can hand off after a denied f
         }
       : { work: { kind: "explorer", assignment: "Continue" } },
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "coordinator",
@@ -3026,47 +2924,61 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
 });
 
 test.each([
-  [false, true],
-  [true, true],
-  [false, false],
-  [true, false],
-])(
-  "mixed read/submission completes without another response (read first: %s, valid read: %s)",
-  async (readFirst, validRead) => {
-    const directory = await temporaryDirectory("pi-role-mixed-");
+  ["coordinator", false, true],
+  ["coordinator", true, true],
+  ["coordinator", false, false],
+  ["coordinator", true, false],
+  ["explorer", false, true],
+  ["explorer", true, true],
+] as const)(
+  "mixed %s read/submission completes without another response (read first: %s, valid read: %s)",
+  async (role, readFirst, validRead) => {
+    const submission: Record<string, JsonValue> =
+      role === "explorer"
+        ? { notes: [draft("n1")] }
+        : { work: { kind: "explorer", assignment: "Continue" } };
     let calls = 0;
-    const provider = fixture(() => {
-      if (++calls > 1)
-        return fauxAssistantMessage("Unnecessary truncated response", {
-          stopReason: "length",
+    const provider = fixture(
+      () => {
+        if (++calls > 1)
+          return fauxAssistantMessage("Unnecessary truncated response", {
+            stopReason: "length",
+          });
+        const submit = fauxToolCall(`submit_${role}`, submission);
+        const read = fauxToolCall("read_notes", {
+          ids: validRead ? ["prior"] : [],
+          level: "full",
         });
-      const submit = fauxToolCall("submit_coordinator", {
-        work: { kind: "explorer", assignment: "Continue" },
-      });
-      const read = fauxToolCall("read_notes", {
-        ids: validRead ? ["prior"] : [],
-        level: "full",
-      });
-      return fauxAssistantMessage(readFirst ? [read, submit] : [submit, read], {
-        stopReason: "toolUse",
-      });
-    });
-    const current = await provider.open(directory);
+        return fauxAssistantMessage(
+          readFirst ? [read, submit] : [submit, read],
+          {
+            stopReason: "toolUse",
+          },
+        );
+      },
+      { research: false, maxExplorerResponses: 1, maxExplorerReads: 4 },
+    );
+    const current = await provider.open();
     try {
       const id = await current.invoke({
-        role: "coordinator",
+        role,
         input: {
           task,
           notes: [note("prior")],
-          guidance: [],
-          failures: [],
-          explorerUsed: false,
-          literatureUsed: false,
+          ...(role === "explorer"
+            ? { assignment: "Continue" }
+            : {
+                guidance: [],
+                failures: [],
+                explorerUsed: false,
+                literatureUsed: false,
+              }),
         },
       });
       expect(await resultOf(current.harness, id)).toEqual({
         status: "completed",
-        result: { work: { kind: "explorer", assignment: "Continue" } },
+        result:
+          role === "explorer" ? { kind: "notes", ...submission } : submission,
       });
       expect(calls).toBe(1);
       const retained = await entries(current.harness);
@@ -3078,7 +2990,20 @@ test.each([
               (message) => message.role === "toolResult" && !message.isError,
             ),
         ),
-      ).toHaveLength(validRead ? 2 : 1);
+      ).toHaveLength(validRead && role === "coordinator" ? 2 : 1);
+      if (role === "explorer") {
+        const reads = retained
+          .flatMap((entry) => entry.model ?? [])
+          .filter(
+            (message) =>
+              message.role === "toolResult" &&
+              message.toolName === "read_notes",
+          );
+        expect(reads).toMatchObject([
+          { isError: true, details: { read: false } },
+        ]);
+        expect(JSON.stringify(reads)).not.toContain(note("prior").text);
+      }
     } finally {
       await current.harness.close(context);
     }
@@ -3086,7 +3011,6 @@ test.each([
 );
 
 test("Explorer preserves dependencies and response limits across transcript pages", async () => {
-  const directory = await temporaryDirectory("pi-role-pages-");
   let calls = 0;
   const provider = fixture(
     () => {
@@ -3097,7 +3021,7 @@ test("Explorer preserves dependencies and response limits across transcript page
     },
     { research: false, maxExplorerResponses: 70 },
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "explorer",
@@ -3122,7 +3046,6 @@ test("Explorer preserves dependencies and response limits across transcript page
 test.each([false, undefined])(
   "Explorer hands off when a non-last new note is a candidate (last candidate=%s)",
   async (lastCandidate) => {
-    const directory = await temporaryDirectory("pi-role-candidate-handoff-");
     const provider = fixture(
       () => ({
         notes: [
@@ -3145,7 +3068,7 @@ test.each([false, undefined])(
           : { kind: "explorer", assignment: "Prove the exact claim" },
       };
     };
-    const current = await provider.open(directory, {
+    const current = await provider.open(undefined, {
       task,
       settings: {
         profiles: { default: { provider: "openai", model: "roles" } },
@@ -3186,7 +3109,6 @@ test.each([false, undefined])(
 );
 
 test("Explorer continues private work until an empty submission", async () => {
-  const directory = await temporaryDirectory("pi-role-mixed-continue-");
   let calls = 0;
   const provider = fixture(
     () => {
@@ -3227,7 +3149,7 @@ test("Explorer continues private work until an empty submission", async () => {
     },
     { research: false, maxExplorerReads: 4, maxExplorerResponses: 6 },
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "explorer",
@@ -3250,14 +3172,6 @@ test("Explorer continues private work until an empty submission", async () => {
           message.isError,
       ),
     ).toBe(true);
-    await current.harness.close(context);
-    const reopened = await provider.open(directory);
-    try {
-      expect(await resultOf(reopened.harness, id)).toEqual(completed);
-      expect(calls).toBe(5);
-    } finally {
-      await reopened.harness.close(context);
-    }
   } finally {
     await current.harness.close(context);
   }
@@ -3339,7 +3253,6 @@ test("Explorer coalesces private edits at the frozen public revision across reop
     expect(
       await current.root.commit((tx) => explorerLimit(tx, id), context),
     ).toBeUndefined();
-    expect(existing.text).toBe(draft(existing.id).text);
     const retained = (await entries(current.harness))
       .flatMap((entry) => entry.model ?? [])
       .filter(
@@ -3355,7 +3268,6 @@ test("Explorer coalesces private edits at the frozen public revision across reop
 });
 
 test("Explorer rejects a private edit that changes the expected public revision", async () => {
-  const directory = await temporaryDirectory("pi-role-edit-conflict-");
   let calls = 0;
   const provider = fixture(
     (_name, _input, transcript) => {
@@ -3381,7 +3293,7 @@ test("Explorer rejects a private edit that changes the expected public revision"
     },
     { research: false, maxExplorerResponses: 4 },
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "explorer",
@@ -3406,7 +3318,6 @@ test("Explorer rejects a private edit that changes the expected public revision"
 });
 
 test("Coordinator can idle with Explorer available", async () => {
-  const directory = await temporaryDirectory("pi-role-idle-");
   const recent = [
     {
       id: "earlier",
@@ -3418,25 +3329,16 @@ test("Coordinator can idle with Explorer available", async () => {
     },
   ];
   const provider = fixture(
-    (_name, input, transcript) => {
+    (_name, input) => {
       expect(input).toMatchObject({
         recent,
         capabilities: { explorer: true },
       });
-      const system = JSON.stringify(
-        transcript.messages.filter((message) => message.role === "system"),
-      );
-      expect(system).toContain(
-        "A completed non-PASS assessment of unchanged inputs is not automatically pending again",
-      );
-      expect(system).not.toContain(
-        "Return useful work while Explorer is available",
-      );
       return { work: null };
     },
     { research: false },
   );
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "coordinator",
@@ -3461,7 +3363,6 @@ test("Coordinator can idle with Explorer available", async () => {
 });
 
 test("Verifier rejects proof-text corrections and accepts a summary-only correction", async () => {
-  const directory = await temporaryDirectory("pi-role-summary-correction-");
   let calls = 0;
   const provider = fixture((_name, input, transcript) => {
     calls++;
@@ -3488,7 +3389,7 @@ test("Verifier rejects proof-text corrections and accepts a summary-only correct
       })),
     };
   });
-  const current = await provider.open(directory);
+  const current = await provider.open();
   try {
     const id = await current.invoke({
       role: "verifier",

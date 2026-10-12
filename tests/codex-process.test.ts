@@ -3,13 +3,57 @@ import { expect, test } from "bun:test";
 import { access, chmod, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { inspect, open, readReport } from "../src/index.ts";
+import { RoleFailure } from "../src/roles/types.ts";
 import { CodexLog, CodexRequest, codexTranscript } from "../src/roles/codex.ts";
 import { context, settings, task } from "./fixture.ts";
+
+// Every fixture is an actual child process, including signal and overflow cases.
+async function codexFixture(
+  source: string,
+  mode: "research" | "worker" = "research",
+) {
+  const directory = await temporaryDirectory("codex-process-");
+  const command = join(directory, "codex-fixture");
+  await writeFile(command, `#!${process.execPath}\n${source}\n`);
+  await chmod(command, 0o700);
+  const path = join(directory, "campaign.sqlite");
+  const owner = await open(path, {
+    create: {
+      task,
+      settings: {
+        ...settings,
+        ...(mode === "worker"
+          ? { codex: { model: "fixture", command, workspace: directory } }
+          : { research: { model: "fixture", command } }),
+      },
+      mode:
+        mode === "worker"
+          ? { role: "codex", input: { assignment: "Fixture only", notes: [] } }
+          : { role: "review", input: { argument: "Fixture only" } },
+    },
+  });
+  return { directory, path, owner };
+}
+
+const reportOf = (owner: Awaited<ReturnType<typeof open>>) =>
+  owner.root.commit(
+    (tx) => readReport(tx, owner.root.id, { records: true }),
+    context,
+  );
+const review = {
+  verdict: "PASS",
+  report: "Checked",
+  premises: [],
+  passages: [],
+};
+const completed = { type: "turn.completed", usage: { output_tokens: 7 } };
+const jsonl = (events: unknown[]) =>
+  events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
 test.each(["\n", "\r\n"])(
   "Codex JSONL accepts blank lines and %j separators while retaining results and usage",
   (separator) => {
-    const value = { verdict: "PASS", report: "Checked" };
+    const value = review;
     const output = [
       "",
       JSON.stringify({ type: "item.completed", item: { type: "web_search" } }),
@@ -20,7 +64,7 @@ test.each(["\n", "\r\n"])(
         item: { type: "agent_message", text: JSON.stringify(value) },
       }),
       "",
-      JSON.stringify({ type: "turn.completed", usage: { output_tokens: 7 } }),
+      JSON.stringify(completed),
     ].join(separator);
     expect(codexTranscript(output)).toEqual({
       value,
@@ -30,11 +74,33 @@ test.each(["\n", "\r\n"])(
   },
 );
 
-test.each([1, 0, "bare", "blank"] as const)(
-  "Codex terminal provider errors survive process exit %s with bounded status and raw evidence",
+test("Codex malformed final JSON retains later accounting and remains a fault", () => {
+  const transcript = codexTranscript(
+    jsonl([
+      {
+        type: "item.completed",
+        item: { type: "agent_message", text: "malformed" },
+      },
+      completed,
+    ]),
+  );
+  expect(transcript.usage).toEqual({ output_tokens: 7 });
+  expect(transcript.error?.message).toBe("Codex final answer was not JSON");
+  expect(transcript.error).not.toBeInstanceOf(RoleFailure);
+});
+
+test("Codex blank terminal reason falls back to a provider failure", () => {
+  const transcript = codexTranscript(
+    jsonl([{ type: "turn.failed", error: { message: "  " } }]),
+  );
+  expect(transcript.error).toBeInstanceOf(RoleFailure);
+  expect(transcript.error?.message).toBe("Codex reported a failed turn");
+  expect(transcript.failureReason).toBeUndefined();
+});
+
+test.each([1, 0, "bare"] as const)(
+  "Codex terminal provider errors survive process exit %j with bounded status and raw evidence",
   async (failure) => {
-    const directory = await temporaryDirectory("codex-provider-failure-");
-    const command = join(directory, "codex-fixture");
     const exitCode = typeof failure === "number" ? failure : 1;
     const fallback = typeof failure === "string";
     const stderr =
@@ -42,45 +108,30 @@ test.each([1, 0, "bare", "blank"] as const)(
     const reason =
       "Selected model is at capacity. Please try a different model." +
       (exitCode === 0 ? " Detail".repeat(700) : "");
-    const output =
-      [
-        { type: "error", message: "Reconnecting... 1/5" },
-        {
-          type: "item.completed",
-          item: { type: "agent_message", text: "I will check the source." },
-        },
-        { type: "error", message: reason },
-        {
-          type: "turn.failed",
-          ...(failure === "bare"
-            ? {}
-            : { error: { message: failure === "blank" ? "  " : reason } }),
-        },
-      ]
-        .map((event) => JSON.stringify(event))
-        .join("\n") + "\n";
+    const output = jsonl([
+      { type: "error", message: "Reconnecting... 1/5" },
+      {
+        type: "item.completed",
+        item: { type: "agent_message", text: "I will check the source." },
+      },
+      { type: "error", message: reason },
+      {
+        type: "turn.failed",
+        ...(failure === "bare" ? {} : { error: { message: reason } }),
+      },
+    ]);
     expect(codexTranscript(output).error?.message).toBe(
       fallback ? "Codex reported a failed turn" : reason,
     );
-    await writeFile(
-      command,
-      `#!${process.execPath}\nimport { writeSync } from "node:fs";\nwriteSync(1, ${JSON.stringify(output)});\nwriteSync(2, ${JSON.stringify(stderr)});\nprocess.exitCode = ${exitCode};\n`,
-    );
-    await chmod(command, 0o700);
-    const path = join(directory, "campaign.sqlite");
-    const owner = await open(path, {
-      create: {
-        task,
-        settings: { ...settings, research: { model: "fixture", command } },
-        mode: { role: "review", input: { argument: "Fixture only" } },
-      },
-    });
+    const { owner } = await codexFixture(`
+import { writeSync } from "node:fs";
+writeSync(1, ${JSON.stringify(output)});
+writeSync(2, ${JSON.stringify(stderr)});
+process.exitCode = ${exitCode};
+`);
     try {
       await owner.root.waitForIdle(context);
-      const report = await owner.root.commit(
-        (tx) => readReport(tx, owner.root.id, { records: true }),
-        context,
-      );
+      const report = await reportOf(owner);
       expect(report.status.status).toBe("blocked");
       expect(report.status.error).toStartWith(
         fallback ? stderr : "Selected model is at capacity.",
@@ -113,46 +164,32 @@ test.each([1, 0, "bare", "blank"] as const)(
 test.each(["stdout", "stderr"] as const)(
   "Codex %s overflow kills a lingering process and rejects an early answer",
   async (stream) => {
-    const directory = await temporaryDirectory("codex-output-limit-");
-    const command = join(directory, "codex-fixture");
-    const output =
-      [
-        {
-          type: "item.completed",
-          item: {
-            type: "agent_message",
-            text: JSON.stringify({
-              verdict: "PASS",
-              report: "Checked",
-              premises: [],
-              passages: [],
-            }),
-          },
+    const output = jsonl([
+      {
+        type: "item.completed",
+        item: {
+          type: "agent_message",
+          text: JSON.stringify(review),
         },
-        { type: "turn.completed", usage: { output_tokens: 7 } },
-      ]
-        .map((event) => JSON.stringify(event))
-        .join("\n") + "\n";
-    // Bun can report a closed subprocess pipe as ECONNRESET on Linux.
-    await writeFile(
-      command,
-      `#!${process.execPath}\nimport {writeSync} from "node:fs";\nprocess.on("SIGTERM",()=>{});\nwriteSync(1,${JSON.stringify(output)});\nsetInterval(()=>{},1000);\nconst chunk="x".repeat(65536);\ntry { for(let i=0;i<300;i++)writeSync(${stream === "stdout" ? 1 : 2},chunk); } catch(error) { if(!["EPIPE","ECONNRESET"].includes(error.code)) throw error; }\n`,
-    );
-    await chmod(command, 0o700);
-    const path = join(directory, "campaign.sqlite");
-    const owner = await open(path, {
-      create: {
-        task,
-        settings: { ...settings, research: { model: "fixture", command } },
-        mode: { role: "review", input: { argument: "Fixture only" } },
       },
-    });
+      completed,
+    ]);
+    // Bun can report a closed subprocess pipe as ECONNRESET on Linux.
+    const { owner } = await codexFixture(`
+import { writeSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeSync(1, ${JSON.stringify(output)});
+setInterval(() => {}, 1000);
+const chunk = "x".repeat(65536);
+try {
+  for (let i = 0; i < 300; i++) writeSync(${stream === "stdout" ? 1 : 2}, chunk);
+} catch (error) {
+  if (!["EPIPE", "ECONNRESET"].includes(error.code)) throw error;
+}
+`);
     try {
       await owner.root.waitForIdle(context);
-      const report = await owner.root.commit(
-        (tx) => readReport(tx, owner.root.id, { records: true }),
-        context,
-      );
+      const report = await reportOf(owner);
       expect(report.status.status).toBe("blocked");
       expect(report.status.error).toContain("output capture limit");
       const log = report.records!.find(CodexLog.is)!.data;
@@ -170,7 +207,6 @@ test.each(["stdout", "stderr"] as const)(
 
 test.each([
   ["JSONL", "research"],
-  ["final JSON", "research"],
   ["schema", "research"],
   ["failed turn", "research"],
   ["signal", "research"],
@@ -178,63 +214,28 @@ test.each([
 ] as const)(
   "Codex %s/%s preserves accounting, failure identity, and workspace policy",
   async (failure, mode) => {
-    const directory = await temporaryDirectory("codex-failure-");
-    const path = join(directory, "campaign.sqlite");
-    const command = join(directory, "codex-fixture");
     const output =
-      [
-        ...(failure === "JSONL" ? ["malformed"] : []),
-        JSON.stringify({
+      (failure === "JSONL" ? "malformed\n" : "") +
+      jsonl([
+        {
           type: "item.completed",
           item: {
             type: "agent_message",
-            text:
-              failure === "final JSON"
-                ? "malformed"
-                : JSON.stringify(
-                    failure === "schema"
-                      ? {}
-                      : {
-                          verdict: "PASS",
-                          report: "Checked",
-                          premises: [],
-                          passages: [],
-                        },
-                  ),
-          },
-        }),
-        JSON.stringify({ type: "turn.completed", usage: { output_tokens: 7 } }),
-        ...(failure === "failed turn"
-          ? [JSON.stringify({ type: "turn.failed" })]
-          : []),
-      ].join("\n") + "\n";
-    if (failure === "signal") await signalFixture(directory);
-    else {
-      await writeFile(
-        command,
-        `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(output)});\n`,
-      );
-      await chmod(command, 0o700);
-    }
-    const owner = await open(path, {
-      create: {
-        task,
-        settings: {
-          ...settings,
-          ...(mode === "worker"
-            ? { codex: { model: "fixture", command, workspace: directory } }
-            : { research: { model: "fixture", command } }),
-        },
-        mode: {
-          role: mode === "worker" ? "codex" : "review",
-          input: {
-            assignment: "Fixture only",
-            argument: "Fixture only",
-            notes: [],
+            text: JSON.stringify(failure === "schema" ? {} : review),
           },
         },
-      },
-    });
+        completed,
+        ...(failure === "failed turn" ? [{ type: "turn.failed" }] : []),
+      ]);
+    const { owner, path } = await codexFixture(
+      failure === "signal"
+        ? `import { writeSync } from "node:fs";
+writeSync(1, ${JSON.stringify(jsonl([completed]))});
+writeSync(2, "fixture diagnostic\\n");
+process.kill(process.pid, "SIGTERM");`
+        : `process.stdout.write(${JSON.stringify(output)});`,
+      mode,
+    );
     try {
       await owner.root.waitForIdle(context);
       await owner.close();
@@ -242,8 +243,14 @@ test.each([
         readReport(tx, root, { records: true }),
       );
       expect(report.status.status).toBe("blocked");
-      if (failure === "signal")
-        expect(report.status.error).toBe("fixture diagnostic");
+      if (failure !== "schema")
+        expect(report.status.error).toContain(
+          {
+            JSONL: "Codex emitted malformed JSONL",
+            "failed turn": "Codex reported a failed turn",
+            signal: "fixture diagnostic",
+          }[failure],
+        );
       const logs = report.records!.filter(CodexLog.is);
       expect(logs).toHaveLength(1);
       expect(logs[0]!.data).toMatchObject({
@@ -279,13 +286,7 @@ test.each([
 test.each(["cancel", "close"] as const)(
   "Codex %s kills resistant descendants and abandons private research output",
   async (action) => {
-    const directory = await temporaryDirectory("codex-cancel-");
-    const path = join(directory, "campaign.sqlite");
-    const command = join(directory, "codex-fixture");
-    const ready = join(directory, "processes.json");
-    await writeFile(
-      command,
-      `#!${process.execPath}
+    const { owner, path, directory } = await codexFixture(`
 import { spawn } from "node:child_process";
 import { writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -296,16 +297,8 @@ writeSync(1, "unfinished Codex output\\n");
 writeSync(2, "fixture waiting\\n");
 writeFileSync(join(import.meta.dir, "processes.json"), JSON.stringify([process.pid, child.pid]));
 setInterval(() => {}, 1000);
-`,
-    );
-    await chmod(command, 0o700);
-    const owner = await open(path, {
-      create: {
-        task,
-        settings: { ...settings, research: { model: "fixture", command } },
-        mode: { role: "review", input: { argument: "Fixture only" } },
-      },
-    });
+`);
+    const ready = join(directory, "processes.json");
     let processes: number[] = [];
     let workspace: string | undefined;
     try {
@@ -316,7 +309,7 @@ setInterval(() => {}, 1000);
       ) {
         if (Date.now() > deadline)
           throw new Error(
-            `Codex fixture did not become ready: ${JSON.stringify(await owner.root.commit((tx) => readReport(tx, owner.root.id, { records: true }), context))}`,
+            `Codex fixture did not become ready: ${JSON.stringify(await reportOf(owner))}`,
           );
         await Bun.sleep(10);
       }
@@ -328,10 +321,7 @@ setInterval(() => {}, 1000);
       )
         throw new Error("Invalid fixture process IDs");
       processes = recorded as number[];
-      const before = await owner.root.commit(
-        (tx) => readReport(tx, owner.root.id, { records: true }),
-        context,
-      );
+      const before = await reportOf(owner);
       const request = before.records!.find(CodexRequest.is)!;
       workspace = request.data.workspace;
       if (action === "cancel") {
@@ -370,21 +360,6 @@ setInterval(() => {}, 1000);
   15_000,
 );
 
-async function signalFixture(directory: string) {
-  const command = join(directory, "codex-fixture");
-  await writeFile(
-    command,
-    `#!${process.execPath}
-import { writeSync } from "node:fs";
-writeSync(1, JSON.stringify({ type: "turn.completed", usage: { output_tokens: 7 } }) + "\\n");
-writeSync(2, "fixture diagnostic\\n");
-process.kill(process.pid, "SIGTERM");
-`,
-  );
-  await chmod(command, 0o700);
-  return command;
-}
-
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -396,47 +371,28 @@ function alive(pid: number): boolean {
 }
 
 test.each([false, true])(
-  "Codex cleanup failure preserves result and primary error: %s",
+  "Codex cleanup failure preserves result and primary error: %j",
   async (failed) => {
-    const directory = await temporaryDirectory("codex-cleanup-");
-    const command = join(directory, "codex-fixture");
-    const output = [
+    const output = jsonl([
       {
         type: "item.completed",
         item: {
           type: "agent_message",
-          text: JSON.stringify({
-            verdict: "PASS",
-            report: "Checked",
-            premises: [],
-            passages: [],
-          }),
+          text: JSON.stringify(review),
         },
       },
-      { type: "turn.completed", usage: { output_tokens: 7 } },
+      completed,
       ...(failed ? [{ type: "turn.failed" }] : []),
-    ]
-      .map((event) => JSON.stringify(event))
-      .join("\n");
-    await writeFile(
-      command,
-      `#!${process.execPath}\nimport { chmodSync } from "node:fs";\nchmodSync(process.cwd(), 0o500);\nconsole.log(${JSON.stringify(output)});\n`,
-    );
-    await chmod(command, 0o700);
-    const owner = await open(join(directory, "campaign.sqlite"), {
-      create: {
-        task,
-        settings: { ...settings, research: { model: "fixture", command } },
-        mode: { role: "review", input: { argument: "Fixture only" } },
-      },
-    });
+    ]);
+    const { owner } = await codexFixture(`
+import { chmodSync } from "node:fs";
+chmodSync(process.cwd(), 0o500);
+console.log(${JSON.stringify(output)});
+`);
     let workspace: string | undefined;
     try {
       await owner.root.waitForIdle(context);
-      const report = await owner.root.commit(
-        (tx) => readReport(tx, owner.root.id, { records: true }),
-        context,
-      );
+      const report = await reportOf(owner);
       workspace = report.records!.find(CodexRequest.is)!.data.workspace;
       expect(report.records!.find(CodexLog.is)!.data.usage).toEqual({
         output_tokens: 7,

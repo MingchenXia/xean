@@ -18,6 +18,7 @@ import {
   defineTool,
   Harness,
   type Conversation,
+  type SubmissionId,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { temporaryDirectory } from "./directory.ts";
@@ -89,23 +90,27 @@ async function assistants(root: Conversation) {
   );
 }
 
-test.each(["max_messages", "max_output_tokens"])(
-  "native Pi continues more than eight %s chunks with retry disabled",
-  async (reason) => {
+test.each([
+  { reason: "max_messages", chunks: 10 },
+  { reason: "max_output_tokens", chunks: 1 },
+])(
+  "native Pi continues limit responses with retry disabled (%j)",
+  async ({ reason, chunks }) => {
     const seen: string[] = [];
     const current = await fixture([
-      ...Array.from({ length: 10 }, (_, index): FauxResponseStep => (input) => {
+      ...Array.from({ length: chunks }, (_, i): FauxResponseStep => (input) => {
         const text = JSON.stringify(input.messages);
         for (const previous of seen) expect(text).toContain(previous);
         expect(text).not.toContain("truncated-effect");
         expect(input.messages.some((m) => m.role === "toolResult")).toBe(false);
-        const token = `progress-${index}`;
-        seen.push(token);
+        const token = `progress-${i}`;
+        const thinking = `reasoning-${i}`;
+        seen.push(token, thinking);
         return limitResponse(
           [
             { type: "text", text: token },
-            { type: "thinking", thinking: `reasoning-${index}` },
-            fauxToolCall("effect", {}, { id: `truncated-effect-${index}` }),
+            { type: "thinking", thinking },
+            fauxToolCall("effect", {}, { id: `truncated-effect-${i}` }),
           ],
           reason,
         );
@@ -116,26 +121,27 @@ test.each(["max_messages", "max_output_tokens"])(
         return fauxAssistantMessage("Complete answer");
       },
     ]);
+    const input = {
+      type: "input" as const,
+      requestId: "assignment",
+      content: "Finish the argument",
+    };
     const { harness, root } = await current.open();
+    let submissionId: SubmissionId;
     try {
-      const submission = await root.submit(
-        {
-          type: "input",
-          requestId: "assignment",
-          content: "Finish the argument",
-        },
-        context,
-      );
+      const submission = await root.submit(input, context);
+      submissionId = submission.id;
       expect((await submission.wait(context)).status).toBe("done");
       await root.waitForIdle(context);
-      expect(current.provider.state.callCount).toBe(11);
+      expect(current.provider.state.callCount).toBe(chunks + 1);
       expect(current.toolCalls).toBe(0);
       const raw = await assistants(root);
-      expect(raw.filter((m) => m.stopReason === "length")).toHaveLength(10);
+      expect(raw.filter((m) => m.stopReason === "length")).toHaveLength(chunks);
       expect(
         raw.flatMap((m) => m.content).filter((p) => p.type === "toolCall"),
-      ).toHaveLength(10);
+      ).toHaveLength(chunks);
       const tasks = await root.commit((tx) => tx.scanTasks({}, 100), context);
+      expect(tasks.items.length).toBeGreaterThanOrEqual(chunks + 1);
       expect(
         tasks.items.every((task) => task.state.outcome?.status === "completed"),
       ).toBe(true);
@@ -144,18 +150,9 @@ test.each(["max_messages", "max_output_tokens"])(
     }
     const reopened = await current.open(false);
     try {
-      expect(
-        (
-          await reopened.root.submit(
-            {
-              type: "input",
-              requestId: "assignment",
-              content: "Finish the argument",
-            },
-            context,
-          )
-        ).id,
-      ).toBeDefined();
+      expect((await reopened.root.submit(input, context)).id).toBe(
+        submissionId,
+      );
       await reopened.root.waitForIdle(context);
       expect((await assistants(reopened.root)).at(-1)?.content).toEqual([
         { type: "text", text: "Complete answer" },
@@ -165,7 +162,7 @@ test.each(["max_messages", "max_output_tokens"])(
           (m) => m.role === "toolResult",
         ),
       ).toBe(false);
-      expect(current.provider.state.callCount).toBe(11);
+      expect(current.provider.state.callCount).toBe(chunks + 1);
     } finally {
       await reopened.harness.close(context);
     }

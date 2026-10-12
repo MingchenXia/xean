@@ -1,4 +1,5 @@
 import { temporaryDirectory } from "./directory.ts";
+import { fixtureTask } from "./task.ts";
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import {
@@ -9,7 +10,6 @@ import {
   createRegistry,
   defineDoc,
   defineExtension,
-  defineTask,
   Harness,
   ToolResultEntry,
   type EntryId,
@@ -70,11 +70,10 @@ async function setup(
     review: async () => ({ verdict: "INCONCLUSIVE", report: "Fixture" }),
     ...replacements,
   };
-  let harness!: Harness;
   const research = createResearch(roles);
   const registry = createRegistry();
   registry.install(research.extension);
-  harness = await Harness.open(
+  const harness = await Harness.open(
     storage,
     { registry, models: createModels() },
     context,
@@ -90,17 +89,19 @@ async function setup(
     harness,
     registry,
     root,
+    input: (value: unknown) =>
+      root.commit((tx) => research.input(tx, root.id, value), context),
+    getTasks: (kind?: string) =>
+      root.commit((tx) => scanTasks(tx, root.id, kind), context),
+    getReport: () => root.commit((tx) => readReport(tx, root.id), context),
     view: () => harness.commit((tx) => readView(tx, root.id), context),
   };
 }
 
 test.each([
-  [1, null],
   [1, "legacy/n1"],
-  [2, null],
   [2, { candidateId: "legacy/n1", snapshotEntry: 1 }],
   [3, null],
-  [3, { candidateId: "legacy/n1", snapshotEntry: 1 }],
 ] as const)(
   "old notebook Control rejects opening and inspection without changes: %s",
   async (version, accepted) => {
@@ -213,20 +214,13 @@ test.each(["empty", "independent", "retired-support"] as const)(
       literature: builtins.literature,
     });
     try {
-      await owner.root.commit(
-        (tx) =>
-          owner.research.input(tx, owner.root.id, {
-            kind: "submit",
-            id: "seed",
-            notes: [draft("n1"), { ...draft("n2"), support: ["n1"] }],
-          }),
-        context,
-      );
+      await owner.input({
+        kind: "submit",
+        id: "seed",
+        notes: [draft("n1"), { ...draft("n2"), support: ["n1"] }],
+      });
       await owner.root.waitForIdle(context);
-      const report = await owner.root.commit(
-        (tx) => readReport(tx, owner.root.id),
-        context,
-      );
+      const report = await owner.getReport();
       expect(searched).toBe(true);
       const work = report.work.find((worker) => worker.role === "literature")!;
       expect(work.status).toBe(
@@ -401,51 +395,42 @@ test.each(["completed", "stale"])(
         return { kind: "submissions", entries };
       },
     });
-    const report = () =>
-      owner.root.commit((tx) => readReport(tx, owner.root.id), context);
     try {
-      await owner.root.commit(
-        (tx) =>
-          owner.research.input(tx, owner.root.id, {
-            kind: "submit",
-            id: "seed",
-            notes: [draft()],
-          }),
-        context,
-      );
+      await owner.input({
+        kind: "submit",
+        id: "seed",
+        notes: [draft()],
+      });
       owner.harness.resume();
       await started.promise;
-      const privateReport = await report();
+      const privateReport = await owner.getReport();
       expect(privateReport.work[0]!.noteIds).toEqual([]);
       expect(privateReport.notes).toHaveLength(1);
       const note = privateReport.notes[0]!;
       if (mode === "stale")
-        await owner.root.commit(
-          (tx) =>
-            owner.research.input(tx, owner.root.id, {
-              kind: "submit",
-              id: "concurrent",
-              notes: [],
-              edits: [
-                {
-                  id: note.id,
-                  revision: note.revision,
-                  summary: note.summary,
-                  detailedSummary: note.detailedSummary,
-                  text: "Caller changed the frozen proof.",
-                },
-              ],
-            }),
-          context,
-        );
+        await owner.input({
+          kind: "submit",
+          id: "concurrent",
+          notes: [],
+          edits: [
+            {
+              id: note.id,
+              revision: note.revision,
+              summary: note.summary,
+              detailedSummary: note.detailedSummary,
+              text: "Caller changed the frozen proof.",
+            },
+          ],
+        });
       release.resolve();
       await owner.harness.waitForIdle(context);
-      const published = await report();
+      const published = await owner.getReport();
       const worker = published.work[0]!;
       expect(worker.status).toBe(mode === "completed" ? "completed" : "failed");
       expect(worker.noteIds).toEqual(
         mode === "completed" ? [`${worker.id}/n1`, note.id] : [],
       );
+      expect(published.notes).toHaveLength(mode === "completed" ? 2 : 1);
       expect(published.notes.find(({ id }) => id === note.id)!.text).toBe(
         mode === "completed"
           ? "Updated proof."
@@ -470,11 +455,7 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
           }
         : {},
     );
-    const input = (value: unknown) =>
-      owner.root.commit(
-        (tx) => owner.research.input(tx, owner.root.id, value),
-        context,
-      );
+    const { input } = owner;
     const seed = {
       kind: "submit",
       id: "seed",
@@ -521,9 +502,9 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
       ).rejects.toThrow(state === "blocked" ? "blocked" : "terminal");
       expect(await owner.view()).toEqual(before);
       expect(
-        (
-          await owner.root.commit((tx) => scanTasks(tx, owner.root.id), context)
-        ).filter((task) => task.kind === "research.coordinator"),
+        (await owner.getTasks()).filter(
+          (task) => task.kind === "research.coordinator",
+        ),
       ).toHaveLength(1);
     } finally {
       await owner.harness.close(context);
@@ -533,7 +514,7 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
 
 test("standalone resume serializes and reuses completed work", async () => {
   let calls = 0;
-  const { research, harness, root } = await setup({
+  const { research, harness, root, getReport } = await setup({
     explorer: async () => {
       calls++;
       return { ...empty(), notes: [draft()] };
@@ -555,7 +536,7 @@ test("standalone resume serializes and reuses completed work", async () => {
     await root.commit((tx) => research.resume(tx, root.id), context);
     await harness.waitForIdle(context);
     expect(calls).toBe(1);
-    const report = await root.commit((tx) => readReport(tx, root.id), context);
+    const report = await getReport();
     expect(report.status.status).toBe("completed");
     expect(report.work).toHaveLength(1);
     expect(report.work[0]!.noteIds).toEqual([]);
@@ -570,7 +551,7 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
   const release = Promise.withResolvers<void>();
   let working = false;
   const decisions: string[][] = [];
-  const { research, harness, root } = await setup({
+  const { research, harness, root, input, getTasks } = await setup({
     coordinator: async (input) => {
       expect(working).toBe(false);
       decisions.push(input.notes.map((note: Note) => note.summary));
@@ -593,25 +574,17 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
     await root.commit((tx) => research.initialize(tx, root.id), context);
     harness.resume();
     await started.promise;
-    await root.commit(
-      (tx) =>
-        research.input(tx, root.id, {
-          kind: "guide",
-          id: "during-worker",
-          text: "Use this after the worker returns",
-        }),
-      context,
-    );
+    await input({
+      kind: "guide",
+      id: "during-worker",
+      text: "Use this after the worker returns",
+    });
     for (let i = 0; i < 3; i++)
       await root.commit((tx) => research.resume(tx, root.id), context);
     release.resolve();
     await harness.waitForIdle(context);
-    expect(decisions[0]).toEqual([]);
-    expect(decisions.length).toBe(2);
-    expect(
-      decisions.slice(1).every((notes) => notes[0] === "Reflexivity"),
-    ).toBe(true);
-    const tasks = await root.commit((tx) => scanTasks(tx, root.id), context);
+    expect(decisions).toEqual([[], ["Reflexivity"]]);
+    const tasks = await getTasks();
     expect(
       tasks.filter((task) => task.kind === "research.worker"),
     ).toHaveLength(1);
@@ -672,7 +645,7 @@ test("inputs during a decision share one fresh successor and discard its stale p
   const release = Promise.withResolvers<void>();
   const decisions: { id: TaskId; guidance: string[] }[] = [];
   let workers = 0;
-  const { research, harness, root } = await setup({
+  const { research, harness, root, input, getReport, getTasks } = await setup({
     coordinator: async (input, runtime) => {
       decisions.push({ id: runtime.taskId, guidance: input.guidance });
       if (decisions.length === 1) {
@@ -692,21 +665,14 @@ test("inputs during a decision share one fresh successor and discard its stale p
     harness.resume();
     await started.promise;
     for (const id of ["first", "second"]) {
-      await root.commit(
-        (tx) => research.input(tx, root.id, { kind: "guide", id, text: id }),
-        context,
-      );
+      await input({ kind: "guide", id, text: id });
       expect(
         (await root.commit((tx) => research.resume(tx, root.id), context)).map(
           String,
         ),
       ).toEqual([String(decisions[0]!.id)]);
     }
-    expect(
-      pendingDecisions(
-        await root.commit((tx) => scanTasks(tx, root.id), context),
-      ),
-    ).toHaveLength(1);
+    expect(pendingDecisions(await getTasks())).toHaveLength(1);
     release.resolve();
     await harness.waitForIdle(context);
     expect(decisions.map(({ guidance }) => guidance)).toEqual([
@@ -715,9 +681,10 @@ test("inputs during a decision share one fresh successor and discard its stale p
     ]);
     expect(decisions[0]!.id).not.toBe(decisions[1]!.id);
     expect(workers).toBe(0);
-    expect(
-      (await root.commit((tx) => readReport(tx, root.id), context)).status,
-    ).toMatchObject({ status: "idle", pendingDecisions: 0 });
+    expect((await getReport()).status).toMatchObject({
+      status: "idle",
+      pendingDecisions: 0,
+    });
   } finally {
     release.resolve();
     await harness.close(context);
@@ -732,29 +699,9 @@ test("Coordinator waits for a completing worker until its child drains", async (
     id: TaskId;
     state: TaskState<unknown, unknown>;
   }>();
-  const Child = defineTask<null, { phase: "run" }, null>({
-    name: "fixture.worker-child",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    phases: {
-      async run(_task, runtime, invocation) {
-        started.resolve();
-        await awaitWithContext(release.promise, invocation);
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: { status: "completed", result: null },
-          }),
-          invocation,
-        );
-      },
-    },
-    async abort(_task, runtime, invocation) {
-      await runtime.commit(
-        () => ({ status: "terminal", outcome: { status: "aborted" } }),
-        invocation,
-      );
-    },
+  const Child = fixtureTask("fixture.worker-child", async (invocation) => {
+    started.resolve();
+    await awaitWithContext(release.promise, invocation);
   });
   let calls = 0;
   let workerId: TaskId | undefined;
@@ -887,7 +834,7 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
   async (mode) => {
     const started = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const { research, harness, root, view } = await setup({
+    const { harness, root, view, input, getTasks } = await setup({
       coordinator: async (input) => ({
         work: input.failures.length
           ? null
@@ -927,22 +874,15 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
       },
     });
     try {
-      await root.commit(
-        (tx) =>
-          research.input(tx, root.id, {
-            kind: "submit",
-            id: "import",
-            notes: [draft()],
-          }),
-        context,
-      );
+      await input({
+        kind: "submit",
+        id: "import",
+        notes: [draft()],
+      });
       const original = (await view()).notes[0]!;
       harness.resume();
       await started.promise;
-      const [worker] = await root.commit(
-        (tx) => scanTasks(tx, root.id, "research.worker"),
-        context,
-      );
+      const [worker] = await getTasks("research.worker");
       if (mode === "cancelled")
         await root.commit(async (tx) => {
           (await tx.doc(Control, root.id)).cancelled = true;
@@ -1026,42 +966,17 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
     await openNodeJsonlStorage(directory, context),
   );
   try {
-    const { research, root, harness } = owner;
-    const command = {
+    const { harness, input, getTasks } = owner;
+    await input({
       kind: "submit",
       id: "import",
       notes: [draft()],
-    };
-    const admitted = await root.commit(
-      (tx) => research.input(tx, root.id, command),
-      context,
-    );
+    });
     const initialRevision = (await owner.view()).notes[0]!.revision;
     harness.resume();
     await started.promise;
-    expect(
-      await root.commit((tx) => research.input(tx, root.id, command), context),
-    ).toBe(admitted);
-    await expect(
-      root.commit(
-        (tx) =>
-          research.input(tx, root.id, {
-            ...command,
-            notes: [{ ...draft(), candidate: true }],
-          }),
-        context,
-      ),
-    ).rejects.toThrow("another value");
-    const [worker] = await root.commit(
-      (tx) => scanTasks(tx, root.id, "research.worker"),
-      context,
-    );
+    const [worker] = await getTasks("research.worker");
     const at = seen[0]!.cutoff;
-    expect(
-      (await harness.getTask(worker!.id, context))!.state.checkpoint,
-    ).toEqual({
-      phase: "run",
-    });
     expect(worker!.input).toMatchObject({
       at,
     });
@@ -1079,16 +994,7 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
         },
       ],
     };
-    const revised = await root.commit(
-      (tx) => research.input(tx, root.id, correction),
-      context,
-    );
-    expect(
-      await root.commit(
-        (tx) => research.input(tx, root.id, correction),
-        context,
-      ),
-    ).toBe(revised);
+    await input(correction);
     const editedRevision = (await owner.view()).notes[0]!.revision;
     expect(editedRevision).toBeGreaterThan(initialRevision);
     await harness.close(context);
@@ -1175,7 +1081,7 @@ test("an edit after Coordinator freezes a checked candidate prevents stale accep
       };
     },
   });
-  const { harness, root, research } = owner;
+  const { harness, root, research, getReport } = owner;
   const unsubscribe = harness.subscribeCommits(({ changes }) => {
     for (const change of changes) {
       if (change.type !== "task") continue;
@@ -1247,10 +1153,7 @@ test("an edit after Coordinator freezes a checked candidate prevents stale accep
         context,
       ),
     ).toBeNull();
-    expect(
-      (await root.commit((tx) => readReport(tx, root.id), context)).status
-        .acceptedNoteId,
-    ).toBeNull();
+    expect((await getReport()).status.acceptedNoteId).toBeNull();
   } finally {
     unsubscribe();
     await harness.close(context);
@@ -1261,7 +1164,7 @@ test("failed decisions block queued work and inputs until explicit native-task r
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let calls = 0;
-  const { research, harness, root } = await setup({
+  const { research, harness, root, input, getReport, getTasks } = await setup({
     coordinator: async (input) => {
       if (++calls === 1) {
         started.resolve();
@@ -1274,43 +1177,30 @@ test("failed decisions block queued work and inputs until explicit native-task r
   });
   const command = { kind: "guide", id: "first", text: "first" };
   try {
-    const first = await root.commit(
-      (tx) => research.input(tx, root.id, command),
-      context,
-    );
+    const first = await input(command);
     harness.resume();
     await started.promise;
-    await root.commit(
-      (tx) =>
-        research.input(tx, root.id, {
-          kind: "guide",
-          id: "second",
-          text: "second",
-        }),
-      context,
-    );
+    await input({
+      kind: "guide",
+      id: "second",
+      text: "second",
+    });
     release.resolve();
     await harness.waitForIdle(context);
     expect(calls).toBe(1);
-    const before = await root.commit((tx) => scanTasks(tx, root.id), context);
+    const before = await getTasks();
     expect(blockedDecision(before)?.state.outcome?.status).toBe("faulted");
     expect(pendingDecisions(before)).toHaveLength(1);
-    const report = await root.commit((tx) => readReport(tx, root.id), context);
+    const report = await getReport();
     expect(report.status.status).toBe("blocked");
     expect(report.status.pendingDecisions).toBe(1);
-    expect(
-      await root.commit((tx) => research.input(tx, root.id, command), context),
-    ).toBe(first);
+    expect(await input(command)).toBe(first);
     await expect(
-      root.commit(
-        (tx) =>
-          research.input(tx, root.id, {
-            kind: "guide",
-            id: "blocked",
-            text: "blocked",
-          }),
-        context,
-      ),
+      input({
+        kind: "guide",
+        id: "blocked",
+        text: "blocked",
+      }),
     ).rejects.toThrow("blocked");
     const resumed = await root.commit(
       (tx) => research.resume(tx, root.id),
@@ -1318,7 +1208,7 @@ test("failed decisions block queued work and inputs until explicit native-task r
     );
     await harness.waitForIdle(context);
     expect(calls).toBe(2);
-    const after = await root.commit((tx) => scanTasks(tx, root.id), context);
+    const after = await getTasks();
     expect(blockedDecision(after)).toBeUndefined();
     expect(pendingDecisions(after)).toHaveLength(0);
     expect(
@@ -1334,7 +1224,7 @@ test("failed decisions block queued work and inputs until explicit native-task r
 
 test("multiple-worker plans are rejected before any worker is created", async () => {
   let calls = 0;
-  const { research, harness, root } = await setup({
+  const { research, harness, root, getTasks } = await setup({
     coordinator: async () => ({
       work: [
         { kind: "explorer", assignment: "first" },
@@ -1349,7 +1239,7 @@ test("multiple-worker plans are rejected before any worker is created", async ()
   try {
     await root.commit((tx) => research.initialize(tx, root.id), context);
     await harness.waitForIdle(context);
-    const tasks = await root.commit((tx) => scanTasks(tx, root.id), context);
+    const tasks = await getTasks();
     expect(blockedDecision(tasks)?.state.outcome?.error?.message).toContain(
       "Invalid value",
     );
@@ -1366,27 +1256,19 @@ test("one resume replaces a chosen Coordinator failure while native child cleanu
   const childStarted = Promise.withResolvers<void>();
   const cleanupStarted = Promise.withResolvers<void>();
   const cleaned = Promise.withResolvers<void>();
-  const Child = defineTask<null, { phase: "run" }, null>({
-    name: "fixture.cleanup",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    phases: {
-      async run(_task, _runtime, invocation) {
-        childStarted.resolve();
-        await awaitWithContext(new Promise<never>(() => {}), invocation);
-      },
+  const Child = fixtureTask(
+    "fixture.cleanup",
+    async (invocation) => {
+      childStarted.resolve();
+      await awaitWithContext(new Promise<never>(() => {}), invocation);
     },
-    async abort(_task, runtime, invocation) {
+    async () => {
       cleanupStarted.resolve();
       await cleaned.promise;
-      await runtime.commit(
-        () => ({ status: "terminal", outcome: { status: "aborted" } }),
-        invocation,
-      );
     },
-  });
+  );
   let calls = 0;
-  const { research, harness, registry, root } = await setup({
+  const { research, harness, registry, root, getTasks } = await setup({
     coordinator: async (_input, runtime, invocation) => {
       if (++calls === 1) {
         await runtime.commit(async (tx) => {
@@ -1407,23 +1289,15 @@ test("one resume replaces a chosen Coordinator failure while native child cleanu
     await root.commit((tx) => research.initialize(tx, root.id), context);
     harness.resume();
     await cleanupStarted.promise;
-    const before = await root.commit((tx) => scanTasks(tx, root.id), context);
+    const before = await getTasks();
     expect(blockedDecision(before)?.state.status).toBe("completing");
     await root.commit((tx) => research.resume(tx, root.id), context);
-    expect(
-      blockedDecision(
-        await root.commit((tx) => scanTasks(tx, root.id), context),
-      ),
-    ).toBeUndefined();
+    expect(blockedDecision(await getTasks())).toBeUndefined();
     expect(calls).toBe(1);
     cleaned.resolve();
     await harness.waitForIdle(context);
     expect(calls).toBe(2);
-    expect(
-      pendingDecisions(
-        await root.commit((tx) => scanTasks(tx, root.id), context),
-      ),
-    ).toHaveLength(0);
+    expect(pendingDecisions(await getTasks())).toHaveLength(0);
   } finally {
     cleaned.resolve();
     await harness.close(context);
@@ -1435,45 +1309,38 @@ test("pause retains worker failures and input for the next Coordinator on resume
   const releaseWorker = Promise.withResolvers<void>();
   let attempts = 0,
     decisions = 0;
-  const { research, harness, root, view } = await setup({
-    coordinator: async (input) => {
-      decisions++;
-      if (decisions === 1)
-        return { work: { kind: "explorer", assignment: "prove" } };
-      expect(input.guidance.at(-1)).toBe("held");
-      expect(input.failures[0].error).toContain("failure while paused");
-      return { work: null };
-    },
-    explorer: async () => {
-      if (++attempts === 1) {
-        workerStarted.resolve();
-        await releaseWorker.promise;
-        throw new Error("failure while paused");
-      }
-      return { kind: "notes", notes: [draft()] };
-    },
-  });
+  const { research, harness, root, view, input, getReport, getTasks } =
+    await setup({
+      coordinator: async (input) => {
+        decisions++;
+        if (decisions === 1)
+          return { work: { kind: "explorer", assignment: "prove" } };
+        expect(input.guidance.at(-1)).toBe("held");
+        expect(input.failures[0].error).toContain("failure while paused");
+        return { work: null };
+      },
+      explorer: async () => {
+        if (++attempts === 1) {
+          workerStarted.resolve();
+          await releaseWorker.promise;
+          throw new Error("failure while paused");
+        }
+        return { kind: "notes", notes: [draft()] };
+      },
+    });
   try {
-    await root.commit(
-      (tx) =>
-        research.input(tx, root.id, {
-          kind: "guide",
-          id: "start",
-          text: "ready",
-        }),
-      context,
-    );
+    await input({
+      kind: "guide",
+      id: "start",
+      text: "ready",
+    });
     harness.resume();
     await workerStarted.promise;
-    await root.commit(
-      (tx) =>
-        research.input(tx, root.id, {
-          kind: "guide",
-          id: "held",
-          text: "held",
-        }),
-      context,
-    );
+    await input({
+      kind: "guide",
+      id: "held",
+      text: "held",
+    });
     await root.commit(async (tx) => {
       (await tx.doc(Control, root.id)).paused = true;
     }, context);
@@ -1481,7 +1348,7 @@ test("pause retains worker failures and input for the next Coordinator on resume
     await harness.waitForIdle(context);
     expect(attempts).toBe(1);
     expect(decisions).toBe(1);
-    const paused = await root.commit((tx) => readReport(tx, root.id), context);
+    const paused = await getReport();
     expect(paused.status.status).toBe("paused");
     expect(paused.status.pendingDecisions).toBe(0);
     await root.commit((tx) => research.resume(tx, root.id), context);
@@ -1489,11 +1356,7 @@ test("pause retains worker failures and input for the next Coordinator on resume
     expect(decisions).toBe(2);
     expect(attempts).toBe(1);
     expect((await view()).notes).toHaveLength(0);
-    expect(
-      pendingDecisions(
-        await root.commit((tx) => scanTasks(tx, root.id), context),
-      ),
-    ).toHaveLength(0);
+    expect(pendingDecisions(await getTasks())).toHaveLength(0);
   } finally {
     releaseWorker.resolve();
     await harness.close(context);

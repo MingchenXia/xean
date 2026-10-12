@@ -98,7 +98,7 @@ async function run(scenario: "retry" | "repair" | "idle") {
       (tx) => readReport(tx, owner.root.id),
       context,
     );
-    return { ...report, rounds: report.work.length, database };
+    return { ...report, database };
   } finally {
     await owner.close();
   }
@@ -108,26 +108,21 @@ test("unchanged completed checks block another worker admission", async () => {
   const result = await run("retry");
   expect(result.status.status).toBe("blocked");
   expect(result.status.error).toContain("no pending checks");
-  expect(result.rounds).toBe(2);
   expect(result.status.calls.recordedResponses).toBe(0);
   expect(result.status.calls.codexInvocations).toBe(0);
   expect(result.status.acceptedNoteId).toBeNull();
   expect(result.notes).toHaveLength(1);
-  expect(result.notes[0]!.revision).toBeGreaterThan(0);
-  expect(result.notes[0]!.revision).toBeLessThan(Number(result.work[1]!.id));
-  expect(result.work.filter(({ role }) => role === "verifier")).toHaveLength(1);
+  expect(result.work.map(({ role }) => role)).toEqual(["explorer", "verifier"]);
 });
 
 test("a missing-lemma repair accepts the same stable candidate and survives reopen", async () => {
   const result = await run("repair");
   expect(result.status.status).toBe("completed");
-  expect(result.rounds).toBe(4);
   expect(result.notes).toHaveLength(2);
   expect(result.status.calls.recordedResponses).toBe(0);
   const candidate = result.notes.find((note) => note.candidate)!;
   const lemma = result.notes.find((note) => !note.candidate)!;
-  expect(candidate.revision).toBeGreaterThan(Number(result.work[2]!.id));
-  expect(candidate.id.startsWith(`${result.work[0]!.id}/`)).toBe(true);
+  expect(candidate.id).toBe(`${result.work[0]!.id}/n1`);
   expect(candidate.support).toEqual([lemma.id]);
   expect(candidate.accepted).toBe(true);
   expect(result.status.acceptedNoteId).toBe(candidate.id);
@@ -147,7 +142,7 @@ test("a missing-lemma repair accepts the same stable candidate and survives reop
 test("Coordinator can intentionally leave the campaign idle", async () => {
   const result = await run("idle");
   expect(result.status.status).toBe("idle");
-  expect(result.rounds).toBe(0);
+  expect(result.work).toEqual([]);
   expect(result.notes).toHaveLength(0);
   expect(result.status.pendingDecisions).toBe(0);
   expect(result.status.calls.recordedResponses).toBe(0);

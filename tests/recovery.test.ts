@@ -1,15 +1,15 @@
 import { temporaryDirectory } from "./directory.ts";
+import { fixtureTask } from "./task.ts";
 import { expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import {
   createRegistry,
   defineExtension,
-  defineTask,
   ToolResultEntry,
 } from "@earendil-works/pi-durable";
 import { awaitWithContext } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { open } from "../src/host.ts";
+import { inspect, open } from "../src/host.ts";
 import { scanTasks } from "../src/workflow.ts";
 import { Bodies, readView } from "../src/math/state.ts";
 import {
@@ -41,30 +41,10 @@ test.each(["worker", "input"] as const)(
         historicalBodies++;
       return findDocument.call(this, address, point, ctx);
     });
-    const Child = defineTask<null, { phase: "run" }, null>({
-      name: "test.coordinator-child",
-      version: 1,
-      initial: () => ({ phase: "run" }),
-      async abort(_task, runtime, ctx) {
-        await runtime.commit(
-          () => ({ status: "terminal", outcome: { status: "aborted" } }),
-          ctx,
-        );
-      },
-      phases: {
-        async run(_task, runtime, ctx) {
-          entered.resolve();
-          await awaitWithContext(release.promise, ctx);
-          trace.push("child");
-          await runtime.commit(
-            () => ({
-              status: "terminal",
-              outcome: { status: "completed", result: null },
-            }),
-            ctx,
-          );
-        },
-      },
+    const Child = fixtureTask("test.coordinator-child", async (ctx) => {
+      entered.resolve();
+      await awaitWithContext(release.promise, ctx);
+      trace.push("child");
     });
     const registry = createRegistry();
     registry.install(
@@ -195,7 +175,7 @@ test.each(["worker", "input"] as const)(
   },
 );
 
-test("closing at private submission and worker publication reuses each committed native result", async () => {
+test("closing at each role submission and worker publication reuses every committed native result", async () => {
   const directory = await temporaryDirectory("research-recovery-");
   const path = join(directory, "campaign.sqlite");
   const provider = fixture((role, input) =>
@@ -212,48 +192,47 @@ test("closing at private submission and worker publication reuses each committed
     models: provider.models,
     roles: recoveryRoles,
   });
-  let closing: Promise<void> | undefined;
-  const unsubscribe = owner.harness.subscribeCommits((publication) => {
-    if (
-      publication.changes.some(
-        (change) => change.type === "entry" && ToolResultEntry.is(change.value),
-      )
-    )
-      queueMicrotask(() => {
-        closing ??= owner.close();
-      });
-  });
   try {
-    await owner.root.waitForIdle(context).catch(() => {});
-    expect(closing).toBeDefined();
-    await closing;
-    unsubscribe();
-    owner = await open(path, {
-      models: provider.models,
-      roles: recoveryRoles,
-    });
-    let closingWorker: Promise<void> | undefined;
-    const detach = owner.harness.subscribeCommits((publication) => {
-      if (
-        publication.changes.some(
-          (change) =>
-            change.type === "task" &&
-            change.value.kind === "research.worker" &&
-            change.value.state.outcome?.status === "completed",
-        )
-      )
-        queueMicrotask(() => {
-          closingWorker ??= owner.close();
-        });
-    });
-    await owner.root.waitForIdle(context).catch(() => {});
-    expect(closingWorker).toBeDefined();
-    await closingWorker;
-    detach();
-    owner = await open(path, {
-      models: provider.models,
-      roles: recoveryRoles,
-    });
+    for (const boundary of [
+      "coordinator",
+      "explorer",
+      "publication",
+    ] as const) {
+      let closing: Promise<void> | undefined;
+      const detach = owner.harness.subscribeCommits(({ changes }) => {
+        const reached = changes.some((change) =>
+          boundary === "publication"
+            ? change.type === "task" &&
+              change.value.kind === "research.worker" &&
+              change.value.state.outcome?.status === "completed"
+            : change.type === "entry" &&
+              ToolResultEntry.is(change.value) &&
+              change.value.model?.some(
+                (message) =>
+                  message.role === "toolResult" &&
+                  message.toolName === `submit_${boundary}`,
+              ),
+        );
+        if (reached)
+          queueMicrotask(() => {
+            closing ??= owner.close();
+          });
+      });
+      try {
+        await owner.root.waitForIdle(context).catch(() => {});
+        expect(closing, boundary).toBeDefined();
+        await closing;
+      } finally {
+        detach();
+      }
+      expect((await inspect(path, readView)).notes).toHaveLength(
+        boundary === "publication" ? 1 : 0,
+      );
+      owner = await open(path, {
+        models: provider.models,
+        roles: recoveryRoles,
+      });
+    }
     await owner.root.waitForIdle(context);
     expect(provider.calls.map(({ role }) => role)).toEqual([
       "coordinator",
@@ -279,7 +258,6 @@ test("closing at private submission and worker publication reuses each committed
     await owner.root.waitForIdle(context);
     expect(provider.calls).toHaveLength(3);
   } finally {
-    unsubscribe();
     await owner.close();
   }
 });

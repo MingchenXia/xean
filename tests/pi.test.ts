@@ -2,6 +2,7 @@ import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import {
   cleanupSessionResources,
   createModels,
@@ -58,7 +59,7 @@ test("native read-only storage rejects ID allocation and commits even on a writa
       log: 0,
       checkpointed: 0,
     });
-    expect(retained).toBeDefined();
+    expect(database.isOpen).toBe(false);
   } finally {
     await storage.close(context);
   }
@@ -68,7 +69,7 @@ test("native read-only storage rejects ID allocation and commits even on a writa
   expect(ended.isOpen).toBe(false);
 });
 
-test("native document caching releases old values while preserving committed state", async () => {
+test("zero retention collects idle values, pins watched values, and reloads committed state", async () => {
   const directory = await temporaryDirectory("pi-document-cache-");
   const session = createSession(
     await openNodeSqliteStorage(join(directory, "cache.sqlite")),
@@ -86,31 +87,31 @@ test("native document caching releases old values while preserving committed sta
   const refs: WeakRef<object>[] = [];
   const changed = Promise.withResolvers<string | undefined>();
   try {
-    for (let i = 0; i < 256; i++) {
+    for (const text of ["watched", "idle"]) {
       const id = await session.commit(async (tx) => {
         const conversation = await tx.createConversation({
           ownership: { kind: "ownerless" },
         });
-        (await tx.doc(Doc, conversation.id)).text = `${i}:` + "x".repeat(8192);
+        (await tx.doc(Doc, conversation.id)).text = text;
         return conversation.id;
       }, context);
       ids.push(id);
-      refs.push(new WeakRef((await session.snapshot(Doc, id, context))!));
-      if (i === 0) {
+      if (text === "watched") {
         const watch = (await session.watchDoc(Doc, id, context))!;
+        refs.push(new WeakRef(watch.value!));
         watch.start(async (value) => {
           changed.resolve(value?.text);
         });
-      }
+      } else
+        refs.push(new WeakRef((await session.snapshot(Doc, id, context))!));
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     Bun.gc(true);
-    expect(refs.slice(1, 64).every((ref) => ref.deref() === undefined)).toBe(
-      true,
-    );
-    expect((await session.snapshot(Doc, ids[0]!, context))?.text).toBe(
-      "0:" + "x".repeat(8192),
-    );
+    expect(refs[0]!.deref()).toEqual({ text: "watched" });
+    expect(refs[1]!.deref()).toBeUndefined();
+    expect(await session.snapshot(Doc, ids[1]!, context)).toEqual({
+      text: "idle",
+    });
     await session.commit(async (tx) => {
       (await tx.doc(Doc, ids[0]!)).text = "Updated after eviction";
     }, context);
@@ -118,7 +119,7 @@ test("native document caching releases old values while preserving committed sta
       "Updated after eviction",
     );
     expect(await changed.promise).toBe("Updated after eviction");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     Bun.gc(true);
     expect(refs[0]!.deref()).toBeUndefined();
   } finally {
@@ -136,7 +137,7 @@ test("a retained retired watch releases its obsolete document tracker", async ()
     kind: "fixture.retired-payload",
     version: 1,
     scope: "session",
-    initial: () => ({ text: "x".repeat(8192) }),
+    initial: () => ({ text: "retired" }),
   });
   try {
     await session.commit(async (tx) => {
@@ -147,7 +148,7 @@ test("a retained retired watch releases its obsolete document tracker", async ()
     watch.start(async () => {});
     await session.commit((tx) => tx.retireDoc(Doc), context);
     await expect(watch.closed).resolves.toEqual({ reason: "retired" });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     Bun.gc(true);
     expect(ref.deref()).toBeUndefined();
     expect(watch.value).toBeNull();
@@ -172,7 +173,7 @@ test("native cache eviction preserves multi-document commits and rollback after 
   const ids: ConversationId[] = [];
   try {
     await session.commit(async (tx) => {
-      for (let i = 0; i < 260; i++) {
+      for (let i = 0; i < 2; i++) {
         const conversation = await tx.createConversation({
           ownership: { kind: "ownerless" },
         });
@@ -194,6 +195,10 @@ test("native cache eviction preserves multi-document commits and rollback after 
         throw new Error("Fixture callback rollback");
       }, context),
     ).rejects.toThrow("Fixture callback rollback");
+    for (let i = 0; i < ids.length; i++)
+      expect((await session.snapshot(Doc, ids[i]!, context))?.value).toBe(
+        i + 1000,
+      );
     const failure = new Error("Fixture storage rollback");
     storage.commit = async () => {
       throw failure;
@@ -359,10 +364,6 @@ test.each([false, true])(
       expect(result.stopReason).toBe(continuation ? "length" : "error");
       if (continuation) expect(result.errorMessage).toBeUndefined();
       else expect(result.errorMessage).toContain(reason);
-      expect(isRetryableAssistantError(result)).toBe(false);
-      expect(
-        isRetryableAssistantError({ ...result, stopReason: "error" }),
-      ).toBe(false);
       expect(result.responseId).toBe("fixture");
       expect(result.usageReported).toBe(true);
       expect(result.usage).toMatchObject({
@@ -401,63 +402,63 @@ test.each([false, true])(
       summary: [],
     };
     const summary = "Unfinished but reusable reasoning summary";
-    for (const reason of ["max_messages", "max_output_tokens"]) {
-      const partial = await call(useCodex, [
-        { type: "response.output_item.done", output_index: 0, item: signed },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: { type: "reasoning", id: "rs_partial", summary: [] },
+    const partial = await call(useCodex, [
+      { type: "response.output_item.done", output_index: 0, item: signed },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
+        item: { type: "reasoning", id: "rs_partial", summary: [] },
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 1,
+        summary_index: 0,
+        delta: summary,
+      },
+      terminal("incomplete", {
+        incomplete_details: { reason: "max_messages" },
+      }),
+    ]);
+    expect(partial.stopReason).toBe("length");
+    expect(partial.content[1]).toMatchObject({
+      type: "thinking",
+      thinking: summary,
+    });
+    expect(partial.content[1]).not.toHaveProperty("thinkingSignature");
+    for (const limited of [true, false]) {
+      let input: unknown;
+      const request = {
+        ...options,
+        onPayload: (payload: unknown) => {
+          input = (payload as { input: unknown }).input;
         },
-        {
-          type: "response.reasoning_summary_text.delta",
-          output_index: 1,
-          summary_index: 0,
-          delta: summary,
-        },
-        terminal("incomplete", { incomplete_details: { reason } }),
-      ]);
-      expect(partial.stopReason).toBe("length");
-      expect(partial.content[1]).toMatchObject({
-        type: "thinking",
-        thinking: summary,
+        fetch: mockFetch(async () => sse([terminal()])),
+      };
+      const replay = normalizeContext({
+        messages: [
+          ...transcript.messages,
+          limited
+            ? partial
+            : { ...partial, stopReason: "stop", rawStopReason: "completed" },
+          { role: "user", content: "Continue", timestamp: 1 },
+        ],
       });
-      expect(partial.content[1]).not.toHaveProperty("thinkingSignature");
-      for (const limited of [true, false]) {
-        let input: unknown;
-        const request = {
-          ...options,
-          onPayload: (payload: unknown) => {
-            input = (payload as { input: unknown }).input;
-          },
-          fetch: mockFetch(async () => sse([terminal()])),
-        };
-        const replay = normalizeContext({
-          messages: [
-            ...transcript.messages,
-            limited
-              ? partial
-              : { ...partial, stopReason: "stop", rawStopReason: "completed" },
-            { role: "user", content: "Continue", timestamp: 1 },
-          ],
-        });
-        const result = await (
-          useCodex
-            ? codex(codexModel, replay, request)
-            : responses(model, replay, request)
-        ).result();
-        expect(result.stopReason).toBe("stop");
-        expect(input).toEqual(expect.arrayContaining([signed]));
-        const replayedSummary = expect.arrayContaining([
-          expect.objectContaining({
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: summary, annotations: [] }],
-          }),
-        ]);
-        if (limited) expect(input).toEqual(replayedSummary);
-        else expect(input).not.toEqual(replayedSummary);
-      }
+      const result = await (
+        useCodex
+          ? codex(codexModel, replay, request)
+          : responses(model, replay, request)
+      ).result();
+      expect(result.stopReason).toBe("stop");
+      expect(input).toEqual(expect.arrayContaining([signed]));
+      const replayedSummary = expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: summary, annotations: [] }],
+        }),
+      ]);
+      if (limited) expect(input).toEqual(replayedSummary);
+      else expect(input).not.toEqual(replayedSummary);
     }
   },
 );

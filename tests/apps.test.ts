@@ -370,7 +370,7 @@ test("CLI role review executes and reopens an independent review without the ret
   expect(report.notes).toEqual([]);
 }, 30_000);
 
-test("sealed acceptance, native note IDs, and latest standalone results reach reports and CLI export", async () => {
+test("sealed acceptance and native note IDs reach reports and CLI export", async () => {
   const directory = await temporaryDirectory("xean-apps-");
   const trace: string[] = [];
   const path = join(directory, "campaign.sqlite");
@@ -513,6 +513,10 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
   expect(exported.code).toBe(0);
   expect(exported.stdout).toContain(draft.text);
   expect(exported.stdout).not.toContain("Later text outside");
+}, 30_000);
+
+test("standalone retries report only the latest result and CLI reopening does not rerun work", async () => {
+  const directory = await temporaryDirectory("xean-standalone-retry-");
   const standalonePath = join(directory, "standalone.sqlite");
   let attempts = 0;
   const standalone = await open(standalonePath, {
@@ -571,11 +575,15 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
   } finally {
     await standalone.close();
   }
+  expect(attempts).toBe(2);
+  const before = await inspect(standalonePath, readReport);
   expect((await cli("run", standalonePath)).code).toBe(0);
+  const after = await inspect(standalonePath, readReport);
+  expect(after.work).toEqual(before.work);
+  expect(after.result).toEqual(pass);
   expect((await cli("export", standalonePath)).stderr).toContain(
     "No accepted argument",
   );
-  expect(attempts).toBe(2);
 }, 30_000);
 
 test("latest standalone null results do not resolve superseded receipts", async () => {
@@ -723,21 +731,22 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
   try {
     const forkAt = await owner.root.commit(async (tx) => {
       let forkAt;
-      for (let index = 0; index < 4; index++) {
+      for (const [model, usageReported, input] of [
+        ["explicit-zero", true, 0],
+        ["placeholder", undefined, 0],
+        ["explicit-absent", false, 7],
+        ["inferred", undefined, 7],
+      ] as const) {
         const message = {
           ...structuredClone(fauxAssistantMessage("answer")),
-          model: `model-${index}`,
-          ...(index === 0
-            ? { usageReported: true }
-            : index === 2
-              ? { usageReported: false }
-              : {}),
+          model,
+          usageReported,
         };
-        if (index >= 2) message.usage.input = 7;
+        message.usage.input = input;
         const entry = await tx.appendEntry(AssistantEntry, owner.root.id, {
           model: [message],
         });
-        if (index === 3) forkAt = entry.id;
+        if (model === "inferred") forkAt = entry.id;
       }
       for (const [operationId, usage] of [
         ["unknown", null],
@@ -773,7 +782,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
         ownership: { kind: "ownerless" },
       });
       const message = structuredClone(fauxAssistantMessage("fork answer"));
-      message.model = "model-3";
+      message.model = "inferred";
       message.usage.input = 11;
       return tx.appendEntry(AssistantEntry, fork.id, { model: [message] });
     }, context);
@@ -787,11 +796,11 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
     const groups = new Map(
       usage.calls.byModel.items.map((group) => [group.model, group]),
     );
-    expect(groups.get("model-0")!.reportedUsage.input).toBe(0);
-    expect(groups.get("model-1")!.reportedUsage).toEqual({});
-    expect(groups.get("model-2")!.reportedUsage).toEqual({});
-    expect(groups.get("model-3")!.responses).toBe(2);
-    expect(groups.get("model-3")!.reportedUsage.input).toBe(18);
+    expect(groups.get("explicit-zero")!.reportedUsage.input).toBe(0);
+    expect(groups.get("placeholder")!.reportedUsage).toEqual({});
+    expect(groups.get("explicit-absent")!.reportedUsage).toEqual({});
+    expect(groups.get("inferred")!.responses).toBe(2);
+    expect(groups.get("inferred")!.reportedUsage.input).toBe(18);
     expect(groups.get("codex")!.reportedUsage.input_tokens).toBe(0);
     expect(new Set(usage.records!.map((entry) => entry.id)).size).toBe(
       usage.records!.length,
@@ -803,7 +812,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
       forkEntry,
     );
     await owner.root.commit(async (tx) => {
-      for (let index = 4; index < 12; index++)
+      for (let index = 4; index < 10; index++)
         await tx.appendEntry(AssistantEntry, owner.root.id, {
           model: [
             { ...fauxAssistantMessage("answer"), model: `model-${index}` },
@@ -813,10 +822,10 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
     const bounded = await owner.root.commit((tx) => readUsage(tx), context);
     expect(bounded.calls.byModel.items).toHaveLength(10);
     expect(bounded.calls).toMatchObject({
-      recordedResponses: 13,
+      recordedResponses: 11,
       codexInvocations: 3,
-      unknownUsage: 12,
-      byModel: { omitted: 3 },
+      unknownUsage: 10,
+      byModel: { omitted: 1 },
     });
   } finally {
     await owner.close();
@@ -1035,13 +1044,10 @@ test("round allowance counts workers, excludes empty waits, and resumes only ext
   }
 });
 
-test("rounds exclude discarded plans and count an interrupted decision only after admission", async () => {
-  const directory = await temporaryDirectory("xean-apps-");
-  const explorer = async () => ({
-    kind: "notes",
-    notes: [],
-  });
-  for (const outcome of ["rejected", "paused", "cancelled"] as const) {
+test.each(["rejected", "paused", "cancelled"] as const)(
+  "rounds exclude %s plans before worker admission",
+  async (outcome) => {
+    const directory = await temporaryDirectory("xean-discarded-plan-");
     let decisions = 0;
     const roles: Pick<Roles, "coordinator" | "explorer"> = {
       coordinator: limitRounds(async (_input, runtime, invocation) => {
@@ -1056,7 +1062,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
           },
         };
       }, 1),
-      explorer,
+      explorer: async () => ({ kind: "notes", notes: [] }),
     };
     const stopped = await open(join(directory, `${outcome}.sqlite`), {
       create: definition,
@@ -1082,7 +1088,11 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
     } finally {
       await stopped.close();
     }
-  }
+  },
+);
+
+test("interrupted decisions count a round only after recovered worker admission", async () => {
+  const directory = await temporaryDirectory("xean-round-recovery-");
   const entered = Promise.withResolvers<{
     taskId: TaskId;
     cutoff: EntryId;
@@ -1110,7 +1120,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
         recovered.push(runtime.taskId);
         return { work: { kind: "explorer", assignment: "Explore." } };
       }, 1),
-      explorer,
+      explorer: async () => ({ kind: "notes", notes: [] }),
     };
     owner = await open(path, { roles: () => next });
     await owner.root.waitForIdle(context);

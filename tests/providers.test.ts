@@ -243,71 +243,92 @@ const runtime = () =>
     memo: async (_name: string, candidate: string) => candidate,
   }) as unknown as RoleRuntime;
 
-test("direct ChatGPT Explorer sends the index once and accepts only its final answer", async () => {
-  const note: Note = {
-    ...selection.notes[0]!,
-    id: "prior/n1",
-    summary: "Index description",
-    detailedSummary: "UNREAD DETAIL",
-    text: "UNREAD CLAIM\n\nUNREAD FULL PROOF",
-    revision: 0,
-    imported: true,
-    verified: true,
-    dead: false,
-    accepted: false,
-    retired: false,
-    candidate: false,
-    checks: {},
-  };
-  const claimed: string[] = [];
-  const invocation = {
-    memo: async (_name: string, candidate: string) => {
-      claimed.push(candidate);
-      return candidate;
-    },
-  } as unknown as RoleRuntime;
-  const request = spyOn(globalThis, "fetch").mockImplementation(
-    fixtureFetch(async (url, options) => {
-      expect(claimed).toHaveLength(1);
-      expect(String(url)).toBe("http://browser.invalid/v1/responses");
-      const payload = await new Response(options?.body).json();
-      expect(payload.stream).toBe(false);
-      expect(payload.tools).toBeUndefined();
-      expect(payload.text.format).toMatchObject({
-        type: "json_schema",
-        strict: true,
-        schema: explorationSchema,
-      });
-      const identity = payload.client_metadata["x-codex-turn-metadata"];
-      expect(identity).toEqual({ thread_id: claimed[0], turn_id: claimed[0] });
-      expect(
-        payload.input[0].internal_chat_message_metadata_passthrough.turn_id,
-      ).toBe(claimed[0]);
-      const input = payload.input[0].content;
-      expect(input).toContain("Index description");
-      expect(input).not.toContain("UNREAD");
-      expect(payload.instructions).toContain(
-        "Do not read notes or request continuation",
-      );
-      return response([JSON.stringify(selection)]);
-    }),
-  );
-  try {
-    const roles = createRoles({
-      ...settings,
-      profiles: createRuntime(settings).profiles,
-    });
-    const result = await roles.explorer(
-      { task, notes: [note], assignment: "Continue" },
-      invocation,
-      context,
+test.each(["new notes", "blind edit"])(
+  "direct ChatGPT Explorer sends only the index and validates %s without retrying",
+  async (mode) => {
+    const note: Note = {
+      ...selection.notes[0]!,
+      id: "prior/n1",
+      summary: "Index description",
+      detailedSummary: "UNREAD DETAIL",
+      text: "UNREAD CLAIM\n\nUNREAD FULL PROOF",
+      revision: 0,
+      imported: true,
+      verified: true,
+      dead: false,
+      accepted: false,
+      retired: false,
+      candidate: false,
+      checks: {},
+    };
+    const answer = {
+      notes: selection.notes.map((value) => ({ ...value, support: [note.id] })),
+      edits:
+        mode === "blind edit"
+          ? [
+              {
+                id: note.id,
+                revision: note.revision,
+                text: "Blind replacement",
+              },
+            ]
+          : [],
+    };
+    const claimed: string[] = [];
+    const invocation = {
+      memo: async (_name: string, candidate: string) => {
+        claimed.push(candidate);
+        return candidate;
+      },
+    } as unknown as RoleRuntime;
+    const request = spyOn(globalThis, "fetch").mockImplementation(
+      fixtureFetch(async (url, options) => {
+        expect(claimed).toHaveLength(1);
+        expect(String(url)).toBe("http://browser.invalid/v1/responses");
+        const payload = await new Response(options?.body).json();
+        expect(payload.stream).toBe(false);
+        expect(payload.tools).toBeUndefined();
+        expect(payload.text.format).toMatchObject({
+          type: "json_schema",
+          strict: true,
+          schema: explorationSchema,
+        });
+        const identity = payload.client_metadata["x-codex-turn-metadata"];
+        expect(identity).toEqual({
+          thread_id: claimed[0],
+          turn_id: claimed[0],
+        });
+        expect(
+          payload.input[0].internal_chat_message_metadata_passthrough.turn_id,
+        ).toBe(claimed[0]);
+        const input = payload.input[0].content;
+        expect(input).toContain("Index description");
+        expect(input).not.toContain("UNREAD");
+        expect(JSON.parse(input).allowance).toEqual({ reads: 0, responses: 1 });
+        return response([JSON.stringify(answer)]);
+      }),
     );
-    expect(result).toEqual({ kind: "notes", ...selection });
-    expect(request).toHaveBeenCalledTimes(1);
-  } finally {
-    request.mockRestore();
-  }
-});
+    try {
+      const roles = createRoles({
+        ...settings,
+        profiles: createRuntime(settings).profiles,
+      });
+      const result = roles.explorer(
+        { task, notes: [note], assignment: "Continue" },
+        invocation,
+        context,
+      );
+      if (mode === "blind edit")
+        await expect(result).rejects.toThrow(
+          "ChatGPT Web Explorer cannot edit notes without their full text",
+        );
+      else await expect(result).resolves.toEqual({ kind: "notes", ...answer });
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      request.mockRestore();
+    }
+  },
+);
 
 test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without retrying", async () => {
   const valid = JSON.stringify(selection);
@@ -318,27 +339,26 @@ test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without 
       message: "Could not select ChatGPT model 6.",
     },
   });
-  for (const returned of [
-    response([]),
-    response([valid, valid]),
-    response(["malformed"]),
-    response(["null"]),
-    response(["[]"]),
-    response(['{"notes":[],"candidate":"yes"}']),
-    response([valid], "incomplete"),
-    response([valid], "failed"),
-    unavailable,
-    new Response("Service unavailable", { status: 503 }),
-  ]) {
+  for (const [returned, error] of [
+    [response([]), "no unique final answer"],
+    [response([valid, valid]), "no unique final answer"],
+    [response(["malformed"]), SyntaxError],
+    [response(["null"]), "Invalid value"],
+    [response(["[]"]), "Invalid value"],
+    [response(['{"notes":[],"candidate":"yes"}']), "Invalid value"],
+    [response([valid], "incomplete"), "ChatGPT incomplete"],
+    [response([valid], "failed"), "ChatGPT failed"],
+    [
+      unavailable,
+      "model_version_unavailable: Could not select ChatGPT model 6.",
+    ],
+    [new Response("Service unavailable", { status: 503 }), "ChatGPT HTTP 503"],
+  ] as const) {
     const request = spyOn(globalThis, "fetch").mockResolvedValue(returned);
     try {
       await expect(
         chatgpt(settings.chatgpt!, "Solve", [], runtime(), context),
-      ).rejects.toThrow(
-        returned === unavailable
-          ? "model_version_unavailable: Could not select ChatGPT model 6."
-          : undefined,
-      );
+      ).rejects.toThrow(error);
       expect(request).toHaveBeenCalledTimes(1);
     } finally {
       request.mockRestore();

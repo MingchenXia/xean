@@ -1,4 +1,5 @@
 import { temporaryDirectory } from "./directory.ts";
+import { fixtureTask } from "./task.ts";
 import { expect, spyOn, test } from "bun:test";
 import { copyFile, link, readFile, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -12,7 +13,6 @@ import {
   defineDoc,
   defineEntry,
   defineExtension,
-  defineTask,
   Harness,
   SessionFailed,
   type TaskId,
@@ -253,30 +253,10 @@ test("reopening recorded cancellation aborts an interrupted decision and nested 
   const held = Promise.withResolvers<void>();
   let decisions = 0;
   let children = 0;
-  const Child = defineTask<null, { phase: "run" }, null>({
-    name: "fixture.cancelled-child",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    phases: {
-      async run(_task, runtime, invocation) {
-        children++;
-        started.resolve();
-        await awaitWithContext(held.promise, invocation);
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: { status: "completed", result: null },
-          }),
-          invocation,
-        );
-      },
-    },
-    async abort(_task, runtime, invocation) {
-      await runtime.commit(
-        () => ({ status: "terminal", outcome: { status: "aborted" } }),
-        invocation,
-      );
-    },
+  const Child = fixtureTask("fixture.cancelled-child", async (invocation) => {
+    children++;
+    started.resolve();
+    await awaitWithContext(held.promise, invocation);
   });
   const host = () => {
     const registry = createRegistry();
@@ -491,28 +471,8 @@ test("custom role extensions compose with built-in mathematical conversations", 
     },
   ]);
   let calls = 0;
-  const Custom = defineTask<null, { phase: "run" }, null>({
-    name: "fixture.custom",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    phases: {
-      async run(_task, runtime, invocation) {
-        calls++;
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: { status: "completed", result: null },
-          }),
-          invocation,
-        );
-      },
-    },
-    async abort(_task, runtime, invocation) {
-      await runtime.commit(
-        () => ({ status: "terminal", outcome: { status: "aborted" } }),
-        invocation,
-      );
-    },
+  const Custom = fixtureTask("fixture.custom", () => {
+    calls++;
   });
   const registry = createRegistry();
   registry.install(
