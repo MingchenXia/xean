@@ -159,11 +159,9 @@ export async function open(path: string, options: OpenOptions = {}) {
     if (existing) assertSingleLink(existing.nlink);
     if (existing?.size) recognize(canonical);
     storage = await openOwnedStorage(canonical);
-    const value = await createSession(storage).snapshot(
-      DefinitionDoc,
-      ROOT_CONVERSATION_ID,
-      context,
-    );
+    const value = await createSession(storage, {
+      documentRetentionMs: 0,
+    }).snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context);
     const stored = value === undefined ? undefined : validateDefinition(value);
     if (stored && requested && !isDeepStrictEqual(stored, requested))
       throw new Error("Research task and settings are frozen");
@@ -201,7 +199,11 @@ export async function open(path: string, options: OpenOptions = {}) {
       {
         registry,
         models: runtime.models,
-        settings: { compaction: { enabled: false }, contextRetentionMs: 0 },
+        settings: {
+          compaction: { enabled: false },
+          contextRetentionMs: 0,
+          documentRetentionMs: 0,
+        },
         onReport: (error) => console.error("Pi report:", error),
       },
       context,
@@ -245,7 +247,7 @@ async function inspectSession<T>(
     new NodeSqliteDatabase(database, { readOnly: true }),
     { readOnly: true },
   );
-  const session = createSession(storage);
+  const session = createSession(storage, { documentRetentionMs: 0 });
   try {
     validateDefinition(
       (await session.snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context)) ??

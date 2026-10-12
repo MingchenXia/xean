@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.3.0 — 2026-10-11
+## 3.3.0 — 2026-10-12
 
 Pi continues incomplete model responses within the same submission, preserving
 usable work until a complete response or an operational limit.
@@ -18,14 +18,24 @@ usable work until a complete response or an operational limit.
 - Coordinator's Explorer assignments identify the relevant note IDs and the
   remaining gap in the complete task.
 
+### Pi and cleanup
+
+- Pi moves to source commit `ee409a85f6ad92bf8c6ab8ed735c6cd24f2e749e`.
+  Native document retention replaces Xean's cache-cap patch. Unobserved trackers
+  leave memory after use, and subsequent reads reload them from storage.
+  The fix for retired document observers remains. Chord also avoids redundant work when
+  appending to document arrays.
+- Coordinator reuses scanned task outcomes, reports resolve standalone results
+  once, and notebook publication skips dependency traversal when nothing needs
+  invalidation. Role assignments use Chord's native JSON copying.
+
 ### Compatibility
 
 - The database schema, note edits, per-note candidate status, assignments, and
   `role review` retain their 3.2.0 formats. Cross-version checks passed on
   representative paused and completed model-free databases. Transfer of an
   in-flight model generation remains unqualified.
-- Pi remains pinned to `ea448f454af474f3e2fe9733b331e17b0662f5d6`. Native
-  continuation extends the retained Pi patches. Codex strict-schema conversion
+- Automatic continuation extends the retained Pi patches. Codex strict-schema conversion
   remains the 3.2.0 implementation.
 
 ## 3.2.0 — 2026-10-11

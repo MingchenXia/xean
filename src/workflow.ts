@@ -292,56 +292,40 @@ export function createResearch(roles: Roles) {
         }[] = [];
         await runtime.commit(async (tx) => {
           definition = await readDefinition(tx, task.conversationId);
-          let cursor: Cursor | undefined;
-          do {
-            const page = await tx.scanTasks(
-              {
-                conversationId: task.conversationId,
-                kind: Worker.definition.name,
-              },
-              128,
-              cursor,
-            );
-            for (const worker of page.items) {
-              if (worker.id >= at) continue;
-              const request = (worker.input as { request?: Request }).request;
-              const limit =
-                request?.kind === "explorer" &&
-                worker.state.outcome?.status === "completed"
-                  ? await explorerLimit(tx, worker.id)
-                  : undefined;
-              workers.push({
-                id: worker.id,
-                role:
-                  (worker.input as WorkerInput & { request?: Request }).request
-                    ?.kind ?? "standalone",
-                completed: worker.state.outcome?.status === "completed",
-                failed: failedTask(worker),
-                error:
-                  worker.state.outcome?.error?.message ??
-                  worker.state.outcome?.reason ??
-                  null,
-                ...(limit ? { limit } : {}),
-                request,
-              });
+          const records = (
+            await scanTasks(tx, task.conversationId, Worker.definition.name)
+          ).filter((worker) => worker.id < at);
+          for (const [index, worker] of records.entries()) {
+            const request = (worker.input as { request?: Request }).request;
+            const outcome = worker.state.outcome;
+            const limit =
+              request?.kind === "explorer" && outcome?.status === "completed"
+                ? await explorerLimit(tx, worker.id)
+                : undefined;
+            const summary: (typeof workers)[number] = {
+              id: worker.id,
+              role: request?.kind ?? "standalone",
+              completed: outcome?.status === "completed",
+              failed: failedTask(worker),
+              error: outcome?.error?.message ?? outcome?.reason ?? null,
+              ...(limit ? { limit } : {}),
+              request,
+            };
+            if (index >= records.length - 4 && outcome?.result !== undefined) {
+              const result = (await resolveResult(
+                tx,
+                outcome.result,
+                worker.id,
+              )) as SolverResult;
+              if (result?.kind === "notes")
+                summary.result = {
+                  notes: result.notes.length,
+                  edits: result.edits?.length ?? 0,
+                };
+              else if (result?.kind === "verification")
+                summary.result = { checks: result.checks.length };
             }
-            cursor = page.next;
-          } while (cursor);
-          for (const worker of workers.slice(-4)) {
-            const outcome = (await tx.task(worker.id))?.state.outcome;
-            if (outcome?.result === undefined) continue;
-            const result = (await resolveResult(
-              tx,
-              outcome.result,
-              worker.id,
-            )) as SolverResult;
-            if (result?.kind === "notes")
-              worker.result = {
-                notes: result.notes.length,
-                edits: result.edits?.length ?? 0,
-              };
-            else if (result?.kind === "verification")
-              worker.result = { checks: result.checks.length };
+            workers.push(summary);
           }
         }, context);
         frozen = await readSnapshot(runtime, task.conversationId, at, context, {

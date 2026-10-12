@@ -1,6 +1,8 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 38571b3..b33d4fa 100644
 --- a/dist/api/anthropic-messages.js
 +++ b/dist/api/anthropic-messages.js
-@@ -2,6 +2,7 @@
+@@ -2,6 +2,7 @@ import Anthropic, {} from "@anthropic-ai/sdk";
  import { ANTHROPIC_FEDERATION_RULE_ID_ENV, ANTHROPIC_IDENTITY_TOKEN_FILE_ENV, ANTHROPIC_ORGANIZATION_ID_ENV, ANTHROPIC_SERVICE_ACCOUNT_ID_ENV, ANTHROPIC_WORKSPACE_ID_ENV, } from "../env-api-keys.js";
  import { calculateCost } from "../models.js";
  import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
@@ -8,7 +10,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { headersToRecord } from "../utils/headers.js";
  import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
-@@ -458,6 +459,13 @@
+@@ -458,6 +459,13 @@ export const stream = (model, context, options) => {
                          : model.compat?.allowedFallbackModels?.find((fallback) => fallback.provider === model.provider && fallback.model === responseModel)?.cost;
                      usageModel = fallbackCost ? { ...model, id: responseModel, cost: fallbackCost } : model;
                      // Capture initial token usage from message_start event
@@ -22,7 +24,7 @@
                      // This ensures we have input token counts even if the stream is aborted early
                      output.usage.input = event.message.usage.input_tokens || 0;
                      output.usage.output = event.message.usage.output_tokens || 0;
-@@ -621,6 +629,13 @@
+@@ -621,6 +629,13 @@ export const stream = (model, context, options) => {
                      // Only update usage fields if present (not null).
                      // Preserves input_tokens from message_start when proxies omit it in message_delta.
                      if (event.usage) {
@@ -36,7 +38,7 @@
                          if (event.usage.input_tokens != null) {
                              output.usage.input = event.usage.input_tokens;
                          }
-@@ -682,6 +697,7 @@
+@@ -682,6 +697,7 @@ export const stream = (model, context, options) => {
                  delete block.partialJson;
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -44,9 +46,11 @@
              output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
+diff --git a/dist/api/google-generative-ai.js b/dist/api/google-generative-ai.js
+index a413006..eb09927 100644
 --- a/dist/api/google-generative-ai.js
 +++ b/dist/api/google-generative-ai.js
-@@ -226,7 +226,9 @@
+@@ -226,7 +226,9 @@ export const stream = (model, context, options) => {
                  }
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -57,9 +61,11 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
+index 42aac9d..e8d90e4 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -10,6 +10,7 @@
+@@ -10,6 +10,7 @@ import { getPiUserAgent } from "../utils/pi-user-agent.js";
  import { getSystemMessageText } from "../utils/text.js";
  import { getDeclaredTools, getInitialSystemMessage, normalizeContext, resolveTranscript, resolveTranscriptTools, } from "../utils/transcript.js";
  import { uuidv7 } from "../utils/uuid.js";
@@ -67,7 +73,7 @@
  import { createGrammarToolInputProperties } from "./constrained-sampling.js";
  import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
  import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
-@@ -49,17 +50,13 @@
+@@ -49,17 +50,13 @@ function assertSuccessfulOutput(output) {
  // ============================================================================
  // Retry Helpers
  // ============================================================================
@@ -91,7 +97,7 @@
  }
  function getRetryAfterDelayMs(headers) {
      const retryAfterMs = headers.get("retry-after-ms");
-@@ -299,7 +296,9 @@
+@@ -300,7 +297,9 @@ export const stream = (model, context, options) => {
                          statusText: response.statusText,
                      });
                      const info = await parseErrorResponse(fakeResponse);
@@ -102,7 +108,7 @@
                  }
                  catch (error) {
                      if (error instanceof Error) {
-@@ -308,10 +307,12 @@
+@@ -309,10 +308,12 @@ export const stream = (model, context, options) => {
                          }
                      }
                      lastError = error instanceof Error ? error : new Error(String(error));
@@ -117,7 +123,7 @@
                          const delayMs = BASE_DELAY_MS * 2 ** attempt;
                          await sleep(delayMs, options?.signal);
                          continue;
-@@ -345,6 +346,7 @@
+@@ -346,6 +347,7 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatProviderError(normalizeProviderError(error));
@@ -125,7 +131,7 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
-@@ -486,11 +488,14 @@
+@@ -487,11 +489,14 @@ async function processStream(response, output, stream, model, grammarToolInputPr
  class CodexApiError extends Error {
      code;
      payload;
@@ -140,7 +146,7 @@
          this.cause = options?.cause;
      }
  }
-@@ -511,7 +516,9 @@
+@@ -512,7 +517,9 @@ class ProviderStreamEventCallbackError extends Error {
      }
  }
  function isCodexNonTransportError(error) {
@@ -151,7 +157,7 @@
          error instanceof CodexProtocolError ||
          error instanceof ProviderStreamEventCallbackError);
  }
-@@ -555,6 +562,10 @@
+@@ -556,6 +563,10 @@ async function* mapCodexEvents(events, output, model, onProviderStreamEvent) {
              const response = event.response;
              const code = response?.error?.code;
              const message = response?.error?.message;
@@ -162,7 +168,7 @@
              throw new CodexApiError(message || "Codex response failed", { code, payload: event });
          }
          if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
-@@ -599,6 +610,7 @@
+@@ -600,6 +611,7 @@ async function* parseSSE(response, signal) {
                  throw new Error("Request was aborted");
              }
              buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
@@ -170,7 +176,7 @@
              // Treat EOF as terminating the residual SSE frame.
              if (done && buffer.trim())
                  buffer += "\n\n";
-@@ -1240,13 +1252,14 @@
+@@ -1241,13 +1253,14 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
  async function parseErrorResponse(response) {
      const raw = await response.text();
      let message = raw || response.statusText || "Request failed";
@@ -188,7 +194,7 @@
                  const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
                  const mins = err.resets_at
                      ? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000))
-@@ -1258,7 +1271,7 @@
+@@ -1259,7 +1272,7 @@ async function parseErrorResponse(response) {
          }
      }
      catch { }
@@ -197,9 +203,11 @@
  }
  // ============================================================================
  // Auth & Headers
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+index f413fe5..4fb0a5e 100644
 --- a/dist/api/openai-responses-shared.js
 +++ b/dist/api/openai-responses-shared.js
-@@ -173,7 +173,12 @@
+@@ -173,7 +173,12 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
              const isSameModel = isSameProviderAndApi && assistantMsg.model === model.id;
              const isDifferentModel = isSameProviderAndApi && assistantMsg.model !== model.id;
              let textBlockIndex = 0;
@@ -213,7 +221,7 @@
                  if (block.type === "thinking") {
                      if (block.thinkingSignature) {
                          const reasoningItem = JSON.parse(block.thinkingSignature);
-@@ -433,11 +438,20 @@
+@@ -433,11 +438,20 @@ export async function processResponsesStream(openaiStream, output, stream, model
      };
      const finalizeResponse = (response) => {
          sawTerminalResponseEvent = true;
@@ -235,7 +243,7 @@
              const inputDetails = response.usage.input_tokens_details;
              const cachedTokens = inputDetails?.cached_tokens || 0;
              const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
-@@ -460,7 +474,7 @@
+@@ -460,7 +474,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
              options.applyServiceTierPricing(output.usage, serviceTier);
          }
          // Map status to stop reason. For incomplete responses, retain the provider's
@@ -244,7 +252,7 @@
          const status = response?.status;
          const incompleteDetails = response?.incomplete_details;
          const incompleteReason = typeof incompleteDetails?.reason === "string" ? incompleteDetails.reason : undefined;
-@@ -643,8 +657,7 @@
+@@ -643,8 +657,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
              throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
          }
          else if (event.type === "response.failed") {
@@ -254,7 +262,7 @@
              const error = event.response?.error;
              const details = event.response?.incomplete_details;
              const msg = error
-@@ -679,7 +692,7 @@
+@@ -679,7 +692,7 @@ function mapStopReason(status, incompleteReason) {
          case "completed":
              return { stopReason: "stop" };
          case "incomplete":
@@ -263,16 +271,18 @@
                  return { stopReason: "length" };
              }
              return {
-@@ -701,4 +714,4 @@
+@@ -701,4 +714,4 @@ function mapStopReason(status, incompleteReason) {
          }
      }
  }
 -//# sourceMappingURL=openai-responses-shared.js.map
 \ No newline at end of file
 +//# sourceMappingURL=openai-responses-shared.js.map
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 2a6b4e4..0a1d504 100644
 --- a/dist/api/openai-responses.js
 +++ b/dist/api/openai-responses.js
-@@ -163,7 +163,9 @@
+@@ -163,7 +163,9 @@ export const stream = (model, context, options) => {
                  delete block.customInput;
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -283,9 +293,11 @@
              // Sign in with ChatGPT shares the subscription's usage limit with other apps.
              output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
                  ? `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index d0a535d..4bccba1 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -355,6 +355,8 @@
+@@ -355,6 +355,8 @@ export interface UserMessage {
      timestamp: number;
  }
  export interface AssistantMessage {
@@ -294,7 +306,7 @@
      role: "assistant";
      content: (TextContent | ThinkingContent | ToolCall)[];
      api: Api;
-@@ -371,6 +373,8 @@
+@@ -371,6 +373,8 @@ export interface AssistantMessage {
      stopReason: StopReason;
      deferred?: DeferredHandle;
      errorMessage?: string;
@@ -303,9 +315,11 @@
      rawStopReason?: string;
      /**
       * Provider indication of whether the model explicitly ended its turn.
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index 738a6f0..4c52182 100644
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
-@@ -19,6 +19,20 @@
+@@ -19,6 +19,20 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
      // Sign in with ChatGPT: the subscription's shared usage limit, which resets
      // after hours rather than seconds.
      "subscription_sharing_usage_limit_exceeded",
@@ -326,7 +340,7 @@
  ]);
  const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      // Generic provider load, HTTP status, and server-side transient failures.
-@@ -61,7 +75,7 @@
+@@ -61,7 +75,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      "socket connection was closed",
      "timed? out",
      "timeout",
@@ -335,7 +349,7 @@
      // WebSocket transports can report close/error text instead of HTTP/fetch text.
      "websocket.?closed",
      "websocket.?error",
-@@ -69,6 +83,10 @@
+@@ -69,6 +83,10 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      // "stream ended without ..." and "Anthropic stream ended before message_stop"
      // (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
      "ended without",
@@ -346,7 +360,7 @@
      "stream ended before message_stop",
      "stream ended before a terminal response event",
      "http2 request did not get a response",
-@@ -186,11 +204,17 @@
+@@ -186,11 +204,17 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
   * before restarting the assistant turn.
   */
  export function isRetryableAssistantError(message) {

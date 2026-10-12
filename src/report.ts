@@ -162,6 +162,8 @@ async function readOverview(
   const control = await tx.doc(Control, root);
   const tasks = await scanTasks(tx, root);
   const workers = tasks.filter((task) => task.kind === "research.worker");
+  const standalone = definition.mode ? workers.at(-1) : undefined;
+  let standaloneResult: JsonValue | undefined;
   const summarizeWorker = async (task: (typeof workers)[number]) => {
     const input = task.input as unknown as WorkerInput;
     const request = "request" in input ? input.request : undefined;
@@ -171,10 +173,11 @@ async function readOverview(
       task.state.outcome.result !== undefined &&
       (task.state.outcome.status === "completed" ||
         task.state.outcome.status === "failed")
-        ? ((request
+        ? ((request || task === standalone
             ? await resolveResult(tx, task.state.outcome.result, task.id)
             : task.state.outcome.result) as unknown as SolverResult)
         : undefined;
+    if (task === standalone) standaloneResult = result as JsonValue | undefined;
     const limit =
       (request?.kind ?? definition.mode?.role) === "explorer" &&
       task.state.outcome?.status === "completed"
@@ -230,7 +233,6 @@ async function readOverview(
     !view.notes.find((note) => note.id === acceptedNoteId)?.accepted
   )
     throw new Error("Accepted note is missing or no longer accepted");
-  const standalone = definition.mode ? workers.at(-1) : undefined;
   const failure =
     standalone?.state.outcome?.status !== "completed" &&
     standalone?.state.status === "terminal"
@@ -329,7 +331,7 @@ async function readOverview(
       ? { verificationIssues: preview(issues, (item) => item) }
       : {}),
   };
-  return { definition, view, tasks, work, standalone, summary };
+  return { definition, view, tasks, work, standaloneResult, summary };
 }
 
 /** Current progress without notebook bodies, inputs, or usage accounting. */
@@ -343,7 +345,7 @@ export async function readReport(
   root: ConversationId,
   options: { records?: boolean; bodies?: boolean } = {},
 ) {
-  const { definition, view, tasks, work, standalone, summary } =
+  const { definition, view, tasks, work, standaloneResult, summary } =
     await readOverview(tx, root, options);
   const usage = await readUsage(tx, options.records);
   return {
@@ -358,18 +360,7 @@ export async function readReport(
     notes: view.notes,
     work,
     inputs: view.inputs,
-    ...(standalone?.state.status === "terminal" &&
-    (standalone.state.outcome.status === "completed" ||
-      standalone.state.outcome.status === "failed") &&
-    standalone.state.outcome.result !== undefined
-      ? {
-          result: await resolveResult(
-            tx,
-            standalone.state.outcome.result,
-            standalone.id,
-          ),
-        }
-      : {}),
+    ...(standaloneResult !== undefined ? { result: standaloneResult } : {}),
     ...(options.records ? { records: usage.records, tasks } : {}),
   };
 }

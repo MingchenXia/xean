@@ -26,6 +26,7 @@ import { Control, type Roles } from "../src/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
 import { Bodies, Catalog } from "../src/math/state.ts";
 import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
+import { RoleFailure } from "../src/roles/types.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
 import { limitRounds, readRounds } from "../scripts/bounded-solve.ts";
@@ -576,6 +577,71 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
   );
   expect(attempts).toBe(2);
 }, 30_000);
+
+test("latest standalone null results do not resolve superseded receipts", async () => {
+  const directory = await temporaryDirectory("xean-standalone-receipts-");
+  let attempts = 0;
+  const owner = await open(join(directory, "campaign.sqlite"), {
+    create: { ...definition, mode: { role: "review", input: {} } },
+    roles: () => ({
+      review: async (_input, runtime, ctx) => {
+        if (++attempts === 1) {
+          const error = new RoleFailure("Superseded opaque failure");
+          await runtime.commit(async (tx) => {
+            const conversation = await tx.createConversation({
+              ownership: { kind: "task", taskId: runtime.taskId },
+            });
+            const entry = await tx.appendEntry(
+              ToolResultEntry,
+              conversation.id,
+              {
+                data: { diagnostics: [] },
+                model: [
+                  {
+                    role: "toolResult",
+                    toolCallId: "prior",
+                    toolName: "submit_explorer",
+                    content: [],
+                    details: { notes: [draft] },
+                    isError: false,
+                    timestamp: 1,
+                  },
+                ],
+              },
+            );
+            error.result = { kind: "submissions", entries: [entry.id] };
+          }, ctx);
+          throw error;
+        }
+        return null;
+      },
+    }),
+  });
+  try {
+    expect(await reportOf(owner)).not.toHaveProperty("result");
+    await owner.root.waitForIdle(context);
+    expect(await controlCommand(owner, { kind: "resume" })).toMatchObject({
+      status: "completed",
+    });
+    const report = await owner.root.commit(async (tx) => {
+      const entry = spyOn(tx, "entry").mockImplementation(() => {
+        throw new Error("Superseded receipt must not be resolved");
+      });
+      try {
+        return await readReport(tx, owner.root.id);
+      } finally {
+        entry.mockRestore();
+      }
+    }, context);
+    expect(report).toHaveProperty("result", null);
+    expect(report.work.map(({ status }) => status)).toEqual([
+      "failed",
+      "completed",
+    ]);
+  } finally {
+    await owner.close();
+  }
+});
 
 test("standalone completion waits for owned children and still permits cancellation", async () => {
   const directory = await temporaryDirectory("xean-apps-");

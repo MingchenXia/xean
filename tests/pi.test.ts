@@ -72,6 +72,7 @@ test("native document caching releases old values while preserving committed sta
   const directory = await temporaryDirectory("pi-document-cache-");
   const session = createSession(
     await openNodeSqliteStorage(join(directory, "cache.sqlite")),
+    { documentRetentionMs: 0 },
   );
   const Doc = defineDoc({
     kind: "fixture.payload",
@@ -125,11 +126,41 @@ test("native document caching releases old values while preserving committed sta
   }
 });
 
+test("a retained retired watch releases its obsolete document tracker", async () => {
+  const directory = await temporaryDirectory("pi-retired-watch-");
+  const session = createSession(
+    await openNodeSqliteStorage(join(directory, "cache.sqlite")),
+    { documentRetentionMs: 0 },
+  );
+  const Doc = defineDoc({
+    kind: "fixture.retired-payload",
+    version: 1,
+    scope: "session",
+    initial: () => ({ text: "x".repeat(8192) }),
+  });
+  try {
+    await session.commit(async (tx) => {
+      await tx.doc(Doc);
+    }, context);
+    const watch = (await session.watchDoc(Doc, context))!;
+    const ref = new WeakRef(watch.value!);
+    watch.start(async () => {});
+    await session.commit((tx) => tx.retireDoc(Doc), context);
+    await expect(watch.closed).resolves.toEqual({ reason: "retired" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    Bun.gc(true);
+    expect(ref.deref()).toBeUndefined();
+    expect(watch.value).toBeNull();
+  } finally {
+    await session.close(context);
+  }
+});
+
 test("native cache eviction preserves multi-document commits and rollback after reopening", async () => {
   const directory = await temporaryDirectory("pi-cache-transactions-");
   const path = join(directory, "cache.sqlite");
   const storage = await openNodeSqliteStorage(path);
-  const session = createSession(storage);
+  const session = createSession(storage, { documentRetentionMs: 0 });
   const Doc = defineDoc({
     kind: "fixture.transaction",
     version: 1,
@@ -153,7 +184,7 @@ test("native cache eviction preserves multi-document commits and rollback after 
       const first = await tx.doc(Doc, ids[0]!);
       for (let i = 1; i < ids.length; i++)
         (await tx.doc(Doc, ids[i]!)).value += 1000;
-      // The first draft remains valid after later loads evict its tracker.
+      // Zero retention must keep every draft valid until this commit settles.
       first.value += 1000;
     };
     await session.commit(edit, context);
@@ -178,7 +209,9 @@ test("native cache eviction preserves multi-document commits and rollback after 
   } finally {
     await session.close(context);
   }
-  const reopened = createSession(await openNodeSqliteStorage(path));
+  const reopened = createSession(await openNodeSqliteStorage(path), {
+    documentRetentionMs: 0,
+  });
   try {
     for (let i = 0; i < ids.length; i++)
       expect((await reopened.snapshot(Doc, ids[i]!, context))?.value).toBe(

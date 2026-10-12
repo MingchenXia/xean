@@ -622,6 +622,51 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
   }
 });
 
+test("Coordinator retains ordered recent outcomes across worker pages", async () => {
+  const invoked: { id: string; assignment: string }[] = [];
+  let decisions = 0;
+  let recent: unknown;
+  const { research, harness, root } = await setup({
+    coordinator: async (input) => {
+      if (++decisions <= 130)
+        return {
+          work: { kind: "explorer", assignment: `Round ${decisions}` },
+        };
+      recent = input.recent;
+      return { work: null };
+    },
+    explorer: async (input, runtime) => {
+      invoked.push({
+        id: String(runtime.taskId),
+        assignment: input.assignment,
+      });
+      if (input.assignment === "Round 129") throw new Error("Retained failure");
+      return empty();
+    },
+  });
+  try {
+    await root.commit((tx) => research.initialize(tx, root.id), context);
+    await harness.waitForIdle(context);
+    expect(invoked).toHaveLength(130);
+    expect(decisions).toBe(131);
+    expect(recent).toEqual(
+      invoked.slice(-4).map(({ id, assignment }) => ({
+        id,
+        role: "explorer",
+        completed: assignment !== "Round 129",
+        failed: assignment === "Round 129",
+        error: assignment === "Round 129" ? "Retained failure" : null,
+        request: { kind: "explorer", assignment },
+        ...(assignment === "Round 129"
+          ? {}
+          : { result: { notes: 0, edits: 0 } }),
+      })),
+    );
+  } finally {
+    await harness.close(context);
+  }
+});
+
 test("inputs during a decision share one fresh successor and discard its stale plan", async () => {
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();

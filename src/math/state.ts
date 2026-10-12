@@ -361,7 +361,7 @@ async function applyNotes(
     }
     head.revision = marker;
   }
-  invalidate(catalog, consumers(catalog, invalid), marker);
+  if (invalid.size) invalidate(catalog, consumers(catalog, invalid), marker);
 }
 
 function assertFrozen(current: Note[], frozen: Note[], ids: string[]): void {

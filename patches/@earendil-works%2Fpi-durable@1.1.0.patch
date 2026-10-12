@@ -1,7 +1,36 @@
+diff --git a/dist/harness/context.js b/dist/harness/context.js
+index 8675a14..2ffa5fa 100644
+--- a/dist/harness/context.js
++++ b/dist/harness/context.js
+@@ -127,7 +127,22 @@ function contribute(entry, edit) {
+     if (edit?.action === "omit")
+         return Object.freeze([]);
+     const contributed = edit?.action === "replace" ? edit.messages : (entry.model ?? []);
+-    return Object.freeze(contributed.filter((message) => message.role !== "assistant" || !EXCLUDED_STOP_REASONS.has(message.stopReason)));
++    return Object.freeze(contributed.flatMap((message) => {
++        if (message.role !== "assistant")
++            return [message];
++        if (EXCLUDED_STOP_REASONS.has(message.stopReason))
++            return [];
++        if (message.stopReason !== "length")
++            return [message];
++        const content = continuationContent(message);
++        return content.length === 0 ? [] : [freezeJson({ ...message, content })];
++    }));
++}
++/** Reusable output from a truncated response. Tool calls remain only in the raw journal. */
++export function continuationContent(message) {
++    return message.content.filter((part) => part.type === "text"
++        ? part.text.trim().length > 0
++        : part.type === "thinking" && (part.thinking.trim().length > 0 || Boolean(part.thinkingSignature)));
+ }
+ /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
+ const deeplyFrozen = new WeakSet();
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
+index 136bed4..bc7e8ec 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -6,6 +6,7 @@
+@@ -6,6 +6,7 @@ import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.j
  import { defineTask } from "../tasks.js";
  import { addTools } from "./agent.js";
  import { createCompaction, estimateContext, selectCut } from "./compaction.js";
@@ -9,7 +38,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
  import { applyBoundary, prepareBoundary } from "./inbox.js";
  import { assignJson } from "./json.js";
  import { endRun, LiveDoc } from "./live.js";
-@@ -105,10 +106,11 @@
+@@ -114,10 +115,11 @@ export const GenerationTask = defineTask({
                  return failNoModel(runtime, ref, context);
              const view = await runtime.context(conversationId, context, { at: cutoff });
              let messages = view.messages;
@@ -24,7 +53,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
              });
              const options = {
                  ...streamOptions,
-@@ -116,7 +118,7 @@
+@@ -125,7 +127,7 @@ export const GenerationTask = defineTask({
                  sessionId: await ensureProviderSessionId(runtime, context),
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
              };
@@ -33,7 +62,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
-@@ -257,7 +259,7 @@
+@@ -278,7 +280,7 @@ export async function convertPartial(tx, live, conversationId) {
   * `progress.partialIntervalMs` (default 100 ms) with one commit in flight; `finally` stops the throttle and awaits that
   * commit, so no stale partial lands after the outcome.
   */
@@ -42,7 +71,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
      const interval = runtime.settings.progress.partialIntervalMs;
      let pending;
      let timer;
-@@ -291,7 +293,7 @@
+@@ -312,7 +314,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
          });
      };
      try {
@@ -51,7 +80,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
              // never gets past it, so it never leaves a partial.
-@@ -334,11 +336,12 @@
+@@ -355,11 +357,12 @@ async function classify(runtime, request, message, context) {
          return;
      }
      await runtime.hooks.each("afterResponse", (hook) => hook(message, runtime, context));
@@ -65,7 +94,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          return answer(runtime, message, context);
      }
      // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
-@@ -381,7 +384,9 @@
+@@ -402,7 +405,9 @@ async function classify(runtime, request, message, context) {
              };
              return { status: "running", checkpoint };
          }
@@ -76,7 +105,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "model_error", detail: text });
          return {
              status: "terminal",
-@@ -390,12 +395,15 @@
+@@ -411,12 +416,15 @@ async function classify(runtime, request, message, context) {
      }, context);
  }
  /**
@@ -96,7 +125,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
      await runtime.hooks.each("onYield", async (hook) => {
          if (continuation !== undefined)
              return;
-@@ -408,15 +416,19 @@
+@@ -429,15 +437,19 @@ async function answer(runtime, message, context) {
          const live = await tx.doc(LiveDoc, conversationId);
          const entry = await appendAssistant(tx, conversationId, message);
          const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
@@ -120,10 +149,10 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
              await startRun(tx, conversationId, live, users);
          return result;
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index 9ce3bb7..f1ec171 100644
+index ea3adc9..bec59c2 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -646,17 +646,25 @@ export interface HookApi extends DocumentReader {
+@@ -680,17 +680,25 @@ export interface HookApi extends DocumentReader {
      readonly conversationId: ConversationId;
      /** `HarnessOptions.models`. */
      readonly models: Models;
@@ -152,21 +181,12 @@ index 9ce3bb7..f1ec171 100644
      /** Every terminal provider message, before classification. */
      afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
 diff --git a/dist/session/session.js b/dist/session/session.js
-index c388076..396adfa 100644
+index 7b7c028..89a6658 100644
 --- a/dist/session/session.js
 +++ b/dist/session/session.js
-@@ -60,7 +60,7 @@ export class SessionImpl {
-             cached: (id) => this.#documents.get(id),
-             load: (definition, addressId, address, context) => this.#loadDocument(definition, addressId, address, context),
-             install: (document) => {
--                this.#documents.set(document.addressId, document);
-+                this.#cacheDocument(document);
-             },
-             evict: (id, recordId) => {
-                 if (this.#documents.get(id)?.record.id === recordId)
-@@ -406,9 +406,10 @@ export class SessionImpl {
-         };
-         const observer = create(loaded.tracker.value, detach);
+@@ -603,9 +603,10 @@ export class SessionImpl {
+             throw error;
+         }
          const observed = { version: loaded.valueVersion };
 +        const recordId = loaded.record.id;
          unsubscribeCommit = this.observeCommits((publication, context) => {
@@ -176,24 +196,20 @@ index c388076..396adfa 100644
                      continue;
                  // A document state's frames carry no caller cancellation; a watch observes its own cancellation.
                  const frameContext = observer instanceof CommittedStateSource ? withoutAbortSignal(context) : context;
-@@ -444,9 +445,16 @@ export class SessionImpl {
-             deltasSinceBase: stored.deltasSinceBase,
-             tracker: track(value),
-         };
--        this.#documents.set(addressId, loaded);
-+        this.#cacheDocument(loaded);
-         return loaded;
-     }
-+    /** Trackers are a cache; committed documents cold-load after eviction. */
-+    #cacheDocument(document) {
-+        this.#documents.delete(document.addressId);
-+        this.#documents.set(document.addressId, document);
-+        while (this.#documents.size > 128)
-+            this.#documents.delete(this.#documents.keys().next().value);
-+    }
-     #enqueue(job) {
-         const run = this.#tail.then(job);
-         this.#tail = run.then(() => undefined, () => undefined);
+diff --git a/dist/storage/sqlite/node.d.ts b/dist/storage/sqlite/node.d.ts
+index 45c897f..922a09e 100644
+--- a/dist/storage/sqlite/node.d.ts
++++ b/dist/storage/sqlite/node.d.ts
+@@ -28,7 +28,8 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
+ export declare class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
+     private readonly access;
+     private closed;
+-    constructor(database: DatabaseSync);
++    private readonly readOnly;
++    constructor(database: DatabaseSync, options?: { readOnly?: boolean });
+     transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T>;
+     close(): Promise<void>;
+     protected runOperation<T>(operation: () => T): Promise<T>;
 diff --git a/dist/storage/sqlite/node.js b/dist/storage/sqlite/node.js
 index 7770888..e9d9f31 100644
 --- a/dist/storage/sqlite/node.js
@@ -219,20 +235,23 @@ index 7770888..e9d9f31 100644
              }
              finally {
                  this.database.close();
-diff --git a/dist/storage/sqlite/node.d.ts b/dist/storage/sqlite/node.d.ts
-index 45c897f..922a09e 100644
---- a/dist/storage/sqlite/node.d.ts
-+++ b/dist/storage/sqlite/node.d.ts
-@@ -28,7 +28,8 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
- export declare class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
-     private readonly access;
-     private closed;
--    constructor(database: DatabaseSync);
+diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
+index 8c323ba..f99bd92 100644
+--- a/dist/storage/sqlite/storage.d.ts
++++ b/dist/storage/sqlite/storage.d.ts
+@@ -10,9 +10,10 @@ export declare class SqliteStorage implements Storage {
+     private closing;
+     private admittedReads;
+     private readsDrained;
 +    private readonly readOnly;
-+    constructor(database: DatabaseSync, options?: { readOnly?: boolean });
-     transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T>;
-     close(): Promise<void>;
-     protected runOperation<T>(operation: () => T): Promise<T>;
+     private constructor();
+-    /** Initialize storage over an owned SQLite database facade. */
+-    static open(db: SqliteDatabase): Promise<SqliteStorage>;
++    /** readOnly requires the caller to hold a SQLite read transaction until close. */
++    static open(db: SqliteDatabase, options?: { readOnly?: boolean }): Promise<SqliteStorage>;
+     commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq>;
+     mintId<I extends Id<string>>(): Promise<I>;
+     conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;
 diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
 index 86b5fe4..10a12ea 100644
 --- a/dist/storage/sqlite/storage.js
@@ -316,47 +335,3 @@ index 86b5fe4..10a12ea 100644
  }
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
-diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
-index 8c323ba..f99bd92 100644
---- a/dist/storage/sqlite/storage.d.ts
-+++ b/dist/storage/sqlite/storage.d.ts
-@@ -10,9 +10,10 @@ export declare class SqliteStorage implements Storage {
-     private closing;
-     private admittedReads;
-     private readsDrained;
-+    private readonly readOnly;
-     private constructor();
--    /** Initialize storage over an owned SQLite database facade. */
--    static open(db: SqliteDatabase): Promise<SqliteStorage>;
-+    /** readOnly requires the caller to hold a SQLite read transaction until close. */
-+    static open(db: SqliteDatabase, options?: { readOnly?: boolean }): Promise<SqliteStorage>;
-     commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq>;
-     mintId<I extends Id<string>>(): Promise<I>;
-     conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;
-diff --git a/dist/harness/context.js b/dist/harness/context.js
---- a/dist/harness/context.js
-+++ b/dist/harness/context.js
-@@ -127,7 +127,22 @@
-     if (edit?.action === "omit")
-         return Object.freeze([]);
-     const contributed = edit?.action === "replace" ? edit.messages : (entry.model ?? []);
--    return Object.freeze(contributed.filter((message) => message.role !== "assistant" || !EXCLUDED_STOP_REASONS.has(message.stopReason)));
-+    return Object.freeze(contributed.flatMap((message) => {
-+        if (message.role !== "assistant")
-+            return [message];
-+        if (EXCLUDED_STOP_REASONS.has(message.stopReason))
-+            return [];
-+        if (message.stopReason !== "length")
-+            return [message];
-+        const content = continuationContent(message);
-+        return content.length === 0 ? [] : [freezeJson({ ...message, content })];
-+    }));
-+}
-+/** Reusable output from a truncated response. Tool calls remain only in the raw journal. */
-+export function continuationContent(message) {
-+    return message.content.filter((part) => part.type === "text"
-+        ? part.text.trim().length > 0
-+        : part.type === "thinking" && (part.thinking.trim().length > 0 || Boolean(part.thinkingSignature)));
- }
- /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
- const deeplyFrozen = new WeakSet();

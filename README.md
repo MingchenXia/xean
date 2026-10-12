@@ -299,8 +299,9 @@ Codex output capture allows 16 Mi decoded characters on stdout and 1 Mi on stder
 Exceeding either limit stops the process group and records a failed call with
 truncated output. Usage received before the limit remains in the receipt.
 Failed calls retain their raw logs and report the provider's error message when available.
-Each Pi Session caches up to 128 document trackers and reloads evicted documents from storage.
-This limits the number of cached documents, not their total size.
+Xean sets Pi's `documentRetentionMs` to zero, releasing unobserved document
+trackers after use. Watched documents remain cached until their observers detach
+or the document retires. Later reads reload evicted documents from storage.
 Completed roles release their provider session resources.
 
 ## Inspection and experiments
@@ -383,14 +384,15 @@ and export, and licenses.
 `pack` runs the same distribution check and writes the source archive under
 `dist/`.
 
-The 3.3.0 compatibility checks reopened representative paused and completed
-3.2.0 databases on Bun 1.4.2 without credentials or model calls. The paused
+Compatibility checks reopened representative paused and completed databases
+from 3.2.0 and the previous 3.3.0 candidate on Bun 1.4.2 with the updated Pi
+packages, without credentials or model calls. The paused
 fixture preserved task, settings, edited notes and their IDs, candidate flags,
 dependencies, checks, and guidance, then resumed its remaining scripted work.
 The completed fixture retained identical task and entry records and a
 byte-identical accepted export. These checks used scripted judgments and fresh
 fixtures. Transfer of an in-flight model generation remains unqualified.
-Receipts are under `runs/release-3.3.0-20261011/compatibility/`, outside the source
+Receipts are under `runs/pi-upgrade-20261012/compatibility/`, outside the source
 package.
 
 The 3.2.0 qualification passed 213 scripted tests and 2,044 assertions on each
@@ -459,7 +461,7 @@ Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the sou
 package.
 
 Pi packages are built together from upstream commit
-`ea448f454af474f3e2fe9733b331e17b0662f5d6` using Pi's `pack:packages` command.
+`ee409a85f6ad92bf8c6ab8ed735c6cd24f2e749e` using Pi's `pack:packages` command.
 This is an unreleased snapshot after the 1.1.0 release. The packages include frozen
 model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).

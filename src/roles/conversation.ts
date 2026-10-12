@@ -1,4 +1,4 @@
-import type { Context, JsonValue } from "@earendil-works/chord";
+import { copyJson, type Context, type JsonValue } from "@earendil-works/chord";
 import { isDeepStrictEqual } from "node:util";
 import { Check } from "typebox/value";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -54,7 +54,6 @@ import { profileNames, capacityError, type ProfileName } from "../config.ts";
 
 registerSessionResourceCleanup(resetOpenAICodexWebSocketDebugStats);
 
-const json = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const responseLimitError = "Role exhausted its responses";
 type Call = {
   profile?: ProfileName;
@@ -393,8 +392,8 @@ export function conversations(profiles: Profiles) {
       maxLines: Number.MAX_SAFE_INTEGER,
     },
     async execute({ ids, level }, api, context) {
+      const call = (await api.snapshot(Call, api.conversationId, context))!;
       const admitted = await api.commit(async (tx) => {
-        const call = json(await tx.doc(Call, api.conversationId));
         const history = await progress(tx, api.conversationId);
         const remaining = (used: number) =>
           `${Math.max(0, call.maxReads! - used)} reads and ${Math.max(0, call.maxResponses! - history.responses)} responses`;
@@ -402,7 +401,6 @@ export function conversations(profiles: Profiles) {
           history.reads < call.maxReads! &&
           history.responses < call.maxResponses!;
         return {
-          call,
           allowed,
           allowance: remaining(history.reads + (allowed ? 1 : 0)),
         };
@@ -414,10 +412,7 @@ export function conversations(profiles: Profiles) {
       } else {
         // Pi's historical reads queue on Session and must stay outside commits.
         const available = new Map(
-          (await notes(api, admitted.call, context, ids)).map((note) => [
-            note.id,
-            note,
-          ]),
+          (await notes(api, call, context, ids)).map((note) => [note.id, note]),
         );
         const missing = ids.find((id) => !available.has(id));
         if (missing)
@@ -560,7 +555,10 @@ export function conversations(profiles: Profiles) {
         sessionId = (await tx.doc(ProviderDoc, conversationId)).sessionId;
         Object.assign(
           await tx.doc(Call, conversationId),
-          json({ profile: name, ...assignment }),
+          copyJson(
+            { profile: name, ...assignment },
+            { omitUndefinedProperties: true },
+          ),
         );
         await configure(tx, conversationId, {
           model: profile.model,
