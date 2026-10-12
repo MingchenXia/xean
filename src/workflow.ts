@@ -97,20 +97,14 @@ export function blockedDecision(
   return pendingDecisions(tasks).find(failedTask);
 }
 
-export async function scanTasks(
-  tx: Tx,
-  root: ConversationId,
-  kind?: string,
-  status?: NativeRecord["state"]["status"],
-) {
-  const tasks: TaskRecord<JsonValue, JsonValue, JsonValue>[] = [];
+export async function scanTasks(tx: Tx, root: ConversationId, kind?: string) {
+  const tasks: NativeRecord[] = [];
   let cursor: Cursor | undefined;
   do {
     const page = await tx.scanTasks(
       {
         conversationId: root,
         ...(kind ? { kind } : {}),
-        ...(status ? { status } : {}),
       },
       128,
       cursor,

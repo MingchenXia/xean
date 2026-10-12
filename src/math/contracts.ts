@@ -108,6 +108,9 @@ export const verdictSchema = object({
   correction: Type.Optional(correctionSchema),
 });
 export type Verdict = Static<typeof verdictSchema>;
+const recordedVerdict = Type.Omit(verdictSchema, ["correction"], {
+  additionalProperties: false,
+});
 const premisesSchema = Type.Array(text, {
   description:
     "Exact standalone external claims, including all hypotheses and qualifications. Source names and citations are allowed. Substantive algorithmic guarantees belong in the claim. Put proof ideas, application explanations, and validation status in report, not here. Exclude explicit hypothetical antecedents, task-granted assumptions, and declared supporting notes.",
@@ -133,7 +136,7 @@ const passageSchema = object({
   quote: text,
 });
 export const sourceSchema = object({
-  ...Type.Omit(verdictSchema, ["correction"]).properties,
+  ...recordedVerdict.properties,
   passages: Type.Array(
     Type.Union([
       passageSchema,
@@ -142,7 +145,7 @@ export const sourceSchema = object({
   ),
 });
 export const reviewSchema = object({
-  ...Type.Omit(verdictSchema, ["correction"]).properties,
+  ...recordedVerdict.properties,
   passages: Type.Array(passageSchema),
   premises: premisesSchema,
 });
@@ -169,9 +172,6 @@ export const researchReportSchema = object({
 export type ResearchReport = Static<typeof researchReportSchema>;
 export type Source = Verdict | ResearchReport;
 export type ReviewInput = { task: Task; argument: string };
-const recordedVerdict = Type.Omit(verdictSchema, ["correction"], {
-  additionalProperties: false,
-});
 export const checkSchema = object({
   noteId: text,
   correction: Type.Optional(
