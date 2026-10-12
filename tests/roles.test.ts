@@ -26,6 +26,7 @@ import {
   ToolResultEntry,
   type Cursor,
   type EntryRecord,
+  type Tx,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import {
@@ -41,8 +42,10 @@ import type { Note, SolverResult } from "../src/math/contracts.ts";
 import { resolveResult, type SubmissionResult } from "../src/math/results.ts";
 import { DefinitionDoc, type Definition } from "../src/definition.ts";
 import { createResearch, scanTasks } from "../src/workflow.ts";
-import { readReport, readUsage } from "../src/report.ts";
+import { readReport, readStatus, readUsage } from "../src/report.ts";
+import { explorerLimit } from "../src/roles/conversation.ts";
 import {
+  Bodies,
   Events,
   readView,
   readSnapshot,
@@ -1848,22 +1851,17 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
                   ],
                 }),
               ],
-              { stopReason: reason === "length" ? "length" : "error" },
+              { stopReason: "length" },
             ),
             rawStopReason:
               reason === "length" ? "incomplete.max_output_tokens" : reason,
-            errorMessage:
-              reason === "length"
-                ? undefined
-                : "Response incomplete: max_messages",
           };
         if (name === "proof" && proofs > 1) {
           const body = JSON.stringify(transcript);
           expect(body).toContain("Completed preliminary lemma");
           expect(body).not.toContain("PARTIAL_TOOL_PROOF");
           expect(body).not.toContain("missing_result");
-          if (reason !== "length")
-            expect(body).not.toContain("Interrupted proof text");
+          expect(body).toContain("Interrupted proof text");
         }
         if (name === "requirements") {
           expect(input.notes[0].summary).toBe("Source-checked clarification");
@@ -2408,25 +2406,20 @@ test("Coordinator rejects used literature and multiple workers", async () => {
   }
 });
 
-test.each([
-  [false, 2, 2],
-  [true, 2, 2],
-  [false, 16, 9],
-] as const)(
-  "truncated Explorer responses retain only prior complete submissions (saved=%s, allowance=%s, calls=%s)",
-  async (submitted, allowance, expectedCalls) => {
+test.each([false, true])(
+  "provider-limit continuations preserve work without consuming Explorer responses (saved=%s)",
+  async (submitted) => {
     const directory = await temporaryDirectory("pi-role-truncated-");
-    const cleaned: (string | undefined)[] = [];
-    const unregister = registerSessionResourceCleanup((sessionId) =>
-      cleaned.push(sessionId),
-    );
     let response = 0;
     const provider = fixture(
       () => {
         response++;
         if (submitted && response === 1) return { notes: [draft("n1")] };
+        if (response > 9 + Number(submitted))
+          return { notes: [{ ...draft("n3"), candidate: true }] };
         return fauxAssistantMessage(
           [
+            { type: "text", text: `Preserved fragment ${response}` },
             fauxToolCall("submit_explorer", {
               notes: [{ ...draft("n2"), candidate: true }],
             }),
@@ -2434,63 +2427,36 @@ test.each([
           { stopReason: "length" },
         );
       },
-      { research: false, maxExplorerResponses: allowance },
+      { research: false, maxExplorerResponses: submitted ? 2 : 1 },
     );
-    const current = await provider.open(directory, {
-      task,
-      settings: {
-        profiles: { default: { provider: "openai", model: "roles" } },
-        research: false,
-      },
-      mode: {
-        role: "explorer",
-        input: { notes: [], assignment: "Continue" },
-      },
-    });
+    const current = await provider.open(directory);
     try {
-      await current.root.commit(
-        (tx) => provider.workflow.initialize(tx, current.root.id),
-        context,
-      );
-      await current.harness.waitForIdle(context);
-      const id = (
-        await current.root.commit(
-          (tx) => scanTasks(tx, current.root.id, "research.worker"),
-          context,
-        )
-      )[0]!.id;
+      const id = await current.invoke({
+        role: "explorer",
+        input: { task, notes: [], assignment: "Continue" },
+      });
       const outcome = await resultOf(current.harness, id);
-      expect(outcome).toMatchObject(
-        submitted
-          ? {
-              status: "completed",
-              result: {
-                kind: "notes",
-                notes: [{ id: "n1" }],
-              },
-            }
-          : {
-              status: "failed",
-              error: {
-                message: "explorer did not submit a structured result",
-              },
-            },
-      );
-      expect(provider.calls).toHaveLength(expectedCalls);
-      expect(cleaned).toEqual([provider.calls[0]!.session]);
-      const retained = await entries(current.harness);
-      expect(retained.filter(ToolResultEntry.is)).toHaveLength(
-        submitted ? 1 : 0,
-      );
-      const report = await current.root.commit(
-        (tx) => readReport(tx, current.root.id),
-        context,
-      );
-      expect(report.notes).toEqual([]);
-      if (!submitted) expect(report.result).toBeUndefined();
+      expect(outcome).toMatchObject({
+        status: "completed",
+        result: {
+          kind: "notes",
+          notes: submitted ? [{ id: "n1" }, { id: "n3" }] : [{ id: "n3" }],
+        },
+      });
+      expect(provider.calls).toHaveLength(10 + Number(submitted));
+      const last = JSON.stringify(provider.calls.at(-1)!.transcript);
+      expect(last).toContain(`Preserved fragment ${1 + Number(submitted)}`);
+      expect(last).toContain(`Preserved fragment ${9 + Number(submitted)}`);
+      expect(last).not.toContain("n2 secret original proof");
+      expect(last).not.toContain("missing_result");
+      expect(
+        (await entries(current.harness)).filter(ToolResultEntry.is),
+      ).toHaveLength(submitted ? 2 : 1);
+      expect(
+        await current.root.commit((tx) => explorerLimit(tx, id), context),
+      ).toBeUndefined();
     } finally {
       await current.harness.close(context);
-      unregister();
     }
   },
 );
@@ -2524,6 +2490,160 @@ test("capacity after a frozen read hands off valid private notes without another
       result: { kind: "notes", notes: [{ id: "n1" }] },
     });
     expect(provider.calls).toHaveLength(2);
+    expect(
+      await current.root.commit((tx) => explorerLimit(tx, id), context),
+    ).toBe("context_capacity");
+  } finally {
+    await current.harness.close(context);
+  }
+});
+
+test.each([
+  [1, false],
+  [2, false],
+  [3, false],
+  [1, true],
+  [2, true],
+  [3, true],
+] as const)(
+  "Explorer handoff reasons survive publication and reopen (allowance=%s, edit=%s)",
+  async (allowance, edit) => {
+    const directory = await temporaryDirectory("pi-role-limit-report-");
+    let responses = 0;
+    const provider = fixture(
+      (_name, input) => {
+        if (++responses > 1)
+          return fauxAssistantMessage("No additional result.");
+        return edit
+          ? {
+              notes: [],
+              edits: [
+                {
+                  id: input.notes[0].id,
+                  revision: input.notes[0].revision,
+                  text: "Retained partial repair",
+                },
+              ],
+            }
+          : { notes: [draft("n1")] };
+      },
+      { research: false, maxExplorerResponses: allowance },
+    );
+    let decisions = 0;
+    provider.roles.coordinator = async (input) => {
+      if (++decisions === 1)
+        return { work: { kind: "explorer", assignment: "Explore." } };
+      expect(input.failures).toEqual([]);
+      expect(input.limits).toEqual(
+        allowance === 3
+          ? []
+          : [{ id: expect.any(String), reason: "response_limit" }],
+      );
+      return { work: null };
+    };
+    let current = await provider.open(directory, {
+      task,
+      settings: {
+        profiles: { default: { provider: "openai", model: "roles" } },
+        research: false,
+      },
+    });
+    try {
+      await current.root.commit(async (tx) => {
+        if (edit)
+          await provider.workflow.input(tx, current.root.id, {
+            kind: "submit",
+            id: "seed",
+            notes: [draft("n1")],
+          });
+        else await provider.workflow.initialize(tx, current.root.id);
+      }, context);
+      await current.harness.waitForIdle(context);
+      expect(decisions).toBe(2);
+      const before = await current.root.commit(
+        (tx) => readReport(tx, current.root.id),
+        context,
+      );
+      expect(before.status.work).toMatchObject({ completed: 1, failed: 0 });
+      expect(before.status.limits.items).toEqual(
+        allowance === 3
+          ? []
+          : [
+              {
+                id: expect.any(String),
+                role: "explorer",
+                status: "completed",
+                reason: "response_limit",
+              },
+            ],
+      );
+      expect(before.notes).toHaveLength(1);
+      expect(before.notes[0]!.text).toBe(
+        edit ? "Retained partial repair" : draft("n1").text,
+      );
+      await current.harness.close(context);
+      current = await provider.open(directory);
+      const after = await current.root.commit(
+        (tx) => readReport(tx, current.root.id),
+        context,
+      );
+      const compact = await current.root.commit((tx) => {
+        const reader =
+          allowance === 1
+            ? new Proxy(tx, {
+                get(target, key) {
+                  if (["entry", "scanEntries"].includes(String(key)))
+                    throw new Error(`Unexpected history read: ${String(key)}`);
+                  const value = Reflect.get(target, key);
+                  return typeof value === "function"
+                    ? (...args: unknown[]) => {
+                        if (key === "doc" && args[0] === Bodies)
+                          throw new Error("Unexpected notebook body read");
+                        if (
+                          key === "scanConversations" &&
+                          (args[0] as Parameters<Tx["scanConversations"]>[0])
+                            ?.ownerTaskId === undefined
+                        )
+                          throw new Error(
+                            "Unexpected campaign conversation scan",
+                          );
+                        return Reflect.apply(value, target, args);
+                      }
+                    : value;
+                },
+              })
+            : tx;
+        return readStatus(reader, current.root.id);
+      }, context);
+      expect(after.status.limits).toEqual(before.status.limits);
+      expect(after.notes).toEqual(before.notes);
+      expect(compact.limits).toEqual(after.status.limits);
+      expect(compact.work).toEqual(after.status.work);
+      expect(compact).not.toHaveProperty("calls");
+      expect(provider.calls).toHaveLength(allowance === 1 ? 1 : 2);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
+
+test("an empty Explorer handoff at its response allowance remains voluntary", async () => {
+  const directory = await temporaryDirectory("pi-role-voluntary-handoff-");
+  const provider = fixture(() => ({ notes: [], edits: [] }), {
+    research: false,
+    maxExplorerResponses: 1,
+  });
+  const current = await provider.open(directory);
+  try {
+    const id = await current.invoke({
+      role: "explorer",
+      input: { task, notes: [], assignment: "Explore." },
+    });
+    expect((await resultOf(current.harness, id)).status).toBe("completed");
+    expect(
+      await current.root.commit((tx) => explorerLimit(tx, id), context),
+    ).toBeUndefined();
+    expect(provider.calls).toHaveLength(1);
   } finally {
     await current.harness.close(context);
   }
@@ -3003,20 +3123,28 @@ test.each([false, undefined])(
   "Explorer hands off when a non-last new note is a candidate (last candidate=%s)",
   async (lastCandidate) => {
     const directory = await temporaryDirectory("pi-role-candidate-handoff-");
-    const provider = fixture(() => ({
-      notes: [
-        { ...draft("n1"), candidate: true },
-        {
-          ...draft("n2", ["n1"]),
-          ...(lastCandidate === undefined ? {} : { candidate: lastCandidate }),
-        },
-      ],
-    }));
-    provider.roles.coordinator = async (input) => ({
-      work: input.notes.length
-        ? null
-        : { kind: "explorer", assignment: "Prove the exact claim" },
-    });
+    const provider = fixture(
+      () => ({
+        notes: [
+          { ...draft("n1"), candidate: true },
+          {
+            ...draft("n2", ["n1"]),
+            ...(lastCandidate === undefined
+              ? {}
+              : { candidate: lastCandidate }),
+          },
+        ],
+      }),
+      { research: false, maxExplorerResponses: 1 },
+    );
+    provider.roles.coordinator = async (input) => {
+      expect(input.limits).toEqual([]);
+      return {
+        work: input.notes.length
+          ? null
+          : { kind: "explorer", assignment: "Prove the exact claim" },
+      };
+    };
     const current = await provider.open(directory, {
       task,
       settings: {
@@ -3036,6 +3164,11 @@ test.each([false, undefined])(
         context,
       );
       expect(view.notes).toHaveLength(2);
+      const status = await current.root.commit(
+        (tx) => readStatus(tx, current.root.id),
+        context,
+      );
+      expect(status.limits.items).toEqual([]);
       expect(view.notes.map(({ candidate }) => candidate)).toEqual([
         true,
         false,
@@ -3165,7 +3298,7 @@ test("Explorer coalesces private edits at the frozen public revision across reop
         };
       throw new Error("Completed edit role made another request");
     },
-    { research: false, maxExplorerResponses: 4 },
+    { research: false, maxExplorerResponses: 2 },
   );
   let current = await provider.open(directory);
   try {
@@ -3203,6 +3336,9 @@ test("Explorer coalesces private edits at the frozen public revision across reop
       },
     });
     expect(calls).toBe(2);
+    expect(
+      await current.root.commit((tx) => explorerLimit(tx, id), context),
+    ).toBeUndefined();
     expect(existing.text).toBe(draft(existing.id).text);
     const retained = (await entries(current.harness))
       .flatMap((entry) => entry.model ?? [])

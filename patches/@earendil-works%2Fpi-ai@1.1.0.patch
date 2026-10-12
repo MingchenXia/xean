@@ -199,7 +199,21 @@
  // Auth & Headers
 --- a/dist/api/openai-responses-shared.js
 +++ b/dist/api/openai-responses-shared.js
-@@ -433,11 +433,20 @@
+@@ -173,7 +173,12 @@
+             const isSameModel = isSameProviderAndApi && assistantMsg.model === model.id;
+             const isDifferentModel = isSameProviderAndApi && assistantMsg.model !== model.id;
+             let textBlockIndex = 0;
+-            for (const block of msg.content) {
++            for (const part of msg.content) {
++                // A limit can interrupt a reasoning item before it receives a replay signature.
++                const block = msg.stopReason === "length" && part.type === "thinking" &&
++                    !part.thinkingSignature && !part.redacted && part.thinking.trim().length > 0
++                    ? { type: "text", text: part.thinking }
++                    : part;
+                 if (block.type === "thinking") {
+                     if (block.thinkingSignature) {
+                         const reasoningItem = JSON.parse(block.thinkingSignature);
+@@ -433,11 +438,20 @@
      };
      const finalizeResponse = (response) => {
          sawTerminalResponseEvent = true;
@@ -221,7 +235,16 @@
              const inputDetails = response.usage.input_tokens_details;
              const cachedTokens = inputDetails?.cached_tokens || 0;
              const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
-@@ -643,8 +652,7 @@
+@@ -460,7 +474,7 @@
+             options.applyServiceTierPricing(output.usage, serviceTier);
+         }
+         // Map status to stop reason. For incomplete responses, retain the provider's
+-        // specific reason so max-output truncation and content filtering stay distinct.
++        // specific reason so continuation limits and content filtering stay distinct.
+         const status = response?.status;
+         const incompleteDetails = response?.incomplete_details;
+         const incompleteReason = typeof incompleteDetails?.reason === "string" ? incompleteDetails.reason : undefined;
+@@ -643,8 +657,7 @@
              throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
          }
          else if (event.type === "response.failed") {
@@ -231,6 +254,22 @@
              const error = event.response?.error;
              const details = event.response?.incomplete_details;
              const msg = error
+@@ -679,7 +692,7 @@
+         case "completed":
+             return { stopReason: "stop" };
+         case "incomplete":
+-            if (incompleteReason === "max_output_tokens") {
++            if (incompleteReason === "max_output_tokens" || incompleteReason === "max_messages") {
+                 return { stopReason: "length" };
+             }
+             return {
+@@ -701,4 +714,4 @@
+         }
+     }
+ }
+-//# sourceMappingURL=openai-responses-shared.js.map
+\ No newline at end of file
++//# sourceMappingURL=openai-responses-shared.js.map
 --- a/dist/api/openai-responses.js
 +++ b/dist/api/openai-responses.js
 @@ -163,7 +163,9 @@
@@ -307,7 +346,7 @@
      "stream ended before message_stop",
      "stream ended before a terminal response event",
      "http2 request did not get a response",
-@@ -186,11 +204,20 @@
+@@ -186,11 +204,17 @@
   * before restarting the assistant turn.
   */
  export function isRetryableAssistantError(message) {
@@ -324,9 +363,6 @@
          return false;
 +    if (typeof status === "number" && status >= 400 && status < 600)
 +        return status === 408 || status === 409 || status === 429 || status >= 500;
-+    if (["openai-responses", "openai-codex-responses"].includes(message.api) &&
-+        message.rawStopReason === "incomplete.max_messages")
-+        return true;
      return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
  }
  //# sourceMappingURL=retry.js.map

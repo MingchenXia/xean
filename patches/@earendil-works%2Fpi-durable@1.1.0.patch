@@ -1,8 +1,15 @@
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 31bb1c7..0ee3242 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -105,10 +105,11 @@ export const GenerationTask = defineTask({
+@@ -6,6 +6,7 @@
+ import { defineTask } from "../tasks.js";
+ import { addTools } from "./agent.js";
+ import { createCompaction, estimateContext, selectCut } from "./compaction.js";
++import { continuationContent } from "./context.js";
+ import { applyBoundary, prepareBoundary } from "./inbox.js";
+ import { assignJson } from "./json.js";
+ import { endRun, LiveDoc } from "./live.js";
+@@ -105,10 +106,11 @@
                  return failNoModel(runtime, ref, context);
              const view = await runtime.context(conversationId, context, { at: cutoff });
              let messages = view.messages;
@@ -17,7 +24,7 @@ index 31bb1c7..0ee3242 100644
              });
              const options = {
                  ...streamOptions,
-@@ -116,7 +117,7 @@ export const GenerationTask = defineTask({
+@@ -116,7 +118,7 @@
                  sessionId: await ensureProviderSessionId(runtime, context),
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
              };
@@ -26,7 +33,7 @@ index 31bb1c7..0ee3242 100644
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
-@@ -257,7 +258,7 @@ export async function convertPartial(tx, live, conversationId) {
+@@ -257,7 +259,7 @@
   * `progress.partialIntervalMs` (default 100 ms) with one commit in flight; `finally` stops the throttle and awaits that
   * commit, so no stale partial lands after the outcome.
   */
@@ -35,7 +42,7 @@ index 31bb1c7..0ee3242 100644
      const interval = runtime.settings.progress.partialIntervalMs;
      let pending;
      let timer;
-@@ -291,7 +292,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
+@@ -291,7 +293,7 @@
          });
      };
      try {
@@ -44,6 +51,74 @@ index 31bb1c7..0ee3242 100644
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
              // never gets past it, so it never leaves a partial.
+@@ -334,11 +336,12 @@
+         return;
+     }
+     await runtime.hooks.each("afterResponse", (hook) => hook(message, runtime, context));
++    const emptyLimit = message.stopReason === "length" && continuationContent(message).length === 0;
+     const calls = message.content.filter((content) => content.type === "toolCall");
+     if (message.stopReason === "toolUse" && calls.length > 0) {
+         return startToolRound(runtime, request, message, calls, context);
+     }
+-    if (message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse") {
++    if (!emptyLimit && (message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse")) {
+         return answer(runtime, message, context);
+     }
+     // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
+@@ -381,7 +384,9 @@
+             };
+             return { status: "running", checkpoint };
+         }
+-        const text = message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
++        const text = emptyLimit
++            ? "Model response reached its output limit without resumable text or reasoning"
++            : message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
+         endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "model_error", detail: text });
+         return {
+             status: "terminal",
+@@ -390,12 +395,15 @@
+     }, context);
+ }
+ /**
+- * A final answer; the final boundary places queued items (spec §6). The first `onYield` continuation appends a user
+- * message and hands the run to a successor generation, but only when the boundary selected no user item and no reset.
+- * Otherwise the run's inputs settle `done`, and selected user items start the next run.
++ * A truncated answer keeps the current inputs and admits steering at the post-tools boundary. A complete answer
++ * reaches the final boundary; its first `onYield` continuation keeps the run only when no user item or reset intervenes.
++ * Both use the ordinary atomic handoff to a successor generation. A reset ends a truncated run without an answer.
+  */
+ async function answer(runtime, message, context) {
+-    let continuation;
++    const incomplete = message.stopReason === "length";
++    let continuation = incomplete
++        ? "Continue from the preceding incomplete response. Finish the response; reissue any incomplete tool call with complete arguments."
++        : undefined;
+     await runtime.hooks.each("onYield", async (hook) => {
+         if (continuation !== undefined)
+             return;
+@@ -408,15 +416,19 @@
+         const live = await tx.doc(LiveDoc, conversationId);
+         const entry = await appendAssistant(tx, conversationId, message);
+         const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
+-        const { users, reset } = await applyBoundary(tx, boundary, "final", runtime.now());
+-        if (continuation !== undefined && users.length === 0 && !reset) {
++        const { users, reset } = await applyBoundary(tx, boundary, incomplete ? "postTools" : "final", runtime.now());
++        if (continuation !== undefined && (incomplete || users.length === 0) && !reset) {
++            if (incomplete && live.run?.taskId === runtime.taskId)
++                live.run.inputs.push(...users);
+             const user = { role: "user", content: continuation, timestamp: runtime.now() };
+             await tx.appendEntry(UserEntry, conversationId, { model: [user] });
+             handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
+             delete live.generation;
+             return result;
+         }
+-        endRun(tx, live, runtime.taskId, { status: "done", answer: entry.id });
++        endRun(tx, live, runtime.taskId, incomplete
++            ? { status: "unanswered", reason: "reset" }
++            : { status: "done", answer: entry.id });
+         if (users.length > 0)
+             await startRun(tx, conversationId, live, users);
+         return result;
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
 index 9ce3bb7..f1ec171 100644
 --- a/dist/harness/types.d.ts
@@ -258,3 +333,30 @@ index 8c323ba..f99bd92 100644
      commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq>;
      mintId<I extends Id<string>>(): Promise<I>;
      conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;
+diff --git a/dist/harness/context.js b/dist/harness/context.js
+--- a/dist/harness/context.js
++++ b/dist/harness/context.js
+@@ -127,7 +127,22 @@
+     if (edit?.action === "omit")
+         return Object.freeze([]);
+     const contributed = edit?.action === "replace" ? edit.messages : (entry.model ?? []);
+-    return Object.freeze(contributed.filter((message) => message.role !== "assistant" || !EXCLUDED_STOP_REASONS.has(message.stopReason)));
++    return Object.freeze(contributed.flatMap((message) => {
++        if (message.role !== "assistant")
++            return [message];
++        if (EXCLUDED_STOP_REASONS.has(message.stopReason))
++            return [];
++        if (message.stopReason !== "length")
++            return [message];
++        const content = continuationContent(message);
++        return content.length === 0 ? [] : [freezeJson({ ...message, content })];
++    }));
++}
++/** Reusable output from a truncated response. Tool calls remain only in the raw journal. */
++export function continuationContent(message) {
++    return message.content.filter((part) => part.type === "text"
++        ? part.text.trim().length > 0
++        : part.type === "thinking" && (part.thinking.trim().length > 0 || Boolean(part.thinkingSignature)));
+ }
+ /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
+ const deeplyFrozen = new WeakSet();

@@ -21,6 +21,7 @@ import { closure } from "./math/argument.ts";
 import { stagePassed } from "./math/notes.ts";
 import { verificationStages, type SolverResult } from "./math/contracts.ts";
 import { CodexLog, CodexRequest } from "./roles/codex.ts";
+import { explorerLimit } from "./roles/conversation.ts";
 
 const statusText = (value: string | null | undefined): string | null =>
   value == null ? null : value.length > 500 ? `${value.slice(0, 499)}…` : value;
@@ -174,6 +175,11 @@ async function readOverview(
             ? await resolveResult(tx, task.state.outcome.result, task.id)
             : task.state.outcome.result) as unknown as SolverResult)
         : undefined;
+    const limit =
+      (request?.kind ?? definition.mode?.role) === "explorer" &&
+      task.state.outcome?.status === "completed"
+        ? await explorerLimit(tx, task.id)
+        : undefined;
     return {
       id: String(task.id),
       role: request?.kind ?? definition.mode?.role ?? task.kind,
@@ -189,6 +195,7 @@ async function readOverview(
             : "active",
       retryOf: input.retryOf === undefined ? null : String(input.retryOf),
       error: errorOf(task),
+      ...(limit ? { limit } : {}),
       assignment:
         details && request && "assignment" in request
           ? request.assignment
@@ -306,6 +313,10 @@ async function readOverview(
       work.filter((item) => item.status === "failed").reverse(),
       (item) => ({ ...metadata(item), error: statusText(item.error) }),
     ),
+    limits: preview(work.filter((item) => item.limit).reverse(), (item) => ({
+      ...metadata(item),
+      reason: item.limit!,
+    })),
     notes: {
       total: view.notes.length,
       imported: view.notes.filter((note) => note.imported).length,
@@ -321,7 +332,7 @@ async function readOverview(
   return { definition, view, tasks, work, standalone, summary };
 }
 
-/** Current progress without notebook bodies, inputs, Explorer receipts, or usage scans. */
+/** Current progress without notebook bodies, inputs, or usage accounting. */
 export async function readStatus(tx: Tx, root: ConversationId) {
   return (await readOverview(tx, root, { bodies: false }, false)).summary;
 }

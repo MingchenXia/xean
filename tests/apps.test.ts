@@ -71,11 +71,17 @@ const reportOf = (owner: Awaited<ReturnType<typeof open>>) =>
 function withoutHistory(tx: Tx) {
   return new Proxy(tx, {
     get(target, key) {
-      if (["entry", "scanEntries", "scanConversations"].includes(String(key)))
+      if (["entry", "scanEntries"].includes(String(key)))
         throw new Error(`Unexpected history read: ${String(key)}`);
       const value = Reflect.get(target, key);
       return typeof value === "function"
         ? (...args: unknown[]) => {
+            if (
+              key === "scanConversations" &&
+              (args[0] as Parameters<Tx["scanConversations"]>[0])
+                ?.ownerTaskId === undefined
+            )
+              throw new Error("Unexpected campaign conversation scan");
             if (key === "doc" && args[0] === Bodies)
               throw new Error("Unexpected notebook body read");
             return Reflect.apply(value, target, args);

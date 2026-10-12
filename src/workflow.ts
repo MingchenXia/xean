@@ -36,6 +36,8 @@ import {
   type RoleRuntime,
 } from "./roles/types.ts";
 
+import { explorerLimit, type ExplorerLimit } from "./roles/conversation.ts";
+
 // These are application admission choices. Pi retains all execution state.
 export const Control = defineDoc({
   kind: "research.control",
@@ -284,6 +286,7 @@ export function createResearch(roles: Roles) {
           completed: boolean;
           failed: boolean;
           error: string | null;
+          limit?: ExplorerLimit;
           request?: Request;
           result?: { notes: number; edits: number } | { checks: number };
         }[] = [];
@@ -301,6 +304,12 @@ export function createResearch(roles: Roles) {
             );
             for (const worker of page.items) {
               if (worker.id >= at) continue;
+              const request = (worker.input as { request?: Request }).request;
+              const limit =
+                request?.kind === "explorer" &&
+                worker.state.outcome?.status === "completed"
+                  ? await explorerLimit(tx, worker.id)
+                  : undefined;
               workers.push({
                 id: worker.id,
                 role:
@@ -312,7 +321,8 @@ export function createResearch(roles: Roles) {
                   worker.state.outcome?.error?.message ??
                   worker.state.outcome?.reason ??
                   null,
-                request: (worker.input as { request?: Request }).request,
+                ...(limit ? { limit } : {}),
+                request,
               });
             }
             cursor = page.next;
@@ -363,6 +373,9 @@ export function createResearch(roles: Roles) {
             failures: workers
               .filter((worker) => worker.failed)
               .map(({ id, role, error }) => ({ id: String(id), role, error })),
+            limits: workers
+              .filter((worker) => worker.limit)
+              .map(({ id, limit }) => ({ id: String(id), reason: limit! })),
             recent: workers
               .slice(-4)
               .map(({ id, ...worker }) => ({ id: String(id), ...worker })),

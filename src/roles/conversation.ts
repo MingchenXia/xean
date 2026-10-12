@@ -24,11 +24,13 @@ import {
   hook,
   LiveDoc,
   ProviderDoc,
+  ResetEntry,
   ToolResultEntry,
   type ConversationHandle,
   type ConversationId,
   type Cursor,
   type EntryId,
+  type TaskId,
   type ToolExecutionApi,
   type Tx,
 } from "@earendil-works/pi-durable";
@@ -54,7 +56,6 @@ registerSessionResourceCleanup(resetOpenAICodexWebSocketDebugStats);
 
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const responseLimitError = "Role exhausted its responses";
-const maxLengthContinuations = 8;
 type Call = {
   profile?: ProfileName;
   notes?: Note[];
@@ -109,11 +110,75 @@ async function progress<P extends ProfileName>(
   } while (cursor);
   return result;
 }
+export type ExplorerLimit = "context_capacity" | "response_limit";
+
+/** Explain a completed Explorer's forced handoff from Pi's retained settlement. */
+export async function explorerLimit(
+  tx: Tx,
+  owner: TaskId,
+): Promise<ExplorerLimit | undefined> {
+  let cursor: Cursor | undefined;
+  do {
+    const page = await tx.scanConversations(
+      { ownerTaskId: owner },
+      128,
+      cursor,
+    );
+    for (const conversation of page.items) {
+      const call = await tx.doc(Call, conversation.id);
+      if (call.profile !== "explorer") continue;
+      const settled = await tx.submissionByRequest(conversation.id, "role");
+      if (settled?.status === "unanswered") {
+        if (settled.detail === capacityError) return "context_capacity";
+        if (settled.detail === responseLimitError) return "response_limit";
+      }
+      if (
+        settled?.status !== "done" ||
+        settled.type !== "input" ||
+        call.maxResponses === undefined
+      )
+        continue;
+      const head = await tx.latestHeadMarker(conversation.id);
+      if (head && ResetEntry.is(head) && head.id > settled.answer) {
+        if (
+          head.model?.some(
+            (message) =>
+              message.role === "user" && message.content === responseLimitError,
+          )
+        )
+          return "response_limit";
+        continue;
+      }
+      // Tool handoffs record their reason in Pi's reset. A plain-text stop has
+      // no reset, so only that exceptional path needs the retained transcript.
+      const answer = (await tx.entry(settled.answer))?.model?.find(
+        (message) => message.role === "assistant",
+      );
+      if (
+        !answer ||
+        !["stop", "toolUse"].includes(answer.stopReason) ||
+        answer.content.some((part) => part.type === "toolCall")
+      )
+        continue;
+      const history = await progress(tx, conversation.id, "explorer");
+      const last = history.submissions.at(-1)?.value;
+      if (
+        last &&
+        (last.notes.length > 0 || last.edits?.length) &&
+        !last.notes.some((note) => note.candidate) &&
+        !last.edits?.some((edit) => edit.candidate) &&
+        history.responses >= call.maxResponses
+      )
+        return "response_limit";
+    }
+    cursor = page.next;
+  } while (cursor);
+}
 const responses = (messages: readonly Message[]) =>
   messages.filter(
     (message) =>
       message.role === "assistant" &&
-      ["stop", "toolUse", "length"].includes(message.stopReason),
+      ["stop", "toolUse"].includes(message.stopReason),
   ).length;
 const reasoningItem = Type.Object({
   type: Type.Literal("reasoning"),
@@ -227,45 +292,51 @@ export function conversations(profiles: Profiles) {
             name === "explorer" || name === "coordinator"
               ? await notes(api, call, context)
               : [];
-          const { done, ...allowance } = await api.commit(async (tx) => {
-            if (
-              (await tx.doc(LiveDoc, api.conversationId)).tools?.filter(
-                (part) => part.name.startsWith("submit_"),
-              ).length !== 1
-            )
-              throw new Error("Submit exactly once in each response");
-            if (name === "explorer") {
-              const draft = value as Exploration;
-              const history = await progress(
-                tx,
-                api.conversationId,
-                "explorer",
-              );
-              validateExploration(
-                mergeExploration([
-                  ...history.submissions.map(({ value }) => value),
-                  draft,
-                ]),
-                available,
-              );
-              return {
-                done:
+          const { done, limited, ...allowance } = await api.commit(
+            async (tx) => {
+              if (
+                (await tx.doc(LiveDoc, api.conversationId)).tools?.filter(
+                  (part) => part.name.startsWith("submit_"),
+                ).length !== 1
+              )
+                throw new Error("Submit exactly once in each response");
+              if (name === "explorer") {
+                const draft = value as Exploration;
+                const history = await progress(
+                  tx,
+                  api.conversationId,
+                  "explorer",
+                );
+                validateExploration(
+                  mergeExploration([
+                    ...history.submissions.map(({ value }) => value),
+                    draft,
+                  ]),
+                  available,
+                );
+                const voluntary =
                   draft.notes.some((note) => note.candidate) ||
                   draft.edits?.some((edit) => edit.candidate) ||
-                  (draft.notes.length === 0 && !draft.edits?.length) ||
-                  history.responses >= call.maxResponses!,
-                responsesRemaining: call.maxResponses! - history.responses,
-                readsRemaining: Math.max(0, call.maxReads! - history.reads),
-              };
-            } else if (name === "coordinator") {
-              validatePlan(value, available, call.capabilities!);
-            } else {
-              const results = (value as { results: { noteId: string }[] })
-                .results;
-              batchResults(call.ids!, results);
-            }
-            return { done: true };
-          }, context);
+                  (draft.notes.length === 0 && !draft.edits?.length);
+                const limited =
+                  !voluntary && history.responses >= call.maxResponses!;
+                return {
+                  done: voluntary || limited,
+                  limited,
+                  responsesRemaining: call.maxResponses! - history.responses,
+                  readsRemaining: Math.max(0, call.maxReads! - history.reads),
+                };
+              } else if (name === "coordinator") {
+                validatePlan(value, available, call.capabilities!);
+              } else {
+                const results = (value as { results: { noteId: string }[] })
+                  .results;
+                batchResults(call.ids!, results);
+              }
+              return { done: true, limited: false };
+            },
+            context,
+          );
           return {
             output: [
               {
@@ -285,7 +356,15 @@ export function conversations(profiles: Profiles) {
             ],
             details: value as JsonValue,
             // Handoff ends the finished role even if a companion read failed.
-            ...(done ? { control: { handoff: "Assignment complete." } } : {}),
+            ...(done
+              ? {
+                  control: {
+                    handoff: limited
+                      ? responseLimitError
+                      : "Assignment complete.",
+                  },
+                }
+              : {}),
           };
         },
       }),
@@ -407,29 +486,20 @@ export function conversations(profiles: Profiles) {
               }),
           };
         },
-        async onYield(answer, api, context) {
+        async onYield(_answer, api, context) {
           const call = await api.snapshot(Call, api.conversationId, context);
           if (!call?.profile) return;
           // Pi calls onYield before committing this answer or applying a reset.
           const { entries } = await api.context(api.conversationId, context);
           const history = entries.flatMap((entry) => entry.model ?? []);
           if (responses(history) + 1 >= call.maxResponses!) return;
-          const continueAssignment =
-            answer.stopReason === "length"
-              ? history.filter(
-                  (message) =>
-                    message.role === "assistant" &&
-                    message.stopReason === "length",
-                ).length < maxLengthContinuations
-              : !history.some(
-                  (message) =>
-                    (message.role === "assistant" &&
-                      message.stopReason === "stop" &&
-                      !message.content.some(
-                        (part) => part.type === "toolCall",
-                      )) ||
-                    isSubmission(message, call.profile!),
-                );
+          const continueAssignment = !history.some(
+            (message) =>
+              (message.role === "assistant" &&
+                message.stopReason === "stop" &&
+                !message.content.some((part) => part.type === "toolCall")) ||
+              isSubmission(message, call.profile!),
+          );
           if (continueAssignment)
             return {
               continue:
@@ -450,7 +520,7 @@ export function conversations(profiles: Profiles) {
   ): Promise<{ id: EntryId; value: Submission<P> }[]> {
     const profile = profiles[name];
     const assignment = { ...options };
-    // Allow eight length continuations plus room for reads and corrected submissions.
+    // Allow completed reads and corrected submissions; Pi continues provider limits.
     assignment.maxResponses ??= 16;
     assignment.maxReads ??= 0;
     const tools = [

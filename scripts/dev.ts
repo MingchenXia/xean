@@ -83,7 +83,12 @@ if (command === "check" || command === "test") {
     env,
   );
   await run(
-    ["test", "./tests/pi.test.ts", "./tests/roles.test.ts"],
+    [
+      "test",
+      "./tests/pi.test.ts",
+      "./tests/pi-continuation.test.ts",
+      "./tests/roles.test.ts",
+    ],
     source,
     env,
   );

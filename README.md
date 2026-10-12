@@ -6,10 +6,12 @@ further work. Each campaign runs Coordinator, one worker, then Coordinator again
 A worker may parallelize its own internal work. Pi owns tasks, conversations,
 checkpoints, cancellation, and storage.
 
-Use fresh campaigns with this release. Pi document versioning rejects 3.0.0 and
-3.1.0 databases. Keep existing campaigns with their frozen runtimes. This release
-includes no database migration. The qualification results below identify the
-revisions and provider configurations tested.
+The database schema is unchanged from 3.2.0. The
+[compatibility checks](#checks-and-current-limits) cover representative paused and
+completed 3.2.0 databases. Pi document versioning rejects 3.0.0 and 3.1.0
+databases. Keep those campaigns with their frozen runtimes. This release includes
+no database migration. The qualification results below identify the revisions
+and provider configurations tested.
 
 The implementation includes staged verification, blind reconstruction, imported
 notes, stable-ID edits, optional literature and Codex implementation work,
@@ -42,9 +44,10 @@ and revise earlier reasoning. Private partial notes preserve intermediate work
 while exploration continues. A later worker starts a fresh conversation from the
 published notebook, without automatically inheriting the earlier worker's private
 conversation. Prompt caching can reduce the cost of reusing prior
-context, but new reasoning and output still cost tokens, so continuation is
-bounded. Worker simplifications should preserve this opportunity for further
-exploration. A valid partial submission alone does not establish that the worker
+context, but new reasoning and output still cost tokens. Completed responses and
+available context bound each invocation. Worker simplifications should preserve
+this opportunity for further exploration. A valid partial submission alone does
+not establish that the worker
 has explored enough.
 
 Acceptance requires checks across the complete generated dependency chain.
@@ -174,6 +177,9 @@ receives the built-in functions, and a custom `Research` implementation through
 `research`. Register custom tools and tasks through Pi's native `registry` option.
 Coordinator supplies an `assignment` to Explorer, Literature, and Codex. Caller
 guidance remains campaign input for Coordinator.
+Explorer assignments identify relevant note IDs and the remaining gap in the
+complete task, so later workers can continue from published work.
+
 Call `open` for separate databases to run several campaigns in one process.
 Pass the same Pi `models` instance to share its provider registry. Each campaign
 keeps its own Harness and sequential workflow. The CLI runs one campaign per invocation.
@@ -196,17 +202,24 @@ If a provider failure ends the invocation and the submissions still validate
 against the current notebook, the worker publishes those submissions atomically
 with its failed status and error.
 
-The native Pi Explorer defaults to eight model responses and up to four note-read
-calls. An empty notebook disables reading. ChatGPT Web uses one response without
+The native Pi Explorer defaults to eight completed responses and up to four
+note-read calls. An empty notebook disables reading. ChatGPT Web uses one response without
 reads. Each read can request several notes. Reads and rejected submissions consume responses,
 and reading is disabled on the final response. These are ceilings, not a minimum
 amount of exploration. A model can still end early by claiming a complete solution
 or submitting an empty batch.
 
-Other native Pi role conversations allow up to sixteen responses. Coordinator
-allows up to four note-read calls. Completed and token-truncated responses count
-toward the limit, including responses with rejected submissions. Admitted reads
+Other native Pi role conversations allow up to sixteen completed responses.
+Coordinator allows up to four note-read calls. Responses with reads or rejected
+submissions count toward the limit. Incomplete responses do not. Admitted reads
 also count across recovery. Native Pi handles provider-error retries separately.
+
+When `max_messages` or `max_output_tokens` leaves reusable text or reasoning,
+Pi continues the same submission automatically. There is no fixed continuation
+count. Pi retains the incomplete response and schedules its continuation
+atomically. Tools from incomplete responses never execute. A limit response
+without reusable content fails explicitly. Context and completed-response limits
+still apply, and an operational handoff reports the reason to Coordinator.
 
 Blind reconstruction assigns batches in dependency order. Code greedily packs
 notes using original text lengths, Pi's token estimator, and the configured
@@ -216,8 +229,8 @@ proof lengths and may need smaller batches. Each call must submit every assigned
 note. These estimates guide grouping and do not cap responses or guarantee that
 a proof fits. An oversized note is assigned alone, subject to Pi's input guard.
 Pi checks context use and the provider guard reserves the full output allowance.
-Token-truncated responses continue the same assignment within the
-[response and continuation allowances](docs/parity.md#pi-integration).
+Incomplete responses continue the same assignment under the
+[native Pi continuation rules](docs/parity.md#pi-integration).
 Tools from truncated responses never execute.
 Pi reuses committed proofs and comparisons after reopening, and an ordinary
 failure retains earlier completed checks.
@@ -370,6 +383,16 @@ and export, and licenses.
 `pack` runs the same distribution check and writes the source archive under
 `dist/`.
 
+The 3.3.0 compatibility checks reopened representative paused and completed
+3.2.0 databases on Bun 1.4.2 without credentials or model calls. The paused
+fixture preserved task, settings, edited notes and their IDs, candidate flags,
+dependencies, checks, and guidance, then resumed its remaining scripted work.
+The completed fixture retained identical task and entry records and a
+byte-identical accepted export. These checks used scripted judgments and fresh
+fixtures. Transfer of an in-flight model generation remains unqualified.
+Receipts are under `runs/release-3.3.0-20261011/compatibility/`, outside the source
+package.
+
 The 3.2.0 qualification passed 213 scripted tests and 2,044 assertions on each
 tested platform: macOS ARM64 with Bun 1.4.3, and Linux ARM64 and x86-64 with
 Bun 1.4.2. Source-distribution checks also passed 66 Pi and role tests.
@@ -429,9 +452,9 @@ This check covered standalone roles. Live browser cancellation remains
 unqualified. Receipts are in `runs/chatgpt-web-fix-20261008/`.
 Literature retrieval passed with independently checked quotations.
 At `e40b85e`, the implementation worker passed on native macOS, including
-independent artifact checks and credential-free reopening. The tested Linux
-container could not create Codex's sandbox namespace, so implementation work
-remains unavailable in that environment.
+independent artifact checks and credential-free reopening. At that revision, the
+tested Linux container could not create Codex's sandbox namespace. Container
+execution depends on the host's sandbox configuration.
 Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the source
 package.
 

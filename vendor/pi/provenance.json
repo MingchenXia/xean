@@ -91,32 +91,33 @@
     {
       "package": "@earendil-works/pi-ai",
       "path": "patches/@earendil-works%2Fpi-ai@1.1.0.patch",
-      "sha256": "df51606263088f53386fcf1ebf848020969ed098ecdb80917a081a8802d26199",
+      "sha256": "a11f9b09a8a2e5debf44c61c6b35634e769cd31b0262deb2994b88d4322fdbb9",
       "files": {
         "dist/api/anthropic-messages.js": "4682481a75fe91796031dce050e2bfd11734c0a62400e895cfd583fbf9f73e22",
         "dist/api/google-generative-ai.js": "bbf2b3d2bfea2e2c017675c721e727c0b1c772ab91dc344a386a741f7ccc93b0",
         "dist/api/openai-codex-responses.js": "1e7da42398af7a5d8345f1cd32fff9298724ec2e9d3b53037998eb17a9be56e9",
-        "dist/api/openai-responses-shared.js": "64f2882dee09b86379f033c265d088ef5d5ac77b8730713d3189ec73b9052f6b",
+        "dist/api/openai-responses-shared.js": "5dc87726ac03ce09cf2f4e8167a6546e17529cf80c5ff2a487ce9251b6246e24",
         "dist/api/openai-responses.js": "cef4401f72b89878ec3b91be1135960c8976336a1ad23473722a9f6b97152791",
         "dist/types.d.ts": "d2a4a18c5bf1e2f6eadda32981c8f7127b8af9875dc7efd30f2875a426423430",
-        "dist/utils/retry.js": "f4b3ab7d5e0e5bfd0d106cd73771948ca667f6992dfbfb9e61d7800b0b2cd8b7"
+        "dist/utils/retry.js": "d21c0515f4bbbb6e52618a3adc573186a88a8dc17a38adcedd0e34afa26c5625"
       },
-      "reason": "Preserve provider errors and usage, and correct direct Codex failure and SSE handling."
+      "reason": "Preserve provider errors and usage, classify resumable provider limits, and correct direct Codex failure and SSE handling."
     },
     {
       "package": "@earendil-works/pi-durable",
       "path": "patches/@earendil-works%2Fpi-durable@1.1.0.patch",
-      "sha256": "dd9dc994b47dba03c4ef668bb4c03b69005ada6987d590e6fc3be67bda0ebf74",
+      "sha256": "370532d2bbeb111aa548a33adbe5203989ad40cc87767474d63a2771f28fb693",
       "files": {
-        "dist/harness/generation.js": "8fbb6c1152937b4620c7dc236d6fc134d93b01623bf7caf9a8da39f8627200ac",
+        "dist/harness/generation.js": "e92c454a50ae89803a2043077390eb4b8937467405106100051f452930901f5a",
         "dist/harness/types.d.ts": "75506e482bf531190580579987e64979ef4321d0cc72cb93ae33694b3d38f5b0",
         "dist/session/session.js": "1c31f9c2cc4ef2d3e05306cba4a7ed6c5a6d8cf1cbcc43fabd5b82fcbd7ba30c",
         "dist/storage/sqlite/node.js": "6fd67e0e4e9b91adaa949372e33f673ed9a445536be08ca1dbbbcaaa5860399f",
         "dist/storage/sqlite/node.d.ts": "8a16cbc753f4f18e623c072adf13a36fb30d0200425cd79fc0064e69d416eada",
         "dist/storage/sqlite/storage.js": "704a85b9b3223df00147bec672196565f24af91288bf77ca1d1f094fb877dca2",
-        "dist/storage/sqlite/storage.d.ts": "60ccb3c57f3847f37cdcc891df8950f00c4e6b4e6383aa60995226264f7fecfd"
+        "dist/storage/sqlite/storage.d.ts": "60ccb3c57f3847f37cdcc891df8950f00c4e6b4e6383aa60995226264f7fecfd",
+        "dist/harness/context.js": "88460e42b663625d66ba30d731b64e75a72e12b2a97bb7cc48e95c0504d2da4b"
       },
-      "reason": "Expose native request and context hooks, bound the document tracker cache, release obsolete observer trackers, and support read-only SQLite inspection."
+      "reason": "Expose native request and context hooks, continue resumable provider limits, bound document tracker caches, release obsolete observers, and support read-only SQLite inspection."
     }
   ]
 }

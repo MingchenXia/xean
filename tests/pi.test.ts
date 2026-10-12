@@ -261,32 +261,169 @@ function call(
 }
 
 test.each([false, true])(
-  "Responses message limits remain separate from token limits and terminal errors (Codex=%s)",
+  "Responses continuation limits preserve completed output without provider retries (Codex=%s)",
   async (useCodex) => {
+    const thinking = {
+      type: "reasoning",
+      id: "reasoning",
+      summary: [{ type: "summary_text", text: "Completed reasoning summary" }],
+    };
+    const message = {
+      type: "message",
+      id: "progress",
+      role: "assistant",
+      phase: "commentary",
+      content: [{ type: "output_text", text: "Progress to continue." }],
+    };
     for (const reason of [
       "max_messages",
       "max_output_tokens",
       "max_messages_extra",
       "content_filter",
+      "authentication_error",
+      "insufficient_quota",
+      "context_length_exceeded",
     ]) {
-      const result = await call(useCodex, [
+      let requests = 0;
+      const result = await retryAssistantCall(
+        () => {
+          requests++;
+          return call(useCodex, [
+            {
+              type: "response.output_item.done",
+              output_index: 0,
+              item: thinking,
+            },
+            {
+              type: "response.output_item.done",
+              output_index: 1,
+              item: message,
+            },
+            terminal("incomplete", {
+              incomplete_details: { reason },
+              output: [
+                { ...thinking, encrypted_content: "terminal-only" },
+                message,
+              ],
+              usage: {
+                input_tokens: 100,
+                output_tokens: 25,
+                total_tokens: 125,
+                input_tokens_details: { cached_tokens: 40 },
+                output_tokens_details: { reasoning_tokens: 20 },
+              },
+            }),
+          ]);
+        },
+        { enabled: true, maxRetries: 1, baseDelayMs: 1 },
+        undefined,
+      );
+      const continuation = ["max_messages", "max_output_tokens"].includes(
+        reason,
+      );
+      expect(requests).toBe(1);
+      expect(result.rawStopReason).toBe(`incomplete.${reason}`);
+      expect(result.stopReason).toBe(continuation ? "length" : "error");
+      if (continuation) expect(result.errorMessage).toBeUndefined();
+      else expect(result.errorMessage).toContain(reason);
+      expect(isRetryableAssistantError(result)).toBe(false);
+      expect(
+        isRetryableAssistantError({ ...result, stopReason: "error" }),
+      ).toBe(false);
+      expect(result.responseId).toBe("fixture");
+      expect(result.usageReported).toBe(true);
+      expect(result.usage).toMatchObject({
+        input: 60,
+        output: 25,
+        reasoning: 20,
+        cacheRead: 40,
+        totalTokens: 125,
+      });
+      const retained = result.content.find(
+        (block) => block.type === "thinking",
+      )!;
+      expect(retained.thinking).toBe("Completed reasoning summary");
+      expect(JSON.parse(retained.thinkingSignature!)).toEqual({
+        ...thinking,
+        encrypted_content: "terminal-only",
+      });
+      const text = result.content.find((block) => block.type === "text")!;
+      expect(text.text).toBe("Progress to continue.");
+      expect(JSON.parse(text.textSignature!)).toEqual({
+        v: 1,
+        id: "progress",
+        phase: "commentary",
+      });
+    }
+  },
+);
+
+test.each([false, true])(
+  "Responses continuation replays unsigned summaries as text and keeps signed reasoning (Codex=%s)",
+  async (useCodex) => {
+    const signed = {
+      type: "reasoning",
+      id: "rs_complete",
+      encrypted_content: "fixture-opaque",
+      summary: [],
+    };
+    const summary = "Unfinished but reusable reasoning summary";
+    for (const reason of ["max_messages", "max_output_tokens"]) {
+      const partial = await call(useCodex, [
+        { type: "response.output_item.done", output_index: 0, item: signed },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: { type: "reasoning", id: "rs_partial", summary: [] },
+        },
+        {
+          type: "response.reasoning_summary_text.delta",
+          output_index: 1,
+          summary_index: 0,
+          delta: summary,
+        },
         terminal("incomplete", { incomplete_details: { reason } }),
       ]);
-      expect(result.rawStopReason).toBe(`incomplete.${reason}`);
-      expect(result.stopReason).toBe(
-        reason === "max_output_tokens" ? "length" : "error",
-      );
-      expect(isRetryableAssistantError(result)).toBe(reason === "max_messages");
-      if (reason === "max_messages") {
-        for (const code of [
-          "context_length_exceeded",
-          "insufficient_quota",
-          "authentication_error",
-          "invalid_request_error",
-        ])
-          expect(
-            isRetryableAssistantError({ ...result, providerError: { code } }),
-          ).toBe(false);
+      expect(partial.stopReason).toBe("length");
+      expect(partial.content[1]).toMatchObject({
+        type: "thinking",
+        thinking: summary,
+      });
+      expect(partial.content[1]).not.toHaveProperty("thinkingSignature");
+      for (const limited of [true, false]) {
+        let input: unknown;
+        const request = {
+          ...options,
+          onPayload: (payload: unknown) => {
+            input = (payload as { input: unknown }).input;
+          },
+          fetch: mockFetch(async () => sse([terminal()])),
+        };
+        const replay = normalizeContext({
+          messages: [
+            ...transcript.messages,
+            limited
+              ? partial
+              : { ...partial, stopReason: "stop", rawStopReason: "completed" },
+            { role: "user", content: "Continue", timestamp: 1 },
+          ],
+        });
+        const result = await (
+          useCodex
+            ? codex(codexModel, replay, request)
+            : responses(model, replay, request)
+        ).result();
+        expect(result.stopReason).toBe("stop");
+        expect(input).toEqual(expect.arrayContaining([signed]));
+        const replayedSummary = expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: summary, annotations: [] }],
+          }),
+        ]);
+        if (limited) expect(input).toEqual(replayedSummary);
+        else expect(input).not.toEqual(replayedSummary);
       }
     }
   },

@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.3.0 — 2026-10-11
+
+Pi continues incomplete model responses within the same submission, preserving
+usable work until a complete response or an operational limit.
+
+### Continuation and handoff
+
+- `max_messages` and `max_output_tokens` continue automatically when the response
+  contains reusable text or reasoning. Continuations have no fixed count and do
+  not consume the role's completed-response allowance.
+- Pi atomically commits the incomplete response and its continuation. Tools from
+  incomplete responses never execute. A limit response without reusable content
+  fails explicitly. Provider-error retries remain separate.
+- Context and completed-response limits remain in effect. Explorer retains its
+  complete submissions and reports an operational handoff to Coordinator.
+- Coordinator's Explorer assignments identify the relevant note IDs and the
+  remaining gap in the complete task.
+
+### Compatibility
+
+- The database schema, note edits, per-note candidate status, assignments, and
+  `role review` retain their 3.2.0 formats. Cross-version checks passed on
+  representative paused and completed model-free databases. Transfer of an
+  in-flight model generation remains unqualified.
+- Pi remains pinned to `ea448f454af474f3e2fe9733b331e17b0662f5d6`. Native
+  continuation extends the retained Pi patches. Codex strict-schema conversion
+  remains the 3.2.0 implementation.
+
 ## 3.2.0 — 2026-10-11
 
 Xean unifies note submissions and worker assignments, inspects campaign databases

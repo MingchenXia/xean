@@ -236,6 +236,20 @@ reveal gaps or better arguments that return to research and verification. This
 knowledge and writing component could become a separate system, with Xean as
 one of its users. Its scope and implementation remain open.
 
+## What happens when a model response reaches a provider limit?
+
+Pi continues the same submission after `max_messages` or `max_output_tokens`
+when reusable text or reasoning is available. These incomplete responses do not
+consume the role's completed-response allowance, and continuations have no fixed
+count. Tools from incomplete responses never execute. A limit response without
+reusable content fails explicitly.
+
+The conversation still has context and completed-response limits. Explorer can
+hand off its complete submissions when either limit is reached. Coordinator
+receives the operational stop reason and chooses the next assignment
+using published notes and the remaining gap in the complete task. A new worker
+starts from that notebook and assignment.
+
 ## Why did the campaign stop without an accepted result?
 
 Read the reported status. `idle` means no work remains scheduled and no result
