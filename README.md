@@ -6,15 +6,15 @@ further work. Each campaign runs Coordinator, one worker, then Coordinator again
 A worker may parallelize its own internal work. Pi owns tasks, conversations,
 checkpoints, cancellation, and storage.
 
-This checkout prepares 3.4.0 and requires fresh campaign databases. Notebook and
-role-conversation document formats have changed. Keep existing campaigns with
+This checkout develops 3.5.0 and requires fresh campaign databases. The campaign
+definition format and external role interface have changed. Keep existing campaigns with
 their pinned runtimes. No database migration is provided. The
 [qualification results](#checks-and-current-limits) identify the revisions and
 configurations tested.
 
 The implementation includes staged verification, blind reconstruction, external
-trust grants, stable-ID edits, optional literature, Codex implementation and
-verification, independent review, and a CLI. The
+trust grants, stable-ID edits, optional role backends for implementation, verification,
+and research, independent review, and a CLI with a shared campaign host. The
 [capability inventory](docs/parity.md) maps this behavior to implementation and tests.
 See the [changelog](docs/changelog.md) for changes since 3.0.0.
 The [FAQ](docs/faq.md) covers computation, broader research goals, and current
@@ -74,7 +74,7 @@ notes. Note content and prior evidence remain in Pi's journal. Reassessment uses
 the ordinary verification stages.
 Coordinator receives the target IDs and withdrawal reason as guidance.
 
-Coordinator can assign Codex to reassess an INCONCLUSIVE correctness,
+Coordinator can assign an external Verifier to reassess an INCONCLUSIVE correctness,
 requirements, or reconstruction check when computation or artifact access can
 settle the unfinished obligation. This can follow either verifier backend, and
 Coordinator decides whether another attempt is useful. Xean does not retry
@@ -96,9 +96,9 @@ bun install --production --frozen-lockfile --ignore-scripts
 
 Set `OPENAI_API_KEY` in your environment, or use a saved Pi login as described
 below. The [example settings](examples/settings.json)
-use public OpenAI with `gpt-6-astra` and `max` reasoning. They set `research: false`
-for a closed-book elementary example: no external source retrieval or independent
-Codex review. Explorer and Verifier still use the configured model. Keep credential
+use public OpenAI with `gpt-6-astra` and `max` reasoning. The default is closed-book: Explorer
+and Verifier use the configured Pi models, and external source retrieval and
+independent online review require an explicitly registered backend. Keep credential
 values outside task and settings files.
 
 ```sh
@@ -108,7 +108,7 @@ bun run xean run .xean/demo/campaign.sqlite
 bun run xean status .xean/demo/campaign.sqlite
 ```
 
-`init` freezes the task and settings without model calls. `doctor` checks local setup without testing a live provider or Codex login. `run` performs research.
+`init` freezes the task and settings without model calls. `doctor` checks local Pi setup without testing live providers or optional backends. `run` performs research.
 Read the returned JSON status: a successful CLI exit can report `blocked` or
 `idle`. Returning `work: null` leaves a campaign idle without claiming completion.
 Add guidance or use `resume` to request another decision.
@@ -154,35 +154,125 @@ Pi `Models` to `open`.
 The supplied instance owns all configured providers and is reused by native
 conversations and replacement roles.
 
-To enable the default Codex research backend, remove `research: false` and install
-and authenticate the [Codex CLI](https://developers.openai.com/codex/cli).
-Source checking and independent review use its native configuration. Literature is disabled by default, but `literature: false`
-alone leaves source checking and review enabled. External premises remain
-INCONCLUSIVE when research is disabled. `settings.codex` separately enables
-implementation work and a shell-capable Verifier in retained workspaces.
+## Optional role backends
 
-To run research without Codex plugins, copy
-[xean-research.config.toml](examples/xean-research.config.toml) into `CODEX_HOME`
-(normally `~/.codex`) and set `research.profile` to `"xean-research"` alongside
-the chosen model. This native Codex profile disables plugins for source checking,
-literature, and independent review while preserving native web search.
-Implementation workers and Codex verification use `codex.profile` separately.
-Set `research.profile` to a plugin-enabled profile when research needs installed
-plugin tools.
+Register external tools with a module exporting an `open({ roles })` callback.
+For example, save this as `roles.ts` in a project that depends on Xean:
 
-For a one-response ChatGPT Web Explorer, set
-`chatgpt: {"baseUrl":"http://127.0.0.1:17841/v1","model":"chatgpt-web/gpt-6-pro"}`
-in settings. Xean calls the external
-[`codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web) service's
-non-streaming Responses API and validates its JSON answer. Run that service
-separately in `browser-only` mode with its authenticated browser available.
-The bridge must preserve the original JSON answer text and support ChatGPT's
-current model picker. A `model_version_unavailable` error means the bridge
-could not confirm the requested model and left the prompt unsent. Repair the
-bridge before starting a fresh campaign. This Explorer receives the note index
-and has no note reader or further browser attempt. It can create new notes.
-Coordinator can select it only once per campaign. Edits to existing notes require
-the native Pi Explorer or an `edits` entry in a caller `submit` file.
+```ts
+import { codex } from "xean/plugins/codex";
+
+const worker = {
+  model: "gpt-6-astra",
+  reasoning: "max" as const,
+  workspace: "/absolute/path/to/workspaces",
+};
+export default codex({
+  implementation: worker,
+  verifier: worker,
+  research: { model: "gpt-6-astra", reasoning: "max" },
+});
+```
+
+Install and authenticate the selected CLI separately, then pass the module when
+opening or resuming work:
+
+```sh
+bun run xean --roles ./roles.ts run .xean/demo/campaign.sqlite
+```
+
+Only explicitly supplied roles are enabled. Core installation and ordinary Pi
+roles need no external CLI. Codex provides implementation, verification,
+Explorer, and research adapters. The `claude` factory from `xean/plugins/claude`
+provides implementation, verification, and Explorer adapters through the same
+registration pattern. External Explorers receive the note index and return a single batch of
+new notes per invocation. They cannot edit existing full texts through that interface.
+The native Pi Explorer retains its reading, editing, and continued-submission behavior.
+Claude uses its native restricted mode and requires its native shell sandbox.
+Codex retains workspace-write mode for workers and read-only mode for research.
+
+Source retrieval and independent review require `research`. Literature additionally
+requires `literature: true` in settings. The Codex research adapter uses native
+web search with shell execution disabled. To disable Codex plugins for these
+calls, use [xean-research.config.toml](examples/xean-research.config.toml) in
+`CODEX_HOME` and set `research.profile: "xean-research"` in the factory options.
+Codex worker profiles are configured independently on `implementation`, `verifier`,
+and `explorer`.
+
+For the browser service, export `chatgpt({baseUrl:
+"http://127.0.0.1:17841/v1", model: "chatgpt-web/gpt-6-pro"})` from a module,
+importing the factory from `xean/plugins/chatgpt`. Run the external
+[`codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web) service in
+`browser-only` mode with its authenticated browser available. This Explorer is
+available once per campaign. An ambiguously sent browser request requires operator
+attention and is not replayed. Completed results reuse their Pi memo.
+
+Keep the module and configuration stable across recovery. A native Pi memo rejects
+changes between native and external registration for an interrupted worker.
+Packaged adapters separately pin the provider and configuration of admitted calls.
+Custom replacement code remains responsible for its own replay behavior.
+
+## Shared campaign host
+
+Run named campaigns under one foreground process:
+
+```sh
+bun run xean --campaign-dir .xean host
+```
+
+At startup, the host opens every `.xean/NAME/campaign.sqlite` it can own and resumes
+its saved Pi execution. This includes initialized campaigns that have not run yet.
+Paused, idle, accepted, and cancelled campaigns retain their stored state. Keep only
+campaigns using this runtime under that directory. An unavailable or incompatible
+database is reported without stopping other campaigns.
+
+From another terminal, attach a newly initialized campaign or detach an owned one:
+
+```sh
+bun run xean init examples/task.json second examples/settings.json
+bun run xean attach second
+bun run xean detach second
+```
+
+Each campaign retains its Pi Harness, database, and sequential workflow. The host
+shares Pi's `Models` instance and uses the existing campaign control sockets.
+`pause`, `resume`, `cancel`, and submissions work as before. Detach suspends unfinished
+work and closes its control socket and Pi Harness. Attach recovers its committed progress.
+Host restart scans the directory again, including detached campaigns. Pause a campaign
+before detaching when it should remain paused on restart. SIGINT and SIGTERM close
+all owned campaigns. Ordinary OS supervision can restart the foreground host.
+
+Supply `--roles`, credentials, and usage overrides on `host`, which applies them
+to every attached campaign. External CLI child processes still have their own
+memory costs.
+
+A Linux x86-64 measurement at `bd1c668` with Bun 1.4.2 compared one shared
+host with one host process per campaign. Total proportional resident memory
+(PSS, which apportions shared pages) was:
+
+| Campaigns | Active shared / separate | Idle shared / separate |
+| --------- | ------------------------ | ---------------------- |
+| 1         | 56.5 / 56.9 MiB          | 58.8 / 58.8 MiB        |
+| 10        | 70.5 / 399.5 MiB         | 76.4 / 416.7 MiB       |
+| 50        | 118.1 / 1,793.1 MiB      | 140.1 / 1,855.9 MiB    |
+| 100       | 156.2 / 3,541.0 MiB      | 195.4 / 3,677.4 MiB    |
+
+These synthetic campaigns each retained a 64 KiB seed note, ran a worker waiting
+on a barrier, then committed a second note. They made no provider calls or CLI
+subprocesses. Provider buffers, larger notebooks, and external processes add to
+these costs. Every campaign completed its worker, and ten subsequent reopen/close
+cycles completed. Diagnostics remain outside the source package under
+`runs/issues-20-21/memory/`, with results in `summary-r3.json`.
+
+Every close returned to the nine-descriptor process baseline without explicit
+garbage collection. In the 100-campaign shared process, memory was 135.7 MiB after
+the initial close. The reopen/close series began after an explicit collection,
+peaked at 139.7 MiB in its closed-state measurements, and reached 85.4 MiB after
+a final explicit collection. Xean leaves collection to Bun. The native
+Bun SQLite connection finalizes statements on close, while Pi retains ownership
+of SQL transactions and durable state. An earlier `node:sqlite` comparison
+retained database handles until collection. The thin driver facade fixes that
+cleanup behavior without another Pi patch.
 
 ## Library
 
@@ -193,26 +283,26 @@ and `close`. Coordinator returns one `work` request, or `work: null` to become i
 Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`, a `roles` callback that
 receives the built-in functions, and a custom `Research` implementation through
 `research`. Register custom tools and tasks through Pi's native `registry` option.
-Coordinator supplies an `assignment` to Explorer, Literature, and Codex. Caller
+Coordinator supplies an `assignment` to Explorer, Literature, and implementation. Caller
 guidance remains campaign input for Coordinator.
 Explorer assignments identify relevant note IDs and the remaining gap in the
 complete task, so later workers can continue from published work.
 
-With `settings.codex` enabled, Coordinator can request
-`{kind: "verifier", backend: "codex", notes: [noteId], through: "correctness"}`.
+With a verifier backend registered, Coordinator can request
+`{kind: "verifier", backend: "external", notes: [noteId], through: "correctness"}`.
 The same selection supports source, requirements, and reconstruction stages.
-Omitting `backend` selects the native Verifier. Codex judges PASS, FAIL, or
-INCONCLUSIVE under the same dependency, stage, and acceptance rules. Its checks
-and independent proofs use fresh retained workspaces and record execution
-receipts and artifact paths. Source checks still use the research backend.
-Codex blind reconstruction receives only the task, exact statements, and approved
+Omitting `backend` selects the native Verifier. External Verifiers judge PASS, FAIL, or
+INCONCLUSIVE under the same dependency, stage, and acceptance rules. The packaged
+Codex and Claude backends run checks and independent proofs in fresh retained
+workspaces and record execution receipts and artifact paths. Source checks still use the research backend.
+External blind reconstruction receives only the task, exact statements, and approved
 support and premises. Instructions forbid reading original proofs, campaign transcripts,
 or other workspaces. This boundary relies on instruction compliance, not hostile
 code isolation.
 
 Call `open` for separate databases to run several campaigns in one process.
 Pass the same Pi `models` instance to share its provider registry. Each campaign
-keeps its own Harness and sequential workflow. The CLI runs one campaign per invocation.
+keeps its own Harness and sequential workflow. The CLI exposes this through `host`, `attach`, and `detach`.
 
 Notes store `summary`, `detailedSummary`, and authoritative free-form `text`.
 The text can record proofs, conjectures, observations, questions, or failed
@@ -235,7 +325,7 @@ publication references without submitting the notes again.
 
 Standalone Explorer uses the same notebook tools. Supplied notes retain their
 IDs, external grants, and recorded checks, with new revisions assigned by Pi.
-Their checks refer to immutable input evidence. Single-response ChatGPT Web
+Their checks refer to immutable input evidence. External Explorers
 and replacement roles returning a batch retain publication on completion.
 
 The native Pi Explorer defaults to eight completed responses and up to four
@@ -260,7 +350,7 @@ retry policy and backoff. Authentication, quota, invalid-request failures, conte
 overflow, and cancellation retain their existing handling. Context and
 completed-response limits still apply, with operational handoffs to Coordinator.
 
-Blind reconstruction assigns batches in dependency order. Codex reconstructs
+Blind reconstruction assigns batches in dependency order. External verification reconstructs
 one note per call. Native verification greedily packs notes using original text
 lengths, Pi's token estimator, and the configured model's context and output
 capacities. It reserves space for complete writing,
@@ -306,7 +396,7 @@ const owner = await open(path, {
       problem: "For every real x >= 1, prove x squared >= x.",
       completionCriteria: "Give a self-contained elementary proof.",
     },
-    settings: { ...defaultSettings, research: false },
+    settings: defaultSettings,
   },
 });
 try {
@@ -317,8 +407,12 @@ try {
 console.log((await inspect(path, readReport)).status);
 ```
 
-The host uses Pi's native SQLite adapter with FULL synchronization and excludes
-a second owner. A rewindable Pi catalog and per-note body Documents hold the
+The host uses Pi's SQLite storage and transaction queue with Bun's native SQLite
+driver, FULL synchronization, and exclusive ownership. A small adapter normalizes
+the driver interface. Bun tracks prepared statements and finalizes them on close,
+so releasing database handles does not depend on garbage collection. This uses
+Pi's existing adapter without another Pi patch.
+A rewindable Pi catalog and per-note body Documents hold the
 current notebook. Native submissions and outcomes retain execution receipts.
 Workers receive a notebook snapshot at their admission cutoff. Explorer reads
 its current notebook after each durable submission.
@@ -328,19 +422,18 @@ current dependency closure and pins its snapshot for export.
 Closing suspends unfinished execution. Reopening reuses Pi's committed private
 progress. A request interrupted before its answer commits may repeat, except
 that an ambiguously sent ChatGPT Web request is rejected on recovery.
-All Codex roles share an executor that takes instructions, input, and an output
-schema. Pi memoizes each completed request within its worker. Interrupted calls
+Codex and Claude adapters share Execa process handling and Pi request receipts. Pi memoizes each completed request within its worker. Interrupted calls
 restart in a fresh workspace. Source checks also retain results from custom
 research implementations before later stages. The built-in Verifier preserves
 structurally validated completed checks when a stage fails. Invalid submissions and faults in
 opaque custom roles publish no partial results. A new Verifier reuses
 applicable completed checks. Cleanup errors use Pi's nonfatal
 reporting, preserving submitted results and the primary failure when a call fails.
-Cancellation stops the Codex process group and may leave usage unknown.
+Cancellation stops the external CLI process group and may leave usage unknown.
 Detached descendants require external process containment. Implementation
 artifacts remain in their workspace.
 
-Codex output capture allows 16 Mi decoded characters on stdout and 1 Mi on stderr.
+External CLI output capture allows 16 Mi decoded characters on stdout and 1 Mi on stderr.
 Exceeding either limit stops the process group and records a failed call with
 truncated output. Usage received before the limit remains in the receipt.
 Failed calls retain their raw logs and report the provider's error message when available.
@@ -379,13 +472,13 @@ Retain the campaign database as the transcript record. For routine monitoring,
 keep only the latest compact status. Run `inspect --records` on demand for
 diagnostics instead of retaining repeated transcript copies.
 
-Usage reports count committed assistant responses and recorded Codex invocations.
+Usage reports count committed assistant responses and recorded external CLI invocations.
 They cannot establish every outbound request or provider retry. Direct ChatGPT
 Web usage is unmeasured and excluded. Missing native usage remains unknown.
 Process health, internal acceptance, and independent review are
 separate observations.
 
-`usagePrefix` supplies `XEAN_CODEX_USAGE_TAG` to Codex. A custom provider's native
+The Codex factory's `usagePrefix` supplies `XEAN_CODEX_USAGE_TAG` to Codex. A custom provider's native
 configuration can forward it as an HTTP header for usage attribution.
 
 [bounded-solve.ts](scripts/bounded-solve.ts) reads `task.json` and `settings.json`
@@ -403,8 +496,8 @@ bun run xean role verifier input.json campaign.sqlite settings.json
 
 Use a fresh campaign path for each case and keep expected answers outside the input.
 Pi stores the task, role input, and settings in the campaign. Standalone
-`verifier` and `reconstruct` inputs also accept `backend: "codex"` when
-`settings.codex` is enabled.
+`verifier` and `reconstruct` inputs also accept `backend: "external"` with
+a verifier backend registered through `--roles`.
 
 ## Checks and current limits
 

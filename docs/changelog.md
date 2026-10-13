@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.5.0 — development
+
+External role backends are opt-in, and multiple campaigns can share a foreground
+host while Pi owns each campaign's execution and recovery. This version is unreleased.
+
+- Register Codex, Claude, or ChatGPT Web adapters through `open({ roles })` or an
+  explicit CLI `--roles` module. Default installation uses native Pi roles and
+  closed-book source checking without external CLIs or credentials.
+- Implementation work uses `kind: "implementation"`. External verification uses
+  `backend: "external"`. Core retains schemas, frozen inputs, blind reconstruction,
+  dependency checks, and acceptance. External request receipts identify their provider.
+- Codex and Claude share Execa process handling and native Pi memos. Completed calls
+  are reused and interrupted CLI calls use fresh workspaces. Native Pi memos guard
+  worker backend registration and packaged adapter request configuration. ChatGPT Web retains
+  its guard against ambiguous replay. Standalone results receive role-specific validation.
+- `host`, `attach`, and `detach` share a Pi `Models` instance across independently
+  owned campaigns. Restart discovers campaign databases under the selected directory.
+  Per-campaign controls and Pi checkpoints remain authoritative.
+- Pi's existing SQLite adapter uses Bun's native driver through a small application
+  adapter. Closing finalizes prepared statements and releases database handles
+  without waiting for garbage collection. This adds no Pi patch.
+- Start fresh campaign databases. External backend configuration moves from
+  `settings.codex`, `settings.chatgpt`, and `settings.research` into role modules.
+  Preserve historical campaigns with their pinned runtimes. No migration is provided.
+
 ## 3.4.0-rc.1 — 2026-10-13
 
 Release candidate for the fresh-database 3.4.0 runtime. Stable release
