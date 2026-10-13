@@ -283,14 +283,14 @@ export function conversations(profiles: Profiles) {
               return {
                 done: true,
                 limited: false,
-                entry: undefined,
                 notes: undefined,
                 edits: undefined,
               };
             },
             context,
           );
-          const { entry, notes: created, edits, ...remaining } = allowance;
+          const { notes: created, edits, ...remaining } = allowance;
+          const hasPublication = !!created?.length || !!edits?.length;
           return {
             output: [
               {
@@ -298,7 +298,7 @@ export function conversations(profiles: Profiles) {
                 text: JSON.stringify({
                   recorded: true,
                   done,
-                  ...(entry === undefined ? {} : { notes: created, edits }),
+                  ...(hasPublication ? { notes: created, edits } : {}),
                   ...(done
                     ? {}
                     : {

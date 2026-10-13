@@ -456,7 +456,6 @@ export async function publishExploration(
   delta: Exploration,
   observed: Record<string, number>,
 ): Promise<{
-  entry?: EntryId;
   notes: { id: string; revision: number }[];
   edits: { id: string; revision: number }[];
 }> {
@@ -480,20 +479,13 @@ export async function publishExploration(
         `${observed[note.id] === undefined ? "Unseen mathematical input" : "Stale note revision"}: ${note.id}`,
       );
   const catalog = await tx.doc(Catalog, root);
-  const entry = await publishNotes(
-    tx,
-    root,
-    catalog,
-    current.notes,
-    normalized,
-  );
+  await publishNotes(tx, root, catalog, current.notes, normalized);
   const revisions = (values: { id: string }[]) =>
     values.map(({ id }) => ({
       id,
       revision: catalog.notes.find((note) => note.id === id)!.revision,
     }));
   const publication = {
-    entry,
     notes: revisions(normalized.notes),
     edits: revisions(normalized.edits ?? []),
   };
