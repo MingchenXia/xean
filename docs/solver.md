@@ -746,7 +746,8 @@ campaigns reject new grants.
 ## Configuration and functions
 
 [The settings example](../examples/solver-settings.json) uses Astra through
-the public OpenAI API and its `OPENAI_API_KEY` environment variable.
+the authenticated Codex CLI. [The public API example](../examples/openai-settings.json)
+uses `OPENAI_API_KEY` for separate API access.
 `profiles.default` supplies the shared Pi profile. Override `explorer`,
 `coordinator`, `correctness`, `requirements`, `statement`, `proof`, or `reconstruction`
 with a complete `{provider, model, reasoning?}` profile. Omitted reasoning uses
@@ -756,11 +757,69 @@ Verifier uses several profiles within one role invocation.
 Optional fields are `baseUrl`, `apiKeyEnv`, and `transport`. Endpoint URLs cannot
 contain credentials, query parameters, or fragments. An explicit `apiKeyEnv`
 must name a present, nonblank variable when the runtime is constructed.
-The CLI supports Pi's OpenAI, Codex, Anthropic, Google Gemini, and ChatGPT Web
+The CLI supports Codex CLI and Pi's OpenAI, Codex, Anthropic, Google Gemini, and ChatGPT Web
 providers. Library callers supply their own native Pi `Models` collection and
 model objects for other providers.
 Explicit Codex endpoints on `chatgpt.com` and its subdomains retain native
 authentication. Custom hosts enable proxy authentication.
+
+### Codex CLI authentication
+
+Use the Codex session supplied to the current cloud task for any mathematical
+role, without a separate Pi login or API key:
+
+```json
+{
+  "provider": "codex-cli",
+  "model": "gpt-6-astra",
+  "reasoning": "max"
+}
+```
+
+This is the default in `examples/solver-settings.json`. Optional `command` and
+`profile` select the installed executable and a native Codex profile, using the
+same conventions as research. Other providers reject these fields. `codex-cli`
+rejects `baseUrl`, `apiKeyEnv`, and `transport`: native Codex configuration owns
+authentication and networking. Library callers can register `codexCliProvider`
+from `xean/pi` and supply `CodexCliOptions` for native command selection.
+
+Xean invokes `codex exec` noninteractively and inherits the current task's
+authentication, proxy, and CA bindings. It never runs `codex login`, parses
+credential values, or saves them in campaigns. For a read-only `CODEX_HOME`,
+Xean uses a temporary writable home with symbolic links to the original
+authentication and native configuration files. Codex reads those bindings
+directly; Xean removes the links and runtime state when the invocation ends.
+Normal writable homes retain their native selection. SQLite state and logs
+always go to the invocation's temporary directory. The same launcher handles
+research, review, and Codex workers.
+
+Pi owns mathematical transcripts, tool validation, execution, and private
+recovery. Each generation gives Codex the current transcript and tool definitions;
+Codex returns a structured tool selection with JSON-encoded arguments. Pi
+executes those tools and supplies their results to the next generation. Native
+shell and web search are disabled for these model generations. Research and the
+Codex worker keep their separate native tool policies. Failed replies and
+cancelled subprocesses retain reported token counts, including cached input.
+Each admitted call counts one CLI invocation; native internal requests are not
+separate Xean admissions or subscription billing records. The adapter accepts
+text and uses the pinned Pi Codex model metadata for context limits.
+
+At the beginning of a new cloud task, verify `codex login status`. If the platform
+provides a valid session, the README's initialization and run commands require
+no new login. Existing authentication from another task is not assumed to survive;
+the current task must receive its own binding. Permit `chatgpt.com` in the cloud
+environment's Internet settings and retain the supplied proxy and CA trust.
+A proxy CONNECT 403 is a network access failure; another login does not resolve it.
+When authentication is absent, configure the platform's Codex binding or native
+Codex authentication outside Xean.
+
+To check an actual model invocation in each new task, initialize and run the
+small `examples/tree-task.json` campaign with `examples/solver-settings.json`.
+Inspect campaign status and call failures; process startup or login status alone
+does not establish successful inference. Keep previous campaigns and their
+source revisions for provenance. Completed reopens make no further model calls.
+
+### Other native model providers
 
 Gemini uses Pi's native Google provider with a Gemini API key:
 
@@ -796,7 +855,7 @@ set `apiKeyEnv` to `ANTHROPIC_API_KEY` instead. The explicit variable prevents
 fallback to another credential. Tokens stay outside task/settings files and
 recorded request bodies.
 
-The CLI uses Pi's in-memory credential store and does not load a saved Pi login.
+Pi API providers use an in-memory credential store and do not load a saved Pi login.
 Operators renew environment tokens outside Xean. Library callers can supply a
 Pi `Models` collection with a credential store for native OAuth login and refresh.
 

@@ -11,6 +11,10 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
 import {
+  codexCliProvider,
+  codexCliProviderId,
+} from "../providers/codex-cli.ts";
+import {
   chatGptWebProvider,
   chatGptWebProviderId,
 } from "../providers/chatgpt-web.ts";
@@ -43,12 +47,15 @@ const profile = object({
   provider: StringEnum([
     "openai",
     "openai-codex",
+    codexCliProviderId,
     "anthropic",
     "google",
     chatGptWebProviderId,
   ] as const),
   model: Type.String({ minLength: 1 }),
   reasoning,
+  command: researchSchema.properties.command,
+  profile: researchSchema.properties.profile,
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   apiKeyEnv: Type.Optional(Type.String({ minLength: 1 })),
   transport: Type.Optional(
@@ -88,6 +95,14 @@ export function readSettings(value: unknown): Settings {
   // The scarce browser subscription must never become a fallback or verifier.
   for (const [name, profile] of Object.entries(settings.profiles)) {
     if (profile) assertProfileProvider(name, profile.provider);
+    if (profile?.provider === codexCliProviderId) {
+      if (profile.baseUrl || profile.apiKeyEnv || profile.transport)
+        throw new Error(
+          "Codex CLI uses native authentication and transport; baseUrl, apiKeyEnv, and transport are unsupported",
+        );
+    } else if (profile?.command || profile?.profile) {
+      throw new Error("command and profile require the codex-cli provider");
+    }
     const endpoint = profile?.baseUrl;
     if (!endpoint) continue;
     const url = new URL(endpoint);
@@ -117,6 +132,7 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
   models.setProvider(anthropicProvider());
   models.setProvider(googleProvider());
   models.setProvider(chatGptWebProvider());
+  models.setProvider(codexCliProvider());
   models.setProvider({
     ...openaiCodexProvider(),
     auth: { apiKey: envApiKeyAuth("Codex gateway", []) },
@@ -150,9 +166,14 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
         transport: configured.transport,
         apiKey: configured.apiKeyEnv
           ? configuredKey
-          : configured.provider === chatGptWebProviderId
+          : [chatGptWebProviderId, codexCliProviderId].includes(
+                configured.provider,
+              )
             ? undefined
             : key,
+        ...(configured.provider === codexCliProviderId
+          ? { command: configured.command, profile: configured.profile }
+          : {}),
       };
       return [name, { model, options } satisfies Profile];
     }),

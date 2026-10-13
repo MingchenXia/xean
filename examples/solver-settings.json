@@ -1,7 +1,7 @@
 {
   "profiles": {
     "default": {
-      "provider": "openai",
+      "provider": "codex-cli",
       "model": "gpt-6-astra",
       "reasoning": "max"
     }

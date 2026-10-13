@@ -78,11 +78,20 @@ bun examples/deterministic.ts
 The deterministic example returns `{"status":"completed","result":25}`.
 Repeating it reopens the same committed result.
 
-The [example settings](examples/solver-settings.json) use the public OpenAI API
-with `gpt-6-astra` at max reasoning. Supply `OPENAI_API_KEY` through your shell
-or secret manager. Source checking and independent review use the separately
-installed Codex CLI, authenticated with `codex login` or its native provider
-configuration. [Claude settings](examples/claude-settings.json) use Pi's native
+The [example settings](examples/solver-settings.json) use the installed Codex CLI
+with `gpt-6-astra` at max reasoning. Xean reuses Codex's native authentication
+for mathematical roles, source checking, and independent review. When a cloud
+task already provides an authenticated Codex CLI, no additional login or API key
+is required. Xean never starts a login flow. Check the current task with
+`codex login status`; use its inherited authentication and proxy configuration.
+The cloud environment must allow `chatgpt.com` for subscription model requests.
+For a machine without existing authentication, configure Codex outside Xean.
+The [provider guide](docs/solver.md#codex-cli-authentication) describes native
+profiles, read-only cloud credential bindings, and the new-task readiness check.
+
+The [OpenAI settings](examples/openai-settings.json) use the public API and
+`OPENAI_API_KEY` supplied through your shell or secret manager.
+[Claude settings](examples/claude-settings.json) use Pi's native
 Anthropic provider with an operator-supplied subscription OAuth token in
 `ANTHROPIC_OAUTH_TOKEN`. The [provider guide](docs/solver.md#configuration-and-functions)
 also covers mixed providers and Anthropic API credentials. Provider credentials

@@ -19,6 +19,12 @@ is provided. Existing releases and tags remain historical archives.
   allowances. Completed verifier source batches survive in native task memos,
   preserving evidence identities and reuse of later checks. Shared notes publish
   only with a complete worker result. Codex subprocesses retain whole-call recovery.
+- Use `codex-cli` in the default solver settings to reuse an authenticated Codex
+  CLI for mathematical roles without a separate login or API key. Pi retains
+  tool execution and private recovery. Share native command launch, cancellation,
+  and token accounting with research and Codex workers; isolate writable runtime
+  state when cloud authentication files are read-only. Retain the public OpenAI
+  API configuration in `examples/openai-settings.json`.
 - Use Pi's native initialization, dispatch, cancellation, task recovery, commit
   subscriptions, and SQL transactions. Preserve Coordinator signal order during
   recovery and wait for private-child cleanup before settling exhausted Coordinator

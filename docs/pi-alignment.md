@@ -172,6 +172,21 @@ idempotency-comparison values consistent.
 
 ## Provider integration
 
+The pinned Pi Codex provider uses its own OAuth credential store and does not
+resolve an installed Codex CLI's authentication. `codexCliProvider` uses Pi's
+provider and transcript APIs with the existing Execa launcher to bridge that gap.
+Codex owns login and transport; Pi retains generation checkpoints, current tools,
+tool validation and execution, and private recovery. Each CLI invocation is
+ephemeral and receives the normalized current transcript. Its output schema
+selects caller-owned tools with JSON-encoded arguments, which become native Pi
+tool calls. Xean does not copy or parse tokens. Read-only cloud authentication
+files are linked into a temporary native home so Codex can create writable
+installation and runtime state. The launcher is shared with research and Codex
+workers, including process-group cancellation and failed-response usage parsing.
+The [solver guide](solver.md#codex-cli-authentication) defines configuration,
+accounting limits, and new-task readiness. Reassess this bridge when Pi provides
+native Codex CLI authentication and invocation support.
+
 Role profiles keep their selected model objects and credentials. Registering
 models with the host preserves models already supplied by other roles, including
 custom IDs absent from a provider's catalog. Generation resolves that native

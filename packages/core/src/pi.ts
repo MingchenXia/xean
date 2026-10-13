@@ -17,6 +17,11 @@ export {
   chatGptWebProvider,
   chatGptWebProviderId,
 } from "./providers/chatgpt-web.ts";
+export {
+  codexCliProvider,
+  codexCliProviderId,
+  type CodexCliOptions,
+} from "./providers/codex-cli.ts";
 
 /** Pi output tokens already include reasoning tokens. */
 export function reportedPiUsage(message: AssistantMessage): Usage | null {

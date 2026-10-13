@@ -35,6 +35,7 @@ import type { Execution } from "../types.ts";
 import { auditedStream } from "../pi.ts";
 import { json } from "../json.ts";
 import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
+import { codexCliProviderId } from "../providers/codex-cli.ts";
 import { defaultReasoning } from "./contracts.ts";
 export type Profile = { model: Model<Api>; options?: SimpleStreamOptions };
 export const profileNames = [
@@ -349,13 +350,21 @@ export async function ask<S extends TSchema>(
     },
     headers: {
       ...profile.options?.headers,
-      ...(runtime.usagePrefix
+      ...(runtime.usagePrefix && profile.model.provider !== codexCliProviderId
         ? {
             "X-Codex-LB-Usage-Tag": `${runtime.usagePrefix}/${execution.attemptId}`,
             "X-Codex-LB-Required-Capability": "usage_tag_v1",
           }
         : {}),
     },
+    ...(profile.model.provider === codexCliProviderId && runtime.usagePrefix
+      ? {
+          env: {
+            ...profile.options?.env,
+            XEAN_CODEX_USAGE_TAG: `${runtime.usagePrefix}/${execution.attemptId}`,
+          },
+        }
+      : {}),
   });
   const extension: Extension = {
     name: `xean.role.${host.taskId}.${key}`,

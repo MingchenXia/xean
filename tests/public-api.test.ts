@@ -109,6 +109,33 @@ test("duplicate browser work rejects the entire plan before any provider call", 
 });
 
 test("runtime construction validates profiles and never falls back from an explicit credential environment", () => {
+  for (const fields of [
+    { baseUrl: "https://example.invalid" },
+    { apiKeyEnv: "UNUSED_NATIVE_KEY" },
+    { transport: "sse" },
+  ])
+    expect(() =>
+      readSettings({
+        profiles: {
+          default: {
+            provider: "codex-cli",
+            model: "gpt-6-astra",
+            ...fields,
+          },
+        },
+      }),
+    ).toThrow("native authentication and transport");
+  expect(() =>
+    readSettings({
+      profiles: {
+        default: {
+          provider: "openai",
+          model: "gpt-6-astra",
+          command: "codex",
+        },
+      },
+    }),
+  ).toThrow("command and profile require");
   expect(() =>
     readSettings({
       profiles: { default: { provider: "openai", model: "unused" } },
