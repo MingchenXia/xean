@@ -1,6 +1,9 @@
 # Changelog
 
-## 3.4.0 — Unreleased
+## 3.4.0-rc.1 — 2026-10-13
+
+Release candidate for the fresh-database 3.4.0 runtime. Stable release
+remains pending the campaign qualification.
 
 Explorer publishes each submission while continuing its conversation. Caller
 notes and model-generated notes share verification rules, with external trust
@@ -31,6 +34,8 @@ recorded as evidence.
 - Pi moves to the official 1.2.0 release. Xean uses Pi's context projection with
   the retained continuation patch. Artifact and patch hashes remain in
   [Pi provenance](../vendor/pi/provenance.json).
+- Correct the affected OpenAI and Azure GPT model catalogs: the 1,050,000-token
+  context window is separate from the 272,000-token pricing tier.
 - Retryable provider failures with reusable text, reasoning, or tool arguments
   continue the same submission. Empty retryable failures use bounded retries.
   Incomplete tools never execute. Context and completed-response limits remain.

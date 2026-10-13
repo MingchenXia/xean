@@ -548,6 +548,12 @@ test("default and CLI catalogs use native model capacity separately from pricing
   try {
     const native = builtinModels({ authContext: auth({}) });
     const targets = ["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-luna"];
+    const azureTargets = [
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-6-sol",
+    ];
     for (const models of [
       createRuntime(defaultSettings).models,
       await cliModels(),
@@ -561,6 +567,11 @@ test("default and CLI catalogs use native model capacity separately from pricing
         expect(baseline.cost.tiers?.[0]?.inputTokensAbove).toBe(272_000);
         expect(models.getModel("openai", id)).toEqual(baseline);
       }
+      for (const id of azureTargets)
+        expect(models.getModel("azure", id)).toMatchObject({
+          contextWindow: 1_050_000,
+          maxTokens: 128_000,
+        });
       expect(models.getAllModels("openai-codex")).toEqual(
         native.getAllModels("openai-codex"),
       );

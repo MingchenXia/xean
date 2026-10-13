@@ -110,7 +110,7 @@
     {
       "package": "@earendil-works/pi-ai",
       "path": "patches/@earendil-works%2Fpi-ai@1.2.0.patch",
-      "sha256": "823e517a26038e2fcf9e787627473d552e18493289f6e29869fb67d5f6484ca1",
+      "sha256": "06adf1513a2f8e35295b99e144353f33705ec72eccba2706e2088007e13b8dd6",
       "files": {
         "dist/api/anthropic-messages.js": "7b8f1b42f680f6b7a96f408a89822c3c87dbf2bf13cf3fb11599179c9e5cfff1",
         "dist/api/google-generative-ai.js": "bbf2b3d2bfea2e2c017675c721e727c0b1c772ab91dc344a386a741f7ccc93b0",
@@ -120,9 +120,10 @@
         "dist/types.d.ts": "d2a4a18c5bf1e2f6eadda32981c8f7127b8af9875dc7efd30f2875a426423430",
         "dist/utils/retry.js": "0248ccd4df02ad3c868f82a8cf77131d7f0860a6f3bc337018047aa95bc2b5a4",
         "dist/providers/data/openai.json": "6611470d7899531e5a12865b056f3d2e52e7ff489d6627f108ea013efc67195b",
-        "dist/providers/data/.manifest.json": "f93784d640b65ec09c4c582fc23cb9a80c9b7b94839c5a1d8e08f0222376a1e6"
+        "dist/providers/data/.manifest.json": "b0f1c592fd7ba594f47325dda978f2dbbeb2945c8d06f74e021a0740db439310",
+        "dist/providers/data/azure.json": "461094e4a9cd73242887bcdd20ea06269efebcbd1d191d58fbf103bfb08e0484"
       },
-      "reason": "Preserve provider errors and usage, classify resumable provider limits, and correct direct Codex failure and SSE handling. Use documented public OpenAI context capacity instead of the upstream short-context pricing cap."
+      "reason": "Preserve provider errors and usage, classify resumable provider limits, correct direct Codex failure and SSE handling, and separate the documented 1,050,000-token OpenAI/Azure context capacity from the 272,000-token pricing tier."
     },
     {
       "package": "@earendil-works/pi-durable",
