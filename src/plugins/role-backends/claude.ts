@@ -1,9 +1,10 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { getJsonSchemaToolParameters } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { RoleFailure } from "../../roles/types.ts";
-import type { Roles } from "../../workflow.ts";
 import {
   cliCall,
+  cliRoles,
+  tokenUsage,
   type CliOptions,
   type CliRoleOptions,
   type CliTranscript,
@@ -18,22 +19,7 @@ export function claudeTranscript(stdout: string): CliTranscript {
     const event = JSON.parse(stdout);
     if (!event || event.type !== "result")
       throw new Error("Claude emitted no completed result");
-    const usage = Object.fromEntries(
-      Object.entries(event.usage ?? {}).filter(
-        (entry): entry is [string, number] =>
-          entry[0].endsWith("_tokens") &&
-          typeof entry[1] === "number" &&
-          Number.isFinite(entry[1]) &&
-          entry[1] >= 0,
-      ),
-    );
-    if (
-      typeof event.total_cost_usd === "number" &&
-      Number.isFinite(event.total_cost_usd) &&
-      event.total_cost_usd >= 0
-    )
-      usage.cost_usd = event.total_cost_usd;
-    if (Object.keys(usage).length) result.usage = usage;
+    result.usage = tokenUsage(event.usage, event.total_cost_usd);
     if (event.is_error || event.subtype !== "success") {
       result.error = new RoleFailure(
         typeof event.result === "string"
@@ -103,18 +89,5 @@ export function claudeCall(settings: ClaudeOptions, usagePrefix?: string) {
 export function claude(
   options: Omit<CliRoleOptions<ClaudeOptions>, "research">,
 ) {
-  return (builtins: Roles): Partial<Roles> => ({
-    external: {
-      ...builtins.external,
-      ...(options.implementation && {
-        implementation: claudeCall(options.implementation, options.usagePrefix),
-      }),
-      ...(options.verifier && {
-        verifier: claudeCall(options.verifier, options.usagePrefix),
-      }),
-      ...(options.explorer && {
-        explorer: claudeCall(options.explorer, options.usagePrefix),
-      }),
-    },
-  });
+  return cliRoles(options, claudeCall);
 }

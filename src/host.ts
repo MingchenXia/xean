@@ -31,7 +31,6 @@ import {
   type Definition,
 } from "./definition.ts";
 import { createRoles } from "./roles/index.ts";
-import type { Research } from "./roles/research.ts";
 import {
   Control,
   createResearch,
@@ -51,7 +50,6 @@ export class ResearchOwnedError extends Error {
 export type OpenOptions = {
   create?: Definition;
   models?: Models;
-  research?: Research;
   roles?: (builtins: Roles) => Partial<Roles>;
   key?: string;
   usagePrefix?: string;
@@ -212,10 +210,7 @@ export async function open(path: string, options: OpenOptions = {}) {
       models: options.models,
       key: options.key,
     });
-    const builtins = createRoles(
-      { ...settings, profiles: runtime.profiles },
-      options.research,
-    );
+    const builtins = createRoles({ ...settings, profiles: runtime.profiles });
     const roles = Object.assign(builtins, options.roles?.({ ...builtins }));
     const workflow = createResearch(roles);
     const registry = options.registry ?? createRegistry();

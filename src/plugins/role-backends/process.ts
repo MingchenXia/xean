@@ -18,6 +18,8 @@ import {
   type ExternalCall,
 } from "../../roles/backend.ts";
 import { RoleFailure } from "../../roles/types.ts";
+import { externalResearch } from "../../roles/research.ts";
+import type { Roles } from "../../workflow.ts";
 
 export type CliOptions = {
   model: string;
@@ -39,6 +41,40 @@ export type CliTranscript = {
   usage: Record<string, number> | null;
   searches: number;
 };
+/** Register explicit CLI options through the existing role hook. */
+export function cliRoles<S extends CliOptions>(
+  options: CliRoleOptions<S>,
+  call: (settings: S, usagePrefix?: string) => ExternalCall,
+) {
+  return (builtins: Roles): Partial<Roles> => {
+    const external = { ...builtins.external };
+    for (const role of ["implementation", "verifier", "explorer"] as const) {
+      const settings = options[role];
+      if (settings) external[role] = call(settings, options.usagePrefix);
+    }
+    if (options.research)
+      external.research = externalResearch(
+        call(options.research, options.usagePrefix),
+      );
+    return { external };
+  };
+}
+
+export function tokenUsage(value: unknown, cost?: unknown) {
+  const usage = Object.fromEntries(
+    Object.entries(value && typeof value === "object" ? value : {}).filter(
+      (entry): entry is [string, number] =>
+        entry[0].endsWith("_tokens") &&
+        typeof entry[1] === "number" &&
+        Number.isFinite(entry[1]) &&
+        entry[1] >= 0,
+    ),
+  );
+  if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0)
+    usage.cost_usd = cost;
+  return Object.keys(usage).length ? usage : null;
+}
+
 const hash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 

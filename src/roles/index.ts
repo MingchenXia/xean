@@ -209,13 +209,12 @@ export type CoordinationInput = {
 };
 export type RoleOptions = Omit<Settings, "profiles"> & { profiles: Profiles };
 
-export function createRoles(options: RoleOptions, researchOverride?: Research) {
+export function createRoles(options: RoleOptions) {
   const maxExplorerResponses = explorerResponseLimit(options);
   const maxExplorerReads = options.maxExplorerReads ?? defaultMaxExplorerReads;
   const native = conversations(options.profiles);
   const { ask } = native;
-  const research = () =>
-    functions.external.research ?? researchOverride ?? closedBookResearch;
+  const research = () => functions.external.research ?? closedBookResearch;
   const literature = () =>
     (options.literature ?? false) && research().retrieval;
   const batch = async <

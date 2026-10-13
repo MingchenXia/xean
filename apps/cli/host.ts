@@ -1,8 +1,8 @@
-import { mkdir, readdir, realpath } from "node:fs/promises";
+import { once } from "node:events";
+import { mkdir, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { acquireOwnership, open, type OpenOptions } from "../../src/host.ts";
 import { serveControl } from "./control.ts";
-import { cliModels } from "./models.ts";
 import { controlCommand } from "./lifecycle.ts";
 
 export type HostCommand = { kind: "attach" | "detach"; database: string };
@@ -11,16 +11,21 @@ export const hostPath = (directory: string) => join(directory, ".host");
 /** Own independent Pi Harnesses; the databases supply all durable state. */
 export async function serveHost(
   directory: string,
-  options: Pick<OpenOptions, "models" | "roles" | "key" | "usagePrefix"> & {
+  options: Pick<OpenOptions, "roles" | "key" | "usagePrefix"> & {
+    models: NonNullable<OpenOptions["models"]>;
     ownerId?: string;
     onError?: (database: string, error: unknown) => void;
     signal?: AbortSignal;
-  } = {},
+  },
 ) {
-  options.signal?.throwIfAborted();
+  const abort = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([abort.signal, options.signal])
+    : abort.signal;
+  signal.throwIfAborted();
   await mkdir(directory, { recursive: true });
   directory = await realpath(directory);
-  options.signal?.throwIfAborted();
+  signal.throwIfAborted();
   const release = acquireOwnership(hostPath(directory));
   const report =
     options.onError ?? ((path, error) => console.error(path, error));
@@ -33,7 +38,6 @@ export async function serveHost(
     { ready: Promise<Attached>; closing?: Promise<void> }
   >();
   let control: Awaited<ReturnType<typeof serveControl>> | undefined;
-  let stopping = false;
   let closing: Promise<void> | undefined;
   const detach = async (path: string) => {
     const entry = owners.get(path);
@@ -46,6 +50,8 @@ export async function serveHost(
         } finally {
           await owner.close();
         }
+      } catch (error) {
+        if (error !== signal.reason) throw error;
       } finally {
         owners.delete(path);
       }
@@ -53,7 +59,7 @@ export async function serveHost(
   };
   const close = () =>
     (closing ??= (async () => {
-      stopping = true;
+      abort.abort(new Error("Host is stopping"));
       try {
         const results = await Promise.allSettled([
           control?.close(true),
@@ -66,10 +72,8 @@ export async function serveHost(
       }
     })());
   try {
-    const models = options.models ?? (await cliModels());
     const execute = async (command: HostCommand) => {
-      options.signal?.throwIfAborted();
-      if (stopping) throw new Error("Host is stopping");
+      signal.throwIfAborted();
       if (command.kind !== "attach" && command.kind !== "detach")
         throw new Error("Expected attach or detach");
       const path = await realpath(command.database);
@@ -80,31 +84,31 @@ export async function serveHost(
         throw new Error(
           "Shared host requires CAMPAIGN_DIR/NAME/campaign.sqlite",
         );
-      options.signal?.throwIfAborted();
-      if (stopping) throw new Error("Host is stopping");
+      signal.throwIfAborted();
       if (command.kind === "detach") {
         await detach(path);
         return { database: path, attached: false };
       }
       if (!owners.has(path)) {
         const ready = (async () => {
-          const owner = await open(path, { ...options, models });
+          const owner = await open(path, options);
           let control: Attached["control"] | undefined;
           try {
-            options.signal?.throwIfAborted();
+            signal.throwIfAborted();
             control = await serveControl(
               path,
               (command) => controlCommand(owner, command),
               options.ownerId,
             );
-            options.signal?.throwIfAborted();
+            signal.throwIfAborted();
             void owner.harness.closed
               .then(() => detach(path))
               .catch((error) => report(path, error));
             owner.harness.resume();
             return { owner, control };
           } catch (error) {
-            await Promise.allSettled([control?.close(true), owner.close()]);
+            await control?.close(true).catch(() => {});
+            await owner.close().catch(() => {});
             throw error;
           }
         })();
@@ -117,19 +121,17 @@ export async function serveHost(
       return { database: path, attached: true };
     };
     control = await serveControl(hostPath(directory), execute, options.ownerId);
-    const campaigns = (
-      await readdir(directory, { withFileTypes: true })
-    ).filter((item) => item.isDirectory());
-    await Promise.all(
-      campaigns.map(async ({ name }) => {
-        const database = join(directory, name, "campaign.sqlite");
-        if (await Bun.file(database).exists())
-          await execute({ kind: "attach", database }).catch((error) => {
-            if (!options.signal?.aborted || error !== options.signal.reason)
-              report(database, error);
-          });
-      }),
-    );
+    for await (const database of new Bun.Glob("*/campaign.sqlite").scan({
+      cwd: directory,
+      dot: true,
+      absolute: true,
+    })) {
+      signal.throwIfAborted();
+      await execute({ kind: "attach", database }).catch((error) => {
+        if (error === signal.reason) throw error;
+        report(database, error);
+      });
+    }
     return { close, execute };
   } catch (error) {
     await close().catch(() => {});
@@ -143,11 +145,8 @@ export async function runHost(
   options: Parameters<typeof serveHost>[1],
 ) {
   const abort = new AbortController();
-  const stop = Promise.withResolvers<void>();
-  const interrupt = () => {
-    abort.abort();
-    stop.resolve();
-  };
+  const stop = once(abort.signal, "abort");
+  const interrupt = () => abort.abort();
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
   try {
@@ -156,7 +155,7 @@ export async function runHost(
       signal: abort.signal,
     });
     try {
-      await stop.promise;
+      await stop;
     } finally {
       await host.close();
     }

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { open, readReport } from "../src/index.ts";
+import { open, readReport, type OpenOptions } from "../src/index.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { RoleFailure } from "../src/roles/types.ts";
 import {
@@ -32,6 +32,32 @@ async function command(source: string) {
   return { model: "fixture", command: executable, workspace };
 }
 
+async function runImplementation(
+  options: Awaited<ReturnType<typeof command>>,
+  roles: OpenOptions["roles"] = claude({ implementation: options }),
+) {
+  const owner = await open(join(options.workspace, "campaign.sqlite"), {
+    create: {
+      task,
+      settings,
+      mode: {
+        role: "implementation",
+        input: { notes: [], assignment: "Prove reflexivity" },
+      },
+    },
+    roles,
+  });
+  try {
+    await owner.root.waitForIdle(context);
+    return await owner.root.commit(
+      (tx) => readReport(tx, owner.root.id, { records: true }),
+      context,
+    );
+  } finally {
+    await owner.close();
+  }
+}
+
 test("Claude uses native schema/stdin and journals structured output, usage, and provider identity", async () => {
   const options = await command(`
     const args = process.argv.slice(2);
@@ -47,99 +73,61 @@ test("Claude uses native schema/stdin and journals structured output, usage, and
     if (!input.task || !input.assignment || require('node:fs').realpathSync(input.workspace) !== process.cwd()) throw new Error('Missing frozen task');
     process.stdout.write(${JSON.stringify(JSON.stringify(success))});
   `);
-  const owner = await open(join(options.workspace, "campaign.sqlite"), {
-    create: {
-      task,
-      settings,
-      mode: {
-        role: "implementation",
-        input: { notes: [], assignment: "Prove reflexivity" },
-      },
-    },
-    roles: claude({ implementation: options }),
+  const report = await runImplementation(options);
+  expect(report.status).toMatchObject({ status: "completed" });
+  const request = report.records!.find(ExternalRequest.is)!.data;
+  expect(request).toMatchObject({
+    provider: "claude-cli",
+    api: "claude-print",
+    model: "fixture",
   });
-  try {
-    await owner.root.waitForIdle(context);
-    const report = await owner.root.commit(
-      (tx) => readReport(tx, owner.root.id, { records: true }),
-      context,
-    );
-    expect(report.status).toMatchObject({ status: "completed" });
-    const request = report.records!.find(ExternalRequest.is)!.data;
-    expect(request).toMatchObject({
-      provider: "claude-cli",
-      api: "claude-print",
-      model: "fixture",
-    });
-    const log = report.records!.find(ExternalLog.is)!.data;
-    expect(log).toMatchObject({
-      operationId: request.operationId,
-      exitCode: 0,
-      usage: { ...success.usage, cost_usd: 0.001 },
-    });
-  } finally {
-    await owner.close();
-  }
+  const log = report.records!.find(ExternalLog.is)!.data;
+  expect(log).toMatchObject({
+    operationId: request.operationId,
+    exitCode: 0,
+    usage: { ...success.usage, cost_usd: 0.001 },
+  });
 });
 
 test("completed plugin calls reuse Pi results; recovery rejects another adapter or changed configuration", async () => {
   const options = await command(
     `process.stdout.write(${JSON.stringify(JSON.stringify(success))});`,
   );
-  const owner = await open(join(options.workspace, "campaign.sqlite"), {
-    create: {
-      task,
-      settings,
-      mode: {
-        role: "implementation",
-        input: { notes: [], assignment: "Prove reflexivity" },
-      },
+  const report = await runImplementation(options, () => ({
+    async implementation(input, runtime, context) {
+      const call = claudeCall(options);
+      const args = [
+        "worker",
+        explorationSchema,
+        "Exact task",
+        input,
+        runtime,
+        context,
+      ] as const;
+      const first = await call(...args);
+      const original = structuredClone(first);
+      first.value.notes[0]!.text = "Changed caller copy";
+      expect(await call(...args)).toEqual(original);
+      // Property order is not configuration identity.
+      expect(
+        await claudeCall({
+          workspace: options.workspace,
+          command: options.command,
+          model: options.model,
+        })(...args),
+      ).toEqual(original);
+      await expect(
+        claudeCall({ ...options, model: "changed" })(...args),
+      ).rejects.toThrow("configuration changed");
+      await expect(codexCall(options)(...args)).rejects.toThrow(
+        "configuration changed",
+      );
+      return { kind: "notes", ...original.value };
     },
-    roles: () => ({
-      async implementation(input, runtime, context) {
-        const call = claudeCall(options);
-        const args = [
-          "worker",
-          explorationSchema,
-          "Exact task",
-          input,
-          runtime,
-          context,
-        ] as const;
-        const first = await call(...args);
-        const original = structuredClone(first);
-        first.value.notes[0]!.text = "Changed caller copy";
-        expect(await call(...args)).toEqual(original);
-        // Property order is not configuration identity.
-        expect(
-          await claudeCall({
-            workspace: options.workspace,
-            command: options.command,
-            model: options.model,
-          })(...args),
-        ).toEqual(original);
-        await expect(
-          claudeCall({ ...options, model: "changed" })(...args),
-        ).rejects.toThrow("configuration changed");
-        await expect(codexCall(options)(...args)).rejects.toThrow(
-          "configuration changed",
-        );
-        return { kind: "notes", ...original.value };
-      },
-    }),
-  });
-  try {
-    await owner.root.waitForIdle(context);
-    const report = await owner.root.commit(
-      (tx) => readReport(tx, owner.root.id, { records: true }),
-      context,
-    );
-    expect(report.status).toMatchObject({ status: "completed" });
-    expect(report.records!.filter(ExternalLog.is)).toHaveLength(1);
-    expect(report.records!.filter(ExternalRequest.is)).toHaveLength(1);
-  } finally {
-    await owner.close();
-  }
+  }));
+  expect(report.status).toMatchObject({ status: "completed" });
+  expect(report.records!.filter(ExternalLog.is)).toHaveLength(1);
+  expect(report.records!.filter(ExternalRequest.is)).toHaveLength(1);
 });
 
 test.each([
@@ -236,7 +224,7 @@ test.each(["browser", "cli"] as const)(
       );
       expect(report.status.status).toBe("blocked");
       expect(report.status.error).toContain(
-        "External backend configuration changed",
+        "Role backend registration changed",
       );
       expect(calls).toEqual(admitted);
     } finally {

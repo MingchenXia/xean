@@ -407,7 +407,14 @@ test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without 
     const request = spyOn(globalThis, "fetch").mockResolvedValue(returned);
     try {
       await expect(
-        chatgptCall(browser, "Solve", [], runtime(), context),
+        chatgptCall(browser)(
+          "worker",
+          explorationSchema,
+          "Solve",
+          [],
+          runtime(),
+          context,
+        ),
       ).rejects.toThrow(error);
       expect(request).toHaveBeenCalledTimes(1);
     } finally {

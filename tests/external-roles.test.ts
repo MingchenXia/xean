@@ -38,6 +38,15 @@ const note: Note = {
 };
 const input = { task, notes: [note], assignment: "Check reflexivity." };
 
+async function workerOutcome(owner: Awaited<ReturnType<typeof open>>) {
+  await owner.root.waitForIdle(context);
+  const page = await owner.root.commit(
+    (tx) => tx.scanTasks({ kind: "research.worker" }, 10),
+    context,
+  );
+  return page.items[0]!.state.outcome;
+}
+
 test("default core has no external backend and registration changes capabilities", async () => {
   const builtins = roles();
   const input = {
@@ -150,13 +159,9 @@ test("standalone replacement results receive the same notebook validation", asyn
     }),
   });
   try {
-    await owner.root.waitForIdle(context);
-    const page = await owner.root.commit(
-      (tx) => tx.scanTasks({ kind: "research.worker" }, 10),
-      context,
-    );
-    expect(page.items[0]!.state.outcome?.status).toBe("faulted");
-    expect(page.items[0]!.state.outcome?.error?.message).toContain("missing");
+    const outcome = await workerOutcome(owner);
+    expect(outcome?.status).toBe("faulted");
+    expect(outcome?.error?.message).toContain("missing");
   } finally {
     await owner.close();
   }
@@ -167,12 +172,9 @@ test.each(["explorer", "verifier"] as const)(
   async (role) => {
     const directory = await temporaryDirectory("external-mode-recovery-");
     const database = join(directory, "campaign.sqlite");
-    let started!: () => void;
-    const start = new Promise<void>((resolve) => {
-      started = resolve;
-    });
+    const started = Promise.withResolvers<void>();
     const wait = async (callContext: typeof context): Promise<never> => {
-      started();
+      started.resolve();
       return awaitWithContext(new Promise<never>(() => {}), callContext);
     };
     const input =
@@ -217,21 +219,14 @@ test.each(["explorer", "verifier"] as const)(
               },
       }),
     });
-    const idle = owner.root.waitForIdle(context).catch(() => {});
-    await start;
+    owner.harness.resume();
+    await started.promise;
     await owner.close();
-    await idle;
     const reopened = await open(database, { models: createModels() });
     try {
-      await reopened.root.waitForIdle(context);
-      const tasks = await reopened.root.commit(
-        (tx) => tx.scanTasks({ kind: "research.worker" }, 10),
-        context,
-      );
-      expect(tasks.items[0]!.state.outcome?.status).toBe("faulted");
-      expect(tasks.items[0]!.state.outcome?.error?.message).toContain(
-        "backend registration changed",
-      );
+      const outcome = await workerOutcome(reopened);
+      expect(outcome?.status).toBe("faulted");
+      expect(outcome?.error?.message).toContain("backend registration changed");
     } finally {
       await reopened.close();
     }

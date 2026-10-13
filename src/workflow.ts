@@ -204,18 +204,11 @@ export function createResearch(roles: Roles) {
         }
         let outcome: TaskOutcome<JsonValue>;
         try {
-          const backends =
-            name! === "verifier"
-              ? ["verifier", "research"]
-              : name! === "reconstruct"
-                ? ["verifier"]
-                : name! === "review" || name! === "literature"
-                  ? ["research"]
-                  : [name!];
           const mode = JSON.stringify(
-            backends.map(
-              (name) => !!roles.external?.[name as keyof ExternalRoles],
-            ),
+            Object.entries(roles.external ?? {})
+              .filter(([, enabled]) => enabled)
+              .map(([name]) => name)
+              .sort(),
           );
           if (
             (await runtime.memo("research.backend-mode", mode, context)) !==

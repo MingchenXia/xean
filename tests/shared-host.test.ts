@@ -11,6 +11,23 @@ import { hostPath, serveHost, type HostCommand } from "../apps/cli/host.ts";
 import { requestOwner, socketPath } from "../apps/cli/control.ts";
 import { temporaryDirectory } from "./directory.ts";
 
+const root = resolve(import.meta.dir, "..");
+const spawn = (...args: string[]) =>
+  Bun.spawn([process.execPath, ...args], { stdout: "pipe", stderr: "pipe" });
+const command = (...args: string[]) =>
+  spawn(join(root, "apps/cli/index.ts"), ...args);
+
+async function output(child: ReturnType<typeof spawn>) {
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect(stderr).toBe("");
+  expect(code).toBe(0);
+  return stdout;
+}
+
 async function initialize(directory: string, name: string) {
   const path = join(directory, name, "campaign.sqlite");
   const owner = await open(path, {
@@ -201,11 +218,7 @@ test.each(["SIGINT", "SIGTERM"])(
       initialize(directory, "first"),
       initialize(directory, "second"),
     ]);
-    const root = resolve(import.meta.dir, "..");
-    const script = join(directory, "run.ts");
-    await Bun.write(
-      script,
-      `
+    const source = `
 import { runHost } from ${JSON.stringify(join(root, "apps/cli/host.ts"))};
 import { createModels } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
 let opened = 0, ran = 0;
@@ -219,20 +232,9 @@ await runHost(${JSON.stringify(directory)}, {
   onError: (_database, error) => errors.push(String(error)),
 });
 console.log(JSON.stringify({ ran, errors, listeners: ["SIGINT", "SIGTERM"].map(signal => process.listenerCount(signal)) }));
-`,
-    );
-    const child = Bun.spawn([process.execPath, script], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [output, error, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-    expect(code).toBe(0);
-    expect(error).toBe("");
-    expect(JSON.parse(output)).toEqual({
+`;
+    const result = await output(spawn("--eval", source));
+    expect(JSON.parse(result)).toEqual({
       ran: 0,
       errors: [],
       listeners: [0, 0],
@@ -249,6 +251,37 @@ console.log(JSON.stringify({ ran, errors, listeners: ["SIGINT", "SIGTERM"].map(s
     await host.close();
   },
 );
+
+test("closing a host while an attachment opens prevents dispatch", async () => {
+  const directory = await realpath(
+    await temporaryDirectory("xean-shared-closing-"),
+  );
+  let ran = 0;
+  const host = await serveHost(directory, {
+    models: createModels(),
+    roles: () => {
+      void host.close();
+      return {
+        coordinator: async () => {
+          ran++;
+          return { work: null };
+        },
+      };
+    },
+  });
+  const database = await initialize(directory, "late");
+  try {
+    await expect(host.execute({ kind: "attach", database })).rejects.toThrow(
+      "Host is stopping",
+    );
+  } finally {
+    await host.close();
+  }
+  expect(ran).toBe(0);
+  expect(await Bun.file(socketPath(database)).exists()).toBe(false);
+  const owner = await open(database, { models: createModels() });
+  await owner.close();
+});
 
 test("failed native storage releases one campaign without stopping other owners", async () => {
   const directory = await realpath(
@@ -307,11 +340,7 @@ test("CLI role modules and shared control work without installing signal handler
     module,
     "export default () => ({ coordinator: async () => ({ work: null }) });",
   );
-  const script = join(directory, "run.ts");
-  const root = resolve(import.meta.dir, "..");
-  await Bun.write(
-    script,
-    `
+  const source = `
 import { runHost } from ${JSON.stringify(join(root, "apps/cli/host.ts"))};
 import { cliModels } from ${JSON.stringify(join(root, "apps/cli/models.ts"))};
 const models = await cliModels();
@@ -325,21 +354,10 @@ console.log(JSON.stringify(listeners()));
 process.emit("SIGTERM");
 await running;
 console.log(JSON.stringify(listeners()));
-`,
-  );
-  const result = Bun.spawn([process.execPath, script], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [output, error, code] = await Promise.all([
-    new Response(result.stdout).text(),
-    new Response(result.stderr).text(),
-    result.exited,
-  ]);
-  expect(error).toBe("");
-  expect(code).toBe(0);
+`;
+  const listeners = await output(spawn("--eval", source));
   expect(
-    output
+    listeners
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line)),
@@ -347,20 +365,8 @@ console.log(JSON.stringify(listeners()));
     [1, 1],
     [0, 0],
   ]);
-  const command = (...args: string[]) =>
-    Bun.spawn([process.execPath, join(root, "apps/cli/index.ts"), ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  const standalone = command("--roles", module, "resume", first);
-  const [stdout, stderr, exit] = await Promise.all([
-    new Response(standalone.stdout).text(),
-    new Response(standalone.stderr).text(),
-    standalone.exited,
-  ]);
-  expect(stderr).toBe("");
-  expect(exit).toBe(0);
-  expect(JSON.parse(stdout).status).toBe("idle");
+  const resumed = await output(command("--roles", module, "resume", first));
+  expect(JSON.parse(resumed).status).toBe("idle");
   const prefix = ["--campaign-dir", directory];
   const hosted = command(
     ...prefix,
@@ -384,9 +390,8 @@ console.log(JSON.stringify(listeners()));
         kind,
         "first",
       );
-      const output = await new Response(child.stdout).json();
-      expect(await child.exited).toBe(0);
-      expect(output).toMatchObject({ attached: kind === "attach" });
+      const receipt = JSON.parse(await output(child));
+      expect(receipt).toMatchObject({ attached: kind === "attach" });
     }
     expect(
       await requestOwner(first, { kind: "resume" }, "cli-host"),

@@ -180,7 +180,8 @@ function fixture(
     );
   };
   provider.setResponses([next]);
-  const roles = createRoles({ ...options, profiles }, research);
+  const roles = createRoles({ ...options, profiles });
+  if (research) roles.external.research = research;
   const reports: unknown[] = [];
   const workflow = createResearch(roles);
   const Invoke = defineTask<Invocation, { phase: "run" }, JsonValue, object>({

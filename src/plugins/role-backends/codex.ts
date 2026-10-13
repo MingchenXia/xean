@@ -3,9 +3,14 @@ import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { getJsonSchemaToolParameters } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { RoleFailure } from "../../roles/types.ts";
-import { externalResearch } from "../../roles/research.ts";
-import type { Roles } from "../../workflow.ts";
-import { cliCall, type CliOptions, type CliRoleOptions } from "./process.ts";
+import {
+  cliCall,
+  cliRoles,
+  tokenUsage,
+  type CliOptions,
+  type CliRoleOptions,
+  type CliTranscript,
+} from "./process.ts";
 
 export type CodexOptions = CliOptions & { profile?: string };
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -14,12 +19,7 @@ const record = (value: unknown): Record<string, unknown> | undefined =>
     : undefined;
 
 export function codexTranscript(stdout: string) {
-  const result: {
-    value?: JsonValue;
-    error?: Error;
-    usage: Record<string, number> | null;
-    searches: number;
-  } = { usage: null, searches: 0 };
+  const result: CliTranscript = { usage: null, searches: 0 };
   let completed = false;
   let message: string | undefined;
   for (const [line] of stdout.matchAll(/[^\n]+/g)) {
@@ -44,16 +44,8 @@ export function codexTranscript(stdout: string) {
     }
     if (event.type === "turn.completed") {
       completed = true;
-      const usage = Object.fromEntries(
-        Object.entries(record(event.usage) ?? {}).filter(
-          (entry): entry is [string, number] =>
-            entry[0].endsWith("_tokens") &&
-            typeof entry[1] === "number" &&
-            Number.isFinite(entry[1]) &&
-            entry[1] >= 0,
-        ),
-      );
-      if (Object.keys(usage).length) result.usage = usage;
+      const usage = tokenUsage(event.usage);
+      if (usage) result.usage = usage;
     }
     if (event.type !== "item.completed") continue;
     const item = record(event.item);
@@ -73,27 +65,8 @@ export function codexTranscript(stdout: string) {
   return result;
 }
 
-/** Register only the explicitly selected roles through Xean's existing role hook. */
 export function codex(options: CliRoleOptions<CodexOptions>) {
-  return (builtins: Roles): Partial<Roles> => ({
-    external: {
-      ...builtins.external,
-      ...(options.implementation && {
-        implementation: codexCall(options.implementation, options.usagePrefix),
-      }),
-      ...(options.verifier && {
-        verifier: codexCall(options.verifier, options.usagePrefix),
-      }),
-      ...(options.explorer && {
-        explorer: codexCall(options.explorer, options.usagePrefix),
-      }),
-      ...(options.research && {
-        research: externalResearch(
-          codexCall(options.research, options.usagePrefix),
-        ),
-      }),
-    },
-  });
+  return cliRoles(options, codexCall);
 }
 
 export function codexCall(settings: CodexOptions, usagePrefix?: string) {

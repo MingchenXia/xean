@@ -90,13 +90,9 @@ async function withOwner(
 ) {
   const requested = campaignPath(target);
   const path = create ? requested : await realpath(requested);
-  const { usagePrefix } = program.opts<Flags>();
   const owner = await open(path, {
     create,
-    key: await readKey(),
-    usagePrefix,
-    models: await cliModels(),
-    roles: await readRoles(),
+    ...(await executionOptions()),
   });
   try {
     return await action(owner, await realpath(path));
@@ -110,6 +106,17 @@ async function readKey() {
   const key = (await Bun.stdin.text()).trim();
   if (!key) throw new Error("Expected a credential on stdin");
   return key;
+}
+
+async function executionOptions() {
+  const { usagePrefix, ownerId } = program.opts<Flags>();
+  return {
+    key: await readKey(),
+    models: await cliModels(),
+    roles: await readRoles(),
+    usagePrefix,
+    ownerId,
+  };
 }
 
 async function runCampaign(
@@ -170,13 +177,7 @@ program
   .description("Run named campaigns in one foreground process")
   .action(async () => {
     const flags = program.opts<Flags & { campaignDir: string }>();
-    await runHost(flags.campaignDir, {
-      models: await cliModels(),
-      roles: await readRoles(),
-      key: await readKey(),
-      usagePrefix: flags.usagePrefix,
-      ownerId: flags.ownerId,
-    });
+    await runHost(flags.campaignDir, await executionOptions());
   });
 for (const kind of ["attach", "detach"] as const)
   program.command(`${kind} <campaign>`).action(async (campaign: string) => {

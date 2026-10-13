@@ -168,32 +168,30 @@ test.each(["empty", "independent", "retired-support"] as const)(
   async (resultKind) => {
     let searched = false;
     const retiredId = "input/seed/n1";
-    const builtins = createRoles(
-      {
-        profiles: createRuntime(settings, { models: createModels() }).profiles,
-        literature: true,
+    const builtins = createRoles({
+      profiles: createRuntime(settings, { models: createModels() }).profiles,
+      literature: true,
+    });
+    builtins.external.research = {
+      ...closedBookResearch,
+      retrieval: true,
+      async literature(input) {
+        searched = true;
+        expect(input.notes.map((note) => note.id)).toEqual(["input/seed/n2"]);
+        return {
+          notes:
+            resultKind === "empty"
+              ? []
+              : [
+                  {
+                    ...draft("n1"),
+                    support:
+                      resultKind === "retired-support" ? [retiredId] : [],
+                  },
+                ],
+        };
       },
-      {
-        ...closedBookResearch,
-        retrieval: true,
-        async literature(input) {
-          searched = true;
-          expect(input.notes.map((note) => note.id)).toEqual(["input/seed/n2"]);
-          return {
-            notes:
-              resultKind === "empty"
-                ? []
-                : [
-                    {
-                      ...draft("n1"),
-                      support:
-                        resultKind === "retired-support" ? [retiredId] : [],
-                    },
-                  ],
-          };
-        },
-      },
-    );
+    };
     const owner = await setup({
       capabilities: () => ({
         explorer: true,

@@ -208,7 +208,7 @@ available once per campaign. An ambiguously sent browser request requires operat
 attention and is not replayed. Completed results reuse their Pi memo.
 
 Keep the module and configuration stable across recovery. A native Pi memo rejects
-changes between native and external registration for an interrupted worker.
+changes to enabled backend registrations while recovering an interrupted worker.
 Packaged adapters separately pin the provider and configuration of admitted calls.
 Custom replacement code remains responsible for its own replay behavior.
 
@@ -280,9 +280,10 @@ cleanup behavior without another Pi patch.
 mathematical types, note projections, and reports. Construct the built-in solver
 through `open`, which returns the native Harness, root Conversation, workflow,
 and `close`. Coordinator returns one `work` request, or `work: null` to become idle.
-Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`, a `roles` callback that
-receives the built-in functions, and a custom `Research` implementation through
-`research`. Register custom tools and tasks through Pi's native `registry` option.
+Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`
+and a `roles` callback that receives the built-in functions. Register custom `Research`
+through that callback's `external.research` field. Register custom tools and tasks
+through Pi's native `registry` option.
 Coordinator supplies an `assignment` to Explorer, Literature, and implementation. Caller
 guidance remains campaign input for Coordinator.
 Explorer assignments identify relevant note IDs and the remaining gap in the
