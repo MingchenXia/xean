@@ -2,7 +2,15 @@ import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { fixtureTask } from "./task.ts";
 import { expect, spyOn, test } from "bun:test";
-import { copyFile, link, readFile, symlink, unlink } from "node:fs/promises";
+import {
+  copyFile,
+  link,
+  readFile,
+  readdir,
+  readlink,
+  symlink,
+  unlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -761,3 +769,38 @@ test("inspection does not recover work or alter unsupported databases", async ()
   );
   expect(await readFile(unrelated)).toEqual(original);
 });
+
+test.skipIf(process.platform !== "linux" && !Bun.which("lsof"))(
+  "closed campaign and inspection connections release file descriptors before statement collection",
+  async () => {
+    const directory = await temporaryDirectory("host-sqlite-close-");
+    const path = join(directory, "campaign.sqlite");
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const owner = await open(path, { create: definition });
+      await inspect(path, readDefinition);
+      const reader = openReadDatabase(path);
+      const statement = reader.query("SELECT * FROM durable_metadata");
+      statement.all();
+      reader.close();
+      await owner.close();
+      let files: string[];
+      if (process.platform === "linux") {
+        files = await Promise.all(
+          (await readdir("/proc/self/fd")).map((fd) =>
+            readlink(`/proc/self/fd/${fd}`).catch(() => ""),
+          ),
+        );
+      } else {
+        const probe = Bun.spawn(
+          ["lsof", "-F", "n", "-p", String(process.pid)],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        files = (await new Response(probe.stdout).text()).split("\n");
+        expect(await probe.exited).toBe(0);
+      }
+      expect(files.filter((file) => file.includes(directory))).toEqual([]);
+      // Keep the prepared statement reachable: cleanup must not depend on GC.
+      expect(() => statement.all()).toThrow();
+    }
+  },
+);

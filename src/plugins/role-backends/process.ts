@@ -78,7 +78,10 @@ export function cliCall(
         ),
       adapter.usagePrefix,
     ]);
-    if ((await runtime.memo(`${key}.backend`, identity, context)) !== identity)
+    if (
+      (await runtime.memo(`external.${mode}.backend`, identity, context)) !==
+      identity
+    )
       throw new Error(
         "External backend configuration changed during task recovery",
       );

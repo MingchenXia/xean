@@ -14,10 +14,13 @@ export async function serveHost(
   options: Pick<OpenOptions, "models" | "roles" | "key" | "usagePrefix"> & {
     ownerId?: string;
     onError?: (database: string, error: unknown) => void;
+    signal?: AbortSignal;
   } = {},
 ) {
+  options.signal?.throwIfAborted();
   await mkdir(directory, { recursive: true });
   directory = await realpath(directory);
+  options.signal?.throwIfAborted();
   const release = acquireOwnership(hostPath(directory));
   const report =
     options.onError ?? ((path, error) => console.error(path, error));
@@ -65,6 +68,7 @@ export async function serveHost(
   try {
     const models = options.models ?? (await cliModels());
     const execute = async (command: HostCommand) => {
+      options.signal?.throwIfAborted();
       if (stopping) throw new Error("Host is stopping");
       if (command.kind !== "attach" && command.kind !== "detach")
         throw new Error("Expected attach or detach");
@@ -76,6 +80,7 @@ export async function serveHost(
         throw new Error(
           "Shared host requires CAMPAIGN_DIR/NAME/campaign.sqlite",
         );
+      options.signal?.throwIfAborted();
       if (stopping) throw new Error("Host is stopping");
       if (command.kind === "detach") {
         await detach(path);
@@ -86,11 +91,13 @@ export async function serveHost(
           const owner = await open(path, { ...options, models });
           let control: Attached["control"] | undefined;
           try {
+            options.signal?.throwIfAborted();
             control = await serveControl(
               path,
               (command) => controlCommand(owner, command),
               options.ownerId,
             );
+            options.signal?.throwIfAborted();
             void owner.harness.closed
               .then(() => detach(path))
               .catch((error) => report(path, error));
@@ -117,9 +124,10 @@ export async function serveHost(
       campaigns.map(async ({ name }) => {
         const database = join(directory, name, "campaign.sqlite");
         if (await Bun.file(database).exists())
-          await execute({ kind: "attach", database }).catch((error) =>
-            report(database, error),
-          );
+          await execute({ kind: "attach", database }).catch((error) => {
+            if (!options.signal?.aborted || error !== options.signal.reason)
+              report(database, error);
+          });
       }),
     );
     return { close, execute };
@@ -134,17 +142,26 @@ export async function runHost(
   directory: string,
   options: Parameters<typeof serveHost>[1],
 ) {
+  const abort = new AbortController();
   const stop = Promise.withResolvers<void>();
-  const interrupt = () => stop.resolve();
+  const interrupt = () => {
+    abort.abort();
+    stop.resolve();
+  };
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
   try {
-    const host = await serveHost(directory, options);
+    const host = await serveHost(directory, {
+      ...options,
+      signal: abort.signal,
+    });
     try {
       await stop.promise;
     } finally {
       await host.close();
     }
+  } catch (error) {
+    if (!abort.signal.aborted || error !== abort.signal.reason) throw error;
   } finally {
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);

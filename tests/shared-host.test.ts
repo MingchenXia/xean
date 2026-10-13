@@ -151,6 +151,105 @@ test("shared host isolates invalid databases, excludes another host, and attache
   await nextHost.close();
 });
 
+test("detaching interrupts an awaiting resume request and releases ownership", async () => {
+  const directory = await realpath(
+    await temporaryDirectory("xean-shared-resume-"),
+  );
+  const path = await initialize(directory, "pending");
+  const started = Promise.withResolvers<void>();
+  let runWorker = false;
+  const host = await serveHost(directory, {
+    models: createModels(),
+    roles: () => ({
+      coordinator: async () => ({
+        work: runWorker
+          ? { kind: "explorer", assignment: "Wait for cancellation." }
+          : null,
+      }),
+      explorer: async (_input, _runtime, ctx) => {
+        started.resolve();
+        await awaitWithContext(new Promise<never>(() => {}), ctx);
+      },
+    }),
+  });
+  try {
+    await requestOwner(path, { kind: "pause" });
+    runWorker = true;
+    const resume = requestOwner(path, { kind: "resume" }).then(
+      () => ({ interrupted: false }),
+      () => ({ interrupted: true }),
+    );
+    await started.promise;
+    expect(await hostCommand(directory, "detach", path)).toMatchObject({
+      attached: false,
+    });
+    expect(await resume).toEqual({ interrupted: true });
+    const owner = await open(path, { models: createModels() });
+    await owner.close();
+  } finally {
+    await host.close();
+  }
+});
+
+test.each(["SIGINT", "SIGTERM"])(
+  "%s during shared host startup does not start campaigns",
+  async (signal) => {
+    const directory = await realpath(
+      await temporaryDirectory("xean-shared-startup-signal-"),
+    );
+    const paths = await Promise.all([
+      initialize(directory, "first"),
+      initialize(directory, "second"),
+    ]);
+    const root = resolve(import.meta.dir, "..");
+    const script = join(directory, "run.ts");
+    await Bun.write(
+      script,
+      `
+import { runHost } from ${JSON.stringify(join(root, "apps/cli/host.ts"))};
+import { createModels } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
+let opened = 0, ran = 0;
+const errors = [];
+await runHost(${JSON.stringify(directory)}, {
+  models: createModels(),
+  roles: () => {
+    if (++opened === 1) process.emit(${JSON.stringify(signal)});
+    return { coordinator: async () => { ran++; return { work: null }; } };
+  },
+  onError: (_database, error) => errors.push(String(error)),
+});
+console.log(JSON.stringify({ ran, errors, listeners: ["SIGINT", "SIGTERM"].map(signal => process.listenerCount(signal)) }));
+`,
+    );
+    const child = Bun.spawn([process.execPath, script], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [output, error, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(code).toBe(0);
+    expect(error).toBe("");
+    expect(JSON.parse(output)).toEqual({
+      ran: 0,
+      errors: [],
+      listeners: [0, 0],
+    });
+    for (const path of paths) {
+      const owner = await open(path, { models: createModels() });
+      await owner.close();
+      expect(await Bun.file(socketPath(path)).exists()).toBe(false);
+    }
+    const host = await serveHost(directory, {
+      models: createModels(),
+      roles: () => ({ coordinator: async () => ({ work: null }) }),
+    });
+    await host.close();
+  },
+);
+
 test("failed native storage releases one campaign without stopping other owners", async () => {
   const directory = await realpath(
     await temporaryDirectory("xean-shared-failure-"),

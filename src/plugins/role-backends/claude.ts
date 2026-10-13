@@ -81,6 +81,15 @@ export function claudeCall(settings: ClaudeOptions, usagePrefix?: string) {
         "--permission-prompts",
         "none",
         "--safe-mode",
+        "--restricted",
+        "--settings",
+        JSON.stringify({
+          sandbox: {
+            enabled: true,
+            allowUnsandboxedCommands: false,
+            failIfUnavailable: true,
+          },
+        }),
         "--strict-mcp-config",
         "--tools",
         "Read,Write,Edit,Bash,Glob,Grep",

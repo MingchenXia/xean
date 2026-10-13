@@ -18,7 +18,7 @@ export async function chatgptCall(
     .update(JSON.stringify([settings, instructions, input]))
     .digest("hex");
   if (
-    (await runtime.memo("research.chatgpt.backend", identity, context)) !==
+    (await runtime.memo("external.worker.backend", identity, context)) !==
     identity
   )
     throw new Error(

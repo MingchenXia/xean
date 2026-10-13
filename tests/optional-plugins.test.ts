@@ -9,6 +9,7 @@ import {
   claudeCall,
   claudeTranscript,
 } from "../src/plugins/role-backends/claude.ts";
+import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
 import { codexCall } from "../src/plugins/role-backends/codex.ts";
 import { explorationSchema } from "../src/math/contracts.ts";
 import { temporaryDirectory } from "./directory.ts";
@@ -36,6 +37,10 @@ test("Claude uses native schema/stdin and journals structured output, usage, and
     const args = process.argv.slice(2);
     const parameter = flag => args[args.indexOf(flag) + 1];
     if (parameter('--output-format') !== 'json' || !args.includes('--no-session-persistence')) throw new Error('Wrong CLI mode');
+    if (!args.includes('--restricted') || !args.includes('--safe-mode') || !args.includes('--strict-mcp-config')) throw new Error('Missing native isolation flags');
+    const sandbox = JSON.parse(parameter('--settings')).sandbox;
+    if (!sandbox.enabled || sandbox.allowUnsandboxedCommands !== false || sandbox.failIfUnavailable !== true) throw new Error('Wrong native sandbox config');
+    if (parameter('--allowedTools') !== 'Read,Write,Edit,Bash,Glob,Grep') throw new Error('Required execution tools not allowed');
     const schema = JSON.parse(parameter('--json-schema'));
     if (!schema.properties.notes) throw new Error('Missing output schema');
     const input = await Bun.stdin.json();
@@ -170,3 +175,73 @@ test.each([
   expect(parsed.error).toBeInstanceOf(Error);
   expect(parsed.value).toBeUndefined();
 });
+
+test.each(["browser", "cli"] as const)(
+  "interrupted %s Explorer cannot recover under the other adapter or dispatch again",
+  async (first) => {
+    const started = Promise.withResolvers<void>();
+    const calls = { browser: 0, cli: 0 };
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const kind =
+          new URL(request.url).pathname === "/cli" ? "cli" : "browser";
+        calls[kind]++;
+        started.resolve();
+        return kind === "cli"
+          ? new Response("ready")
+          : new Promise<Response>(() => {});
+      },
+    });
+    let owner: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      const options = await command(
+        `await fetch(${JSON.stringify(new URL("/cli", server.url).href)}); setInterval(() => {}, 1000);`,
+      );
+      const path = join(options.workspace, "campaign.sqlite");
+      const roles = {
+        cli: claude({ explorer: options }),
+        browser: chatgpt({
+          baseUrl: server.url.href.replace(/\/$/, ""),
+          model: "chatgpt-web/fixture",
+        }),
+      };
+      owner = await open(path, {
+        roles: roles[first],
+        create: {
+          task,
+          settings,
+          mode: {
+            role: "explorer",
+            input: { notes: [], assignment: "Continue" },
+          },
+        },
+      });
+      owner.harness.resume();
+      await started.promise;
+      await owner.close();
+      owner = undefined;
+      const admitted = { ...calls };
+      expect(admitted).toEqual(
+        first === "browser" ? { browser: 1, cli: 0 } : { browser: 0, cli: 1 },
+      );
+      owner = await open(path, {
+        roles: roles[first === "browser" ? "cli" : "browser"],
+      });
+      await owner.root.waitForIdle(context);
+      const root = owner.root;
+      const report = await root.commit(
+        (tx) => readReport(tx, root.id),
+        context,
+      );
+      expect(report.status.status).toBe("blocked");
+      expect(report.status.error).toContain(
+        "External backend configuration changed",
+      );
+      expect(calls).toEqual(admitted);
+    } finally {
+      await owner?.close();
+      await server.stop(true);
+    }
+  },
+);

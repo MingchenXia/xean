@@ -2,8 +2,8 @@ import { lstatSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Database } from "bun:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -17,11 +17,11 @@ import {
   type Session,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
-  openNodeSqliteDatabase,
-  NodeSqliteDatabase,
-} from "@earendil-works/pi-durable/storage/sqlite/node";
+  SqliteStorage,
+  type SqliteValue,
+} from "@earendil-works/pi-durable/storage/sqlite";
+import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createRuntime } from "./config.ts";
 import {
   DefinitionDoc,
@@ -92,7 +92,11 @@ function assertSingleLink(nlink: number) {
 
 /** Reject SQL writes and missing files while allowing SQLite to maintain WAL sidecars. */
 export function openReadDatabase(path: string) {
-  const database = new DatabaseSync(`${pathToFileURL(path).href}?mode=rw`);
+  const database = new Database(path, {
+    create: false,
+    readwrite: true,
+    strict: true,
+  });
   try {
     database.exec("PRAGMA query_only = ON");
     return database;
@@ -105,7 +109,7 @@ export function openReadDatabase(path: string) {
 function recognize(path: string) {
   using database = openReadDatabase(path);
   const tables = database
-    .prepare(
+    .query(
       "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
     )
     .all() as { name: string }[];
@@ -116,14 +120,42 @@ function recognize(path: string) {
 }
 
 async function openOwnedStorage(path: string) {
-  const database = await openNodeSqliteDatabase(path, { busyTimeoutMs: 0 });
+  const database = piDatabase(
+    new Database(path, { create: true, strict: true }),
+  );
   try {
-    await database.exec("PRAGMA synchronous = FULL");
+    await database.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 0",
+    );
     return await SqliteStorage.open(database);
   } catch (error) {
     await database.close().catch(() => {});
     throw error;
   }
+}
+
+/** Keep Pi's queue and transactions, with Bun's deterministic statement cleanup. */
+function piDatabase(database: Database, readOnly = false) {
+  const driver = {
+    exec: (sql: string) => database.exec(sql),
+    prepare: (sql: string) => {
+      // query() gives Bun ownership so close() finalizes retained statements.
+      const statement = database.query(sql);
+      return {
+        run: statement.run.bind(statement),
+        all: statement.all.bind(statement),
+        get: (...args: SqliteValue[]) => statement.get(...args) ?? undefined,
+      };
+    },
+    get isTransaction() {
+      return database.inTransaction;
+    },
+    close: () => database.close(true),
+  };
+  // Pi uses this subset of DatabaseSync; Bun returns null for absent rows.
+  return new NodeSqliteDatabase(driver as unknown as DatabaseSync, {
+    readOnly,
+  });
 }
 
 /** Own one native Harness. Close it to suspend; reopen it to recover. */
@@ -243,10 +275,9 @@ async function inspectSession<T>(
   if (!recognize(path)) throw new UninitializedResearchError();
   using database = openReadDatabase(path);
   database.exec("BEGIN");
-  const storage = await SqliteStorage.open(
-    new NodeSqliteDatabase(database, { readOnly: true }),
-    { readOnly: true },
-  );
+  const storage = await SqliteStorage.open(piDatabase(database, true), {
+    readOnly: true,
+  });
   const session = createSession(storage, { documentRetentionMs: 0 });
   try {
     validateDefinition(
