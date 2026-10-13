@@ -1,6 +1,6 @@
 {
   "name": "xean",
-  "version": "3.4.0-rc.1",
+  "version": "3.5.0-dev.1",
   "description": "A mathematical research workflow built on Pi Durable",
   "license": "MIT",
   "private": true,
@@ -28,7 +28,10 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./report": "./src/report.ts"
+    "./report": "./src/report.ts",
+    "./plugins/codex": "./src/plugins/role-backends/codex.ts",
+    "./plugins/claude": "./src/plugins/role-backends/claude.ts",
+    "./plugins/chatgpt": "./src/plugins/role-backends/chatgpt.ts"
   },
   "scripts": {
     "check": "bun scripts/dev.ts check",
@@ -39,7 +42,6 @@
   },
   "dependencies": {
     "commander": "15.0.0",
-    "execa": "10.0.1",
     "@earendil-works/chord": "file:vendor/pi/06a466935536f8c9bcacb2d5efc0fc021be1bdff/earendil-works-chord-1.2.0-1449e3880e9e.tgz",
     "@earendil-works/pi-ai": "file:vendor/pi/06a466935536f8c9bcacb2d5efc0fc021be1bdff/earendil-works-pi-ai-1.2.0-c3e69423bcab.tgz",
     "@earendil-works/pi-durable": "file:vendor/pi/06a466935536f8c9bcacb2d5efc0fc021be1bdff/earendil-works-pi-durable-1.2.0-ad33e04506d5.tgz",
@@ -65,5 +67,8 @@
   "patchedDependencies": {
     "@earendil-works/pi-ai@vendor/pi/06a466935536f8c9bcacb2d5efc0fc021be1bdff/earendil-works-pi-ai-1.2.0-c3e69423bcab.tgz": "patches/@earendil-works%2Fpi-ai@1.2.0.patch",
     "@earendil-works/pi-durable@vendor/pi/06a466935536f8c9bcacb2d5efc0fc021be1bdff/earendil-works-pi-durable-1.2.0-ad33e04506d5.tgz": "patches/@earendil-works%2Fpi-durable@1.2.0.patch"
+  },
+  "optionalDependencies": {
+    "execa": "10.0.1"
   }
 }

@@ -73,7 +73,7 @@ async function canonicalPath(path: string, create: boolean) {
   }
 }
 
-function acquire(path: string) {
+export function acquireOwnership(path: string) {
   const lock = new DatabaseSync(`${path}.owner.sqlite`);
   try {
     lock.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
@@ -130,7 +130,7 @@ async function openOwnedStorage(path: string) {
 export async function open(path: string, options: OpenOptions = {}) {
   const requested = options.create && validateDefinition(options.create);
   const canonical = await canonicalPath(path, requested !== undefined);
-  const release = acquire(canonical);
+  const release = acquireOwnership(canonical);
   let storage: Storage | undefined;
   let harness: Harness | undefined;
   let closing: Promise<void> | undefined;

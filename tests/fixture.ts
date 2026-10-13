@@ -34,7 +34,6 @@ export const task = {
 };
 export const settings = {
   profiles: { default: { provider: "openai" as const, model: "fixture" } },
-  research: false as const,
 };
 export const noteResult = {
   notes: [

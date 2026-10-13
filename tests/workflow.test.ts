@@ -59,12 +59,16 @@ async function setup(
   storage: Storage = new MemoryStorage(),
 ) {
   const roles: Roles = {
-    capabilities: () => ({ explorer: true, literature: false, codex: false }),
+    capabilities: () => ({
+      explorer: true,
+      literature: false,
+      implementation: false,
+    }),
     coordinator: async () => ({ work: null }),
     explorer: async () => empty(),
     verifier: async () => ({ kind: "verification", checks: [] }),
     literature: async () => empty(),
-    codex: async () => empty(),
+    implementation: async () => empty(),
     reconstruct: async () => ({ kind: "verification", checks: [] }),
     review: async () => ({ verdict: "INCONCLUSIVE", report: "Fixture" }),
     ...replacements,
@@ -191,7 +195,11 @@ test.each(["empty", "independent", "retired-support"] as const)(
       },
     );
     const owner = await setup({
-      capabilities: () => ({ explorer: true, literature: true, codex: false }),
+      capabilities: () => ({
+        explorer: true,
+        literature: true,
+        implementation: false,
+      }),
       coordinator: async ({ notes }) => ({
         work: !notes.find((note: Note) => note.id === retiredId)?.retired
           ? { kind: "explorer", assignment: "Retire the old supporting note." }

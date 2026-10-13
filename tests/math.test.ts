@@ -9,7 +9,7 @@ import {
   type SolverResult,
 } from "../src/math/contracts.ts";
 import { readCommand } from "../src/math/commands.ts";
-import { bindCodex } from "../src/math/evidence.ts";
+import { bindExternal } from "../src/math/evidence.ts";
 import {
   refresh,
   noteInfo,
@@ -44,7 +44,11 @@ const note = (id: string, support: string[] = [], imported = false): Note => ({
   accepted: false,
   dead: false,
 });
-const capabilities = { explorer: true, literature: false, codex: false };
+const capabilities = {
+  explorer: true,
+  literature: false,
+  implementation: false,
+};
 
 test("caller edits reject the removed correct command", () => {
   expect(() =>
@@ -137,7 +141,12 @@ test("external statement preparation retains normal uncertainty and retry rules"
     expect(pending("reconstruction")).toEqual([]);
   }
   expect(
-    pendingChecks([target.id], "reconstruction", notes, "codex")("correctness"),
+    pendingChecks(
+      [target.id],
+      "reconstruction",
+      notes,
+      "external",
+    )("correctness"),
   ).toEqual([target]);
 });
 
@@ -157,7 +166,7 @@ test("completed uncertain checks stay closed on unchanged inputs", () => {
 });
 
 test.each(["correctness", "requirements", "reconstruction"] as const)(
-  "Coordinator can select Codex for %s uncertainty without changing the claim",
+  "Coordinator can select an external backend for %s uncertainty without changing the claim",
   (stage) => {
     const target = note("target");
     const uncertain = {
@@ -178,26 +187,26 @@ test.each(["correctness", "requirements", "reconstruction"] as const)(
     const plan = {
       work: { kind: "verifier", notes: [target.id], through: stage },
     } satisfies Plan;
-    const enabled = { ...capabilities, codexVerifier: true };
+    const enabled = { ...capabilities, externalVerifier: true };
     expect(() => validatePlan(plan, notes, enabled)).toThrow(
       "no pending checks",
     );
-    const codex = { work: { ...plan.work, backend: "codex" as const } };
-    expect(() => validatePlan(codex, notes, capabilities)).toThrow();
+    const external = { work: { ...plan.work, backend: "external" as const } };
+    expect(() => validatePlan(external, notes, capabilities)).toThrow();
     expect(() =>
-      validatePlan(codex, notes, { ...capabilities, codex: true }),
+      validatePlan(external, notes, { ...capabilities, implementation: true }),
     ).toThrow();
-    expect(validatePlan(codex, notes, enabled)).toEqual(codex);
+    expect(validatePlan(external, notes, enabled)).toEqual(external);
     expect(target).toMatchObject({ dead: false, accepted: false });
   },
 );
 
-test("Codex cannot reopen settled checks, absent claims, or unchanged source evidence", () => {
+test("External verification cannot reopen settled checks, absent claims, or unchanged source evidence", () => {
   for (const verdict of ["PASS", "FAIL"] as const) {
     const target = note("settled");
     target.checks.correctness!.verdict = verdict;
     refresh([target]);
-    expect(stagePending(target, "correctness", "codex")).toBe(false);
+    expect(stagePending(target, "correctness", "external")).toBe(false);
   }
   const question = note("question");
   question.checks = {
@@ -208,13 +217,13 @@ test("Codex cannot reopen settled checks, absent claims, or unchanged source evi
       report: "No claim is asserted.",
     },
   };
-  expect(stagePending(question, "correctness", "codex")).toBe(false);
+  expect(stagePending(question, "correctness", "external")).toBe(false);
   const unsourced = note("unsourced");
   unsourced.checks.source = {
     verdict: "INCONCLUSIVE",
     report: "The required primary-source evidence is missing.",
   };
-  expect(stagePending(unsourced, "source", "codex")).toBe(false);
+  expect(stagePending(unsourced, "source", "external")).toBe(false);
 });
 
 test("Coordinator plans contain one worker or an intentional wait", () => {
@@ -476,13 +485,15 @@ test("source evidence reuse preserves immutable original bindings", () => {
       passages: [{ premise: 0, url: evidence.url, quote: evidence.quote }],
     },
   };
-  expect(bindCodex(claimed, [evidence.statement]).verdict).toBe("INCONCLUSIVE");
+  expect(bindExternal(claimed, [evidence.statement]).verdict).toBe(
+    "INCONCLUSIVE",
+  );
   const task = {
     problem: "Prove the half-weight cut guarantee.",
     completionCriteria:
       "Elementary arithmetic and basic finite graph definitions may be used.",
   };
-  const selfContained = bindCodex(
+  const selfContained = bindExternal(
     {
       ...claimed,
       value: {
@@ -498,7 +509,7 @@ test("source evidence reuse preserves immutable original bindings", () => {
   expect(selfContained.verdict).toBe("PASS");
   expect(selfContained.passages).toEqual([]);
   expect(
-    bindCodex(
+    bindExternal(
       {
         ...claimed,
         value: {
@@ -520,7 +531,7 @@ test("source evidence reuse preserves immutable original bindings", () => {
     },
     source: {
       ...pass,
-      kind: "codex-report",
+      kind: "external-report",
       operationId: "source",
       reportedAt: "2026-10-04T00:00:00Z",
       premises: [evidence.statement],

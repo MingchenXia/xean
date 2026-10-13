@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord";
+import { Assert } from "typebox/value";
 import type { RoleRuntime } from "./types.ts";
 import {
   batchResults,
@@ -14,8 +15,8 @@ import {
   type SourceEvidence,
   type Task,
 } from "../math/contracts.ts";
-import type { AskCodex } from "./codex.ts";
-import { bindCodex, taskSource } from "../math/evidence.ts";
+import type { ExternalCall } from "./backend.ts";
+import { bindExternal, taskSource } from "../math/evidence.ts";
 
 export type LiteratureInput = {
   task: Task;
@@ -60,8 +61,8 @@ const reviewInstructions =
   "Independently audit every supplied statement and argument for the exact problem and completion criteria. Judge completion from the original task. A correct special case or conditional result gives FAIL when the task requires a stronger or unconditional conclusion. Check every supporting proof and essential source assumption independently of solver verdicts. Verify all load-bearing inferences, hypotheses, cases, bounds, and theorem applications. An explicit hypothetical antecedent in a supporting implication is part of its claim, not an external premise; check the derivation under that assumption and every application that needs the antecedent established. An implication alone does not establish the unconditional conclusion. An unstated assumption in an unconditional claim remains a gap. List all nonroutine external premises as exact standalone claims in premises, keeping proof ideas, application explanations, and validation commentary in report, and open matching primary sources for every one, with quotations indexed by their zero-based position in premises (0 for the first). A self-contained argument has premises=[]. PASS requires the full argument and every essential external premise to be established. FAIL requires a concrete mathematical defect or an unmet completion criterion. Unsettled checks give INCONCLUSIVE. Report harmless wording corrections explicitly; substantial repairs require a new argument. This role has no execution tool. Justify essential finite checks analytically or with supplied execution receipts matching the claim. Prose asserting execution is insufficient. If the check remains unsupported, return INCONCLUSIVE. " +
   taskEvidence;
 
-/** Codex owns research and its internal tools; the solver only calls functions. */
-export function codexResearch(askCodex: AskCodex): Research {
+/** The external backend owns research and its internal tools; the solver only calls functions. */
+export function externalResearch(askExternal: ExternalCall): Research {
   return {
     retrieval: true,
     async source(input, runtime, context) {
@@ -74,7 +75,7 @@ export function codexResearch(askCodex: AskCodex): Research {
       ].map((statement, index) => ({ id: `f${index + 1}`, statement }));
       const reports = new Map<string, ResearchReport>();
       if (facts.length) {
-        const response = await askCodex(
+        const response = await askExternal(
           "research",
           batchSchema(sourceSchema),
           sourceInstructions,
@@ -82,6 +83,7 @@ export function codexResearch(askCodex: AskCodex): Research {
           runtime,
           context,
         );
+        Assert(batchSchema(sourceSchema), response.value);
         const results = batchResults(
           facts.map((fact) => fact.id),
           response.value.results,
@@ -89,7 +91,7 @@ export function codexResearch(askCodex: AskCodex): Research {
         facts.forEach((fact, index) => {
           reports.set(
             fact.statement,
-            bindCodex(
+            bindExternal(
               { ...response, value: results[index]! },
               [fact.statement],
               input.task,
@@ -122,7 +124,7 @@ export function codexResearch(askCodex: AskCodex): Research {
       });
     },
     async literature(input, runtime, context) {
-      const result = await askCodex(
+      const result = await askExternal(
         "research",
         literatureResultSchema,
         literatureInstructions,
@@ -130,14 +132,15 @@ export function codexResearch(askCodex: AskCodex): Research {
         runtime,
         context,
       );
+      Assert(literatureResultSchema, result.value);
       if (result.value.notes.length && result.searches === 0)
         throw new Error(
-          "Codex returned literature without observed web activity",
+          "Research backend returned literature without observed web activity",
         );
       return result.value;
     },
     async review(input, runtime, context) {
-      const result = await askCodex(
+      const result = await askExternal(
         "research",
         reviewSchema,
         reviewInstructions,
@@ -145,7 +148,8 @@ export function codexResearch(askCodex: AskCodex): Research {
         runtime,
         context,
       );
-      return bindCodex(result, result.value.premises, input.task);
+      Assert(reviewSchema, result.value);
+      return bindExternal(result, result.value.premises, input.task);
     },
   };
 }

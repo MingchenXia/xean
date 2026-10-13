@@ -18,7 +18,7 @@ import { explorationSchema, type Note } from "../src/math/contracts.ts";
 import { readView } from "../src/math/state.ts";
 import { conversations } from "../src/roles/conversation.ts";
 import { createRoles } from "../src/roles/index.ts";
-import { chatgpt } from "../src/roles/chatgpt.ts";
+import { chatgpt, chatgptCall } from "../src/plugins/role-backends/chatgpt.ts";
 import type { RoleRuntime } from "../src/roles/types.ts";
 
 const fixtureFetch = (
@@ -111,7 +111,6 @@ test("an Explorer continues beyond the retry limit and publishes once in the sam
     create: {
       task,
       settings: readSettings({
-        research: false,
         maxExplorerResponses: 1,
         profiles: { default: { provider: "openai", model: "stream-recovery" } },
       }),
@@ -246,14 +245,11 @@ test.each([false, true])(
   },
 );
 
-const settings = readSettings({
-  ...defaultSettings,
-  research: false,
-  chatgpt: {
-    baseUrl: "http://browser.invalid/v1",
-    model: "chatgpt-web/gpt-6-pro",
-  },
-});
+const settings = readSettings(defaultSettings);
+const browser = {
+  baseUrl: "http://browser.invalid/v1",
+  model: "chatgpt-web/gpt-6-pro" as const,
+};
 const task = {
   problem: "Prove 1 = 1.",
   completionCriteria: "An elementary proof.",
@@ -272,7 +268,7 @@ const selection = {
 function response(answers: string[], status = "completed") {
   return Response.json({
     id: "fixture-response",
-    model: settings.chatgpt!.model,
+    model: browser.model,
     status,
     output: [
       {
@@ -293,9 +289,13 @@ function response(answers: string[], status = "completed") {
     usage: { input_tokens: 99, output_tokens: 99, total_tokens: 198 },
   });
 }
-const runtime = () =>
+const runtime = (memos = new Map<string, unknown>()) =>
   ({
-    memo: async (_name: string, candidate: string) => candidate,
+    memo: async (name: string, ...args: unknown[]) => {
+      if (args.length === 2 && !memos.has(name))
+        memos.set(name, structuredClone(args[0]));
+      return structuredClone(memos.get(name));
+    },
   }) as unknown as RoleRuntime;
 
 test.each(["new notes", "blind edit"])(
@@ -328,16 +328,11 @@ test.each(["new notes", "blind edit"])(
             ]
           : [],
     };
-    const claimed: string[] = [];
-    const invocation = {
-      memo: async (_name: string, candidate: string) => {
-        claimed.push(candidate);
-        return candidate;
-      },
-    } as unknown as RoleRuntime;
+    const claimed = new Map<string, unknown>();
+    const invocation = runtime(claimed);
     const request = spyOn(globalThis, "fetch").mockImplementation(
       fixtureFetch(async (url, options) => {
-        expect(claimed).toHaveLength(1);
+        expect(claimed.has("research.chatgpt")).toBe(true);
         expect(String(url)).toBe("http://browser.invalid/v1/responses");
         const payload = await new Response(options?.body).json();
         expect(payload.stream).toBe(false);
@@ -349,12 +344,12 @@ test.each(["new notes", "blind edit"])(
         });
         const identity = payload.client_metadata["x-codex-turn-metadata"];
         expect(identity).toEqual({
-          thread_id: claimed[0],
-          turn_id: claimed[0],
+          thread_id: claimed.get("research.chatgpt"),
+          turn_id: claimed.get("research.chatgpt"),
         });
         expect(
           payload.input[0].internal_chat_message_metadata_passthrough.turn_id,
-        ).toBe(claimed[0]);
+        ).toBe(claimed.get("research.chatgpt"));
         const input = payload.input[0].content;
         expect(input).toContain("Index description");
         expect(input).not.toContain("UNREAD");
@@ -367,6 +362,7 @@ test.each(["new notes", "blind edit"])(
         ...settings,
         profiles: createRuntime(settings).profiles,
       });
+      Object.assign(roles, chatgpt(browser)(roles));
       const result = roles.explorer(
         { task, notes: [note], assignment: "Continue" },
         invocation,
@@ -374,7 +370,7 @@ test.each(["new notes", "blind edit"])(
       );
       if (mode === "blind edit")
         await expect(result).rejects.toThrow(
-          "ChatGPT Web Explorer cannot edit notes without their full text",
+          "External Explorer cannot edit notes without their full text",
         );
       else await expect(result).resolves.toEqual({ kind: "notes", ...answer });
       expect(request).toHaveBeenCalledTimes(1);
@@ -411,7 +407,7 @@ test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without 
     const request = spyOn(globalThis, "fetch").mockResolvedValue(returned);
     try {
       await expect(
-        chatgpt(settings.chatgpt!, "Solve", [], runtime(), context),
+        chatgptCall(browser, "Solve", [], runtime(), context),
       ).rejects.toThrow(error);
       expect(request).toHaveBeenCalledTimes(1);
     } finally {
@@ -443,6 +439,7 @@ test("native worker recovery refuses to resend an interrupted ChatGPT request", 
   let owner: Awaited<ReturnType<typeof open>> | undefined;
   try {
     owner = await open(path, {
+      roles: chatgpt(browser),
       create: {
         task,
         settings,
@@ -465,7 +462,7 @@ test("native worker recovery refuses to resend an interrupted ChatGPT request", 
     await owner.close();
     owner = undefined;
     expect(aborted).toBe(true);
-    owner = await open(path);
+    owner = await open(path, { roles: chatgpt(browser) });
     await owner.root.waitForIdle(context);
     const root = owner.root;
     const workers = await root.commit(

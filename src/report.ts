@@ -20,7 +20,7 @@ import { publicationResult, type PublishedResult } from "./math/results.ts";
 import { closure } from "./math/argument.ts";
 import { stagePassed } from "./math/notes.ts";
 import { verificationStages, type SolverResult } from "./math/contracts.ts";
-import { CodexLog, CodexRequest } from "./roles/codex.ts";
+import { ExternalLog, ExternalRequest } from "./roles/backend.ts";
 import { explorerLimit } from "./roles/conversation.ts";
 
 const statusText = (value: string | null | undefined): string | null =>
@@ -76,7 +76,10 @@ export async function readUsage(tx: Tx, includeRecords = false) {
     groups.set(key, group);
   };
   const records: EntryRecord[] = [];
-  const codex = new Map<string, string>();
+  const external = new Map<
+    string,
+    { provider: string; model: string; api: string }
+  >();
   const settlements = new Map<string, Record<string, number> | null>();
   let cursor: Cursor | undefined;
   do {
@@ -97,9 +100,9 @@ export async function readUsage(tx: Tx, includeRecords = false) {
         for (const entry of page.items) {
           if (entry.conversationId !== conversation.id) continue;
           if (includeRecords) records.push(entry);
-          if (CodexRequest.is(entry))
-            codex.set(entry.data.operationId, entry.data.model);
-          if (CodexLog.is(entry)) {
+          if (ExternalRequest.is(entry))
+            external.set(entry.data.operationId, entry.data);
+          if (ExternalLog.is(entry)) {
             const receipt = entry.data;
             if (!settlements.has(receipt.operationId))
               settlements.set(receipt.operationId, receipt.usage);
@@ -128,19 +131,15 @@ export async function readUsage(tx: Tx, includeRecords = false) {
     }
     cursor = conversations.next;
   } while (cursor);
-  for (const [operationId, requestedModel] of codex)
-    accumulate(
-      { provider: "codex-cli", model: requestedModel, api: "codex-exec" },
-      "invocations",
-      settlements.get(operationId) ?? null,
-    );
+  for (const [operationId, identity] of external)
+    accumulate(identity, "invocations", settlements.get(operationId) ?? null);
   const byModel = [...groups.values()];
   const total = (field: "responses" | "invocations" | "unknownUsage") =>
     byModel.reduce((sum, group) => sum + group[field], 0);
   return {
     calls: {
       recordedResponses: total("responses"),
-      codexInvocations: total("invocations"),
+      externalInvocations: total("invocations"),
       unknownUsage: total("unknownUsage"),
       byModel: preview(byModel, (item) => item),
     },

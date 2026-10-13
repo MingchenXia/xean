@@ -21,7 +21,7 @@ export class UninitializedResearchError extends Error {
 }
 export const DefinitionDoc = defineDoc<Partial<Definition>>({
   kind: "research.definition",
-  version: 3,
+  version: 4,
   scope: "conversation",
   history: "latest",
   fork: "current",

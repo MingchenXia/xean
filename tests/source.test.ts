@@ -5,7 +5,7 @@ import {
   sourceSchema,
   type SourceEvidence,
 } from "../src/math/contracts.ts";
-import { codexResearch } from "../src/roles/research.ts";
+import { externalResearch } from "../src/roles/research.ts";
 import type { RoleRuntime } from "../src/roles/types.ts";
 
 const task = {
@@ -45,7 +45,7 @@ test("one exact fact judgment maps to every local premise without rebinding evid
     note("e", ["Unsupported PASS."]),
   ];
   let calls = 0;
-  const research = codexResearch(
+  const research = externalResearch(
     async (_mode, schema, _instructions, input) => {
       calls++;
       expect(input).toEqual({
@@ -96,7 +96,7 @@ test("one exact fact judgment maps to every local premise without rebinding evid
     ["e", "INCONCLUSIVE"],
   ]);
   expect(results[0]).toMatchObject({
-    kind: "codex-report",
+    kind: "external-report",
     operationId: "op",
     reportedAt: "2026-10-05T00:00:00Z",
     premises: [shared, distinct, shared],
@@ -121,7 +121,7 @@ test("one exact fact judgment maps to every local premise without rebinding evid
 
 test("source batches reject missing, duplicate, or unexpected fact judgments", async () => {
   for (const ids of [["f1"], ["f1", "f1"], ["f1", "other"]]) {
-    const research = codexResearch(async (_mode, schema) => ({
+    const research = externalResearch(async (_mode, schema) => ({
       workspace: "/unused-research-workspace",
       operationId: "op",
       searches: 0,
@@ -139,7 +139,7 @@ test("source batches reject missing, duplicate, or unexpected fact judgments", a
 });
 
 test("self-contained notes need no source invocation", async () => {
-  const research = codexResearch(async () => {
+  const research = externalResearch(async () => {
     throw new Error("Unexpected Codex call");
   });
   expect(

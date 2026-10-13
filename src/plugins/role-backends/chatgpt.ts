@@ -1,16 +1,33 @@
 import type { Context } from "@earendil-works/chord";
-import type { Settings } from "../config.ts";
-import { decode, explorationSchema } from "../math/contracts.ts";
-import type { RoleRuntime } from "./types.ts";
+import { createHash } from "node:crypto";
+import type { Roles } from "../../workflow.ts";
+import type { ExternalCall } from "../../roles/backend.ts";
+export type ChatGPTOptions = { baseUrl: string; model: string };
+import { decode, explorationSchema } from "../../math/contracts.ts";
+import type { RoleRuntime } from "../../roles/types.ts";
 
-export async function chatgpt(
-  settings: NonNullable<Settings["chatgpt"]>,
+export async function chatgptCall(
+  settings: ChatGPTOptions,
   instructions: string,
   input: unknown,
   runtime: RoleRuntime,
   context: Context,
 ) {
   context.abortSignal?.throwIfAborted();
+  const identity = createHash("sha256")
+    .update(JSON.stringify([settings, instructions, input]))
+    .digest("hex");
+  if (
+    (await runtime.memo("research.chatgpt.backend", identity, context)) !==
+    identity
+  )
+    throw new Error(
+      "External backend configuration changed during task recovery",
+    );
+  const cached = await runtime.memo<
+    ReturnType<typeof decode<typeof explorationSchema>>
+  >("research.chatgpt.result", context);
+  if (cached !== undefined) return structuredClone(cached);
   const id = crypto.randomUUID();
   if ((await runtime.memo("research.chatgpt", id, context)) !== id)
     throw new Error(
@@ -70,5 +87,45 @@ export async function chatgpt(
     .filter((part: any) => part.type === "output_text")
     .map((part: any) => part.text)
     .join("");
-  return decode(explorationSchema, JSON.parse(text));
+  return structuredClone(
+    await runtime.memo(
+      "research.chatgpt.result",
+      decode(explorationSchema, JSON.parse(text)),
+      context,
+    ),
+  );
+}
+
+/** A single browser-backed Explorer call; interrupted admissions are never resent. */
+export function chatgpt(settings: ChatGPTOptions) {
+  const call: ExternalCall = async (
+    _mode,
+    schema,
+    instructions,
+    input,
+    runtime,
+    context,
+  ) => {
+    const value = await chatgptCall(
+      settings,
+      instructions,
+      input,
+      runtime,
+      context,
+    );
+    return {
+      value: decode(schema, value),
+      workspace: "",
+      searches: 0,
+      operationId: (await runtime.memo<string>("research.chatgpt", context))!,
+      reportedAt: await runtime.memo(
+        "research.chatgpt.reportedAt",
+        new Date().toISOString(),
+        context,
+      ),
+    };
+  };
+  return (builtins: Roles): Partial<Roles> => ({
+    external: { ...builtins.external, explorer: call, explorerOnce: true },
+  });
 }

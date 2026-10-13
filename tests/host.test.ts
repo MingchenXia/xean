@@ -1,3 +1,4 @@
+import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { fixtureTask } from "./task.ts";
 import { expect, spyOn, test } from "bun:test";
@@ -51,7 +52,7 @@ const definition = {
 };
 const Event = defineEntry<string>("fixture.event");
 
-test.each([1, 2])(
+test.each([1, 2, 3])(
   "older definition version %s requires its matching runtime",
   async (version) => {
     const directory = await temporaryDirectory("host-old-definition-");
@@ -349,7 +350,6 @@ test("usage overrides preserve frozen settings and completed custom-provider wor
     },
     settings: {
       profiles: { default: { provider: "custom", model: "fixture" } },
-      research: false as const,
       usagePrefix: "frozen",
     },
   };
@@ -487,7 +487,6 @@ test("custom role extensions compose with built-in mathematical conversations", 
       },
       settings: {
         profiles: { default: { provider: "custom", model: "fixture" } },
-        research: false,
       },
     },
     models,
@@ -617,7 +616,7 @@ test.each([false, true])(
   },
 );
 
-test("replacement roles preserve the browser quota and expose custom Codex", async () => {
+test("replacement roles preserve the browser quota and expose custom implementation", async () => {
   const directory = await temporaryDirectory("host-replacements-");
   const path = join(directory, "campaign.sqlite");
   let explorers = 0,
@@ -625,7 +624,7 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
     decisions = 0;
   const observations: {
     explorerUsed: boolean;
-    capabilities: { explorer: boolean; codex: boolean };
+    capabilities: { explorer: boolean; implementation: boolean };
   }[] = [];
   const empty = () => ({ kind: "notes" as const, notes: [] });
   const owner = await open(path, {
@@ -633,14 +632,13 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
       ...definition,
       settings: {
         ...defaultSettings,
-        research: false,
-        chatgpt: {
-          baseUrl: "http://127.0.0.1:17841/v1",
-          model: "chatgpt-web/gpt-6-pro",
-        },
       },
     },
-    roles: () => ({
+    roles: (builtins) => ({
+      ...chatgpt({
+        baseUrl: "http://127.0.0.1:17841/v1",
+        model: "chatgpt-web/gpt-6-pro",
+      })(builtins),
       coordinator: async (input) => {
         observations.push({
           explorerUsed: input.explorerUsed,
@@ -653,7 +651,7 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
               ? { kind: "explorer", assignment: "first" }
               : decisions === 2
                 ? {
-                    kind: "codex",
+                    kind: "implementation",
                     notes: [],
                     assignment: "fixture implementation",
                   }
@@ -664,7 +662,7 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
         explorers++;
         return empty();
       },
-      codex: async () => {
+      implementation: async () => {
         codex++;
         return empty();
       },
@@ -672,7 +670,7 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
   });
   try {
     await owner.harness.waitForIdle(context);
-    expect(observations[0]?.capabilities.codex).toBe(true);
+    expect(observations[0]?.capabilities.implementation).toBe(true);
     expect(
       observations.find((input) => input.explorerUsed)?.capabilities.explorer,
     ).toBe(false);

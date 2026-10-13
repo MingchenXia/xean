@@ -1,4 +1,3 @@
-import { isAbsolute } from "node:path";
 import {
   defaultProviderAuthContext,
   lazyStream,
@@ -61,12 +60,6 @@ const profileSchema = object({
     StringEnum(["sse", "websocket", "websocket-cached"] as const),
   ),
 });
-const researchSchema = object({
-  model: text,
-  reasoning,
-  command: Type.Optional(text),
-  profile: Type.Optional(text),
-});
 export const settingsSchema = object({
   profiles: object({
     default: profileSchema,
@@ -77,17 +70,7 @@ export const settingsSchema = object({
   }),
   maxExplorerResponses: Type.Optional(positive),
   maxExplorerReads: Type.Optional(positive),
-  chatgpt: Type.Optional(
-    object({
-      baseUrl: text,
-      model: Type.String({ pattern: "^chatgpt-web/\\S+$" }),
-    }),
-  ),
   literature: Type.Optional(Type.Boolean()),
-  research: Type.Optional(Type.Union([researchSchema, Type.Literal(false)])),
-  codex: Type.Optional(
-    object({ ...researchSchema.properties, workspace: text }),
-  ),
   usagePrefix: Type.Optional(Type.String({ ...usageTagSchema, maxLength: 91 })),
 });
 export type Settings = Static<typeof settingsSchema>;
@@ -102,14 +85,7 @@ export function readSettings(value: unknown): Settings {
   if (!Check(settingsSchema, value))
     throw new Error("Invalid research settings");
   const settings = structuredClone(value);
-  if (settings.chatgpt && settings.profiles.explorer)
-    throw new Error("Choose chatgpt or profiles.explorer, not both");
-  if (settings.codex && !isAbsolute(settings.codex.workspace))
-    throw new Error("codex.workspace must be an absolute directory");
-  for (const configured of [
-    ...Object.values(settings.profiles),
-    settings.chatgpt,
-  ]) {
+  for (const configured of Object.values(settings.profiles)) {
     if (!configured) continue;
     if (configured.baseUrl) {
       const url = URL.parse(configured.baseUrl);

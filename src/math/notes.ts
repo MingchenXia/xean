@@ -107,7 +107,7 @@ export function stagePending(
   if (stagePassed(note, stage) || result?.verdict === "FAIL") return false;
   if (result) {
     const reassess =
-      stage === "source" ? note.sourceChanged : backend === "codex";
+      stage === "source" ? note.sourceChanged : backend === "external";
     if (result.verdict !== "INCONCLUSIVE" || !reassess) return false;
   }
   if (stage === "correctness") return true;
@@ -280,7 +280,7 @@ export function validatePlan(
   capabilities: Parameters<typeof planSchema>[0],
 ): Plan {
   const plan = decode(planSchema(capabilities), value);
-  if (plan.work?.kind === "codex") closure(plan.work.notes, notes);
+  if (plan.work?.kind === "implementation") closure(plan.work.notes, notes);
   if (plan.work?.kind === "verifier") {
     for (const id of plan.work.notes) {
       const note = notes.find((note) => note.id === id);

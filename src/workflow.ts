@@ -1,4 +1,5 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
+import { Assert } from "typebox/value";
 import {
   defineDoc,
   defineEntry,
@@ -14,11 +15,17 @@ import {
 } from "@earendil-works/pi-durable";
 import {
   workPlan,
+  researchReportSchema,
   type Plan,
   type planSchema,
   type SolverResult,
 } from "./math/contracts.ts";
-import { noteInfo, sourceEvidence, validatePlan } from "./math/notes.ts";
+import {
+  noteInfo,
+  sourceEvidence,
+  validatePlan,
+  validateResult,
+} from "./math/notes.ts";
 import { closure } from "./math/argument.ts";
 import {
   Catalog,
@@ -36,6 +43,7 @@ import {
   type RoleRuntime,
 } from "./roles/types.ts";
 
+import type { ExternalRoles } from "./roles/backend.ts";
 import { explorerLimit, type ExplorerLimit } from "./roles/conversation.ts";
 
 // These are application admission choices. Pi retains all execution state.
@@ -68,6 +76,7 @@ export const roleNames = [
 ] as const;
 export type RoleName = (typeof roleNames)[number];
 export type Roles = Record<RoleName, Role> & {
+  external?: ExternalRoles;
   capabilities: (input: any) => Parameters<typeof planSchema>[0] & {
     sourceRetrieval?: boolean;
   };
@@ -195,6 +204,26 @@ export function createResearch(roles: Roles) {
         }
         let outcome: TaskOutcome<JsonValue>;
         try {
+          const backends =
+            name! === "verifier"
+              ? ["verifier", "research"]
+              : name! === "reconstruct"
+                ? ["verifier"]
+                : name! === "review" || name! === "literature"
+                  ? ["research"]
+                  : [name!];
+          const mode = JSON.stringify(
+            backends.map(
+              (name) => !!roles.external?.[name as keyof ExternalRoles],
+            ),
+          );
+          if (
+            (await runtime.memo("research.backend-mode", mode, context)) !==
+            mode
+          )
+            throw new Error(
+              "Role backend registration changed during recovery",
+            );
           const result = await roles[name!](value, runtime, context, source);
           outcome = { status: "completed", result };
         } catch (error) {
@@ -204,6 +233,31 @@ export function createResearch(roles: Roles) {
             error: { message: error.message },
             ...(error.result ? { result: error.result } : {}),
           };
+        }
+        if ("standalone" in task.input && outcome.result !== undefined) {
+          const input = value as {
+            notes?: Parameters<typeof validateResult>[1];
+          };
+          const result = outcome.result as SolverResult | PublishedResult;
+          if (name! === "coordinator")
+            validatePlan(result, input.notes ?? [], roles.capabilities(value));
+          else if (name! === "review") Assert(researchReportSchema, result);
+          else if (result.kind === "published") {
+            if (name! !== "explorer")
+              throw new Error("Only Explorer publishes during execution");
+          } else {
+            validateResult(
+              result,
+              input.notes ?? [],
+              outcome.status === "failed",
+            );
+            const expected =
+              name! === "verifier" || name! === "reconstruct"
+                ? "verification"
+                : "notes";
+            if (result.kind !== expected)
+              throw new Error(`Invalid ${name!} result kind`);
+          }
         }
         await runtime.commit(async (tx) => {
           const control = await tx.doc(Control, task.conversationId);

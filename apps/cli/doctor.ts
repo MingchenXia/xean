@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { createRuntime, readSettings } from "../../src/config.ts";
 import { cliModels } from "./models.ts";
 
-/** Local setup only: never creates a campaign or invokes a provider or Codex. */
+/** Local setup only: never creates a campaign or invokes a provider or an external backend. */
 export async function doctor(settingsPath: string, key?: string) {
   try {
     let value: unknown;
@@ -17,8 +17,7 @@ export async function doctor(settingsPath: string, key?: string) {
       models: await cliModels(),
       key,
     });
-    for (const [name, { model, checkAuth }] of Object.entries(profiles)) {
-      if (name === "explorer" && settings.chatgpt) continue;
+    for (const { model, checkAuth } of Object.values(profiles)) {
       if (!models.getModel(model.provider, model.modelId))
         throw new Error(`Unknown Pi model: ${model.provider}/${model.modelId}`);
       const available = await checkAuth!().catch(() => {
@@ -29,19 +28,10 @@ export async function doctor(settingsPath: string, key?: string) {
       if (!available)
         throw new Error(`No ${model.provider} credential is available.`);
     }
-    const commands = new Set([
-      ...(settings.research === false
-        ? []
-        : [settings.research?.command ?? "codex"]),
-      ...(settings.codex ? [settings.codex.command ?? "codex"] : []),
-    ]);
-    for (const command of commands)
-      if (!Bun.which(command))
-        throw new Error(`Codex executable was not found: ${command}`);
     return {
       ok: true,
       message:
-        "Local setup checks passed for the configured roles. Provider authentication, browser sessions, and Codex login were not checked.",
+        "Local Pi setup checks passed. Provider authentication and optional backend configuration were not checked.",
     };
   } catch (error) {
     return {

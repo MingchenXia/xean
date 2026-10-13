@@ -1,7 +1,13 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
-import { open, inspect, exportAccepted } from "../../src/host.ts";
+import {
+  open,
+  inspect,
+  exportAccepted,
+  type OpenOptions,
+} from "../../src/host.ts";
 import { type Definition } from "../../src/definition.ts";
 import { readCommand } from "../../src/math/commands.ts";
 import { readReport, readStatus } from "../../src/report.ts";
@@ -15,6 +21,7 @@ import {
 } from "./lifecycle.ts";
 import { doctor } from "./doctor.ts";
 import { cliModels } from "./models.ts";
+import { hostPath, runHost, type HostCommand } from "./host.ts";
 
 const print = (value: unknown) =>
   Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
@@ -27,13 +34,21 @@ const program = new Command("xean")
   .option("--expected-owner-id <id>", "Require this active owner")
   .option("--usage-prefix <prefix>", "Execution-specific usage attribution")
   .option("--key-stdin", "Read this owner's provider credential from stdin")
+  .option("--roles <module>", "Load an explicit role factory module")
   .configureHelp({ showGlobalOptions: true })
   .hook("preAction", (_program, action) => {
     if (
       program.opts<Flags>().expectedOwnerId !== undefined &&
-      !["resume", "pause", "cancel", "submit", "guide", "recheck"].includes(
-        action.name(),
-      )
+      ![
+        "resume",
+        "pause",
+        "cancel",
+        "submit",
+        "guide",
+        "recheck",
+        "attach",
+        "detach",
+      ].includes(action.name())
     )
       throw new Error("--expected-owner-id requires a live control command");
   });
@@ -42,7 +57,20 @@ type Flags = {
   expectedOwnerId?: string;
   usagePrefix?: string;
   keyStdin?: boolean;
+  roles?: string;
 };
+
+async function readRoles(): Promise<OpenOptions["roles"]> {
+  const requested = program.opts<Flags>().roles;
+  if (!requested) return undefined;
+  const path = await realpath(resolve(requested)).catch(() => {
+    throw new Error(`Role module does not exist: ${requested}`);
+  });
+  const { default: roles } = await import(pathToFileURL(path).href);
+  if (typeof roles !== "function")
+    throw new Error(`Role module must export a default factory: ${path}`);
+  return roles;
+}
 
 function campaignPath(target: string): string {
   if (/[/\\]|\.(sqlite|db)$/i.test(target)) return resolve(target);
@@ -68,6 +96,7 @@ async function withOwner(
     key: await readKey(),
     usagePrefix,
     models: await cliModels(),
+    roles: await readRoles(),
   });
   try {
     return await action(owner, await realpath(path));
@@ -102,6 +131,7 @@ async function send(target: string, command: OwnerCommand) {
   if (
     flags.usagePrefix !== undefined ||
     flags.keyStdin ||
+    flags.roles !== undefined ||
     flags.ownerId !== undefined
   ) {
     if (flags.expectedOwnerId !== undefined)
@@ -135,6 +165,37 @@ program
 program.command("run <campaign>").action(async (campaign: string) => {
   await runCampaign(campaign);
 });
+program
+  .command("host")
+  .description("Run named campaigns in one foreground process")
+  .action(async () => {
+    const flags = program.opts<Flags & { campaignDir: string }>();
+    await runHost(flags.campaignDir, {
+      models: await cliModels(),
+      roles: await readRoles(),
+      key: await readKey(),
+      usagePrefix: flags.usagePrefix,
+      ownerId: flags.ownerId,
+    });
+  });
+for (const kind of ["attach", "detach"] as const)
+  program.command(`${kind} <campaign>`).action(async (campaign: string) => {
+    const flags = program.opts<Flags & { campaignDir: string }>();
+    if (flags.roles || flags.keyStdin || flags.ownerId || flags.usagePrefix)
+      throw new Error("Set execution overrides on the shared host");
+    const directory = await realpath(resolve(flags.campaignDir));
+    const receipt = await requestOwner<HostCommand>(
+      hostPath(directory),
+      {
+        kind,
+        database: await realpath(campaignPath(campaign)),
+      },
+      flags.expectedOwnerId,
+    );
+    if (receipt === undefined)
+      throw new Error("No shared host is running for this campaign directory");
+    await print(receipt);
+  });
 for (const kind of ["resume", "pause", "cancel"] as const)
   program.command(`${kind} <campaign>`).action(async (campaign: string) => {
     await send(campaign, { kind });

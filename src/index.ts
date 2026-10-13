@@ -13,7 +13,7 @@ export {
 } from "./workflow.ts";
 export {
   closedBookResearch,
-  codexResearch,
+  externalResearch,
   type Research,
 } from "./roles/research.ts";
 export { readSettings, defaultSettings, type Settings } from "./config.ts";
@@ -37,3 +37,9 @@ export type {
 } from "./math/contracts.ts";
 export { readReport, readStatus, type Report, type Status } from "./report.ts";
 export { RoleFailure } from "./roles/types.ts";
+
+export type {
+  ExternalAnswer,
+  ExternalCall,
+  ExternalRoles,
+} from "./roles/backend.ts";

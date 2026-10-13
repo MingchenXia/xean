@@ -160,7 +160,7 @@ export const researchReportSchema = object({
       premise: passageSchema.properties.premise,
     }),
   ),
-  kind: Type.Literal("codex-report"),
+  kind: Type.Literal("external-report"),
   operationId: text,
   reportedAt: text,
 });
@@ -224,10 +224,10 @@ export const verificationStages = [
 export type VerificationStage = (typeof verificationStages)[number];
 export const verificationStageSchema = StringEnum(verificationStages);
 export const verificationBackendSchema = StringEnum(
-  ["native", "codex"] as const,
+  ["native", "external"] as const,
   {
     description:
-      "Use codex when checking existing claims needs code or artifact access. It can execute checks and issue mathematical verdicts. Native is the default reasoning verifier.",
+      "Use external when checking existing claims needs code or artifact access. It can execute checks and issue mathematical verdicts. Native is the default reasoning verifier.",
   },
 );
 export type VerificationBackend = Static<typeof verificationBackendSchema>;
@@ -241,16 +241,16 @@ export const literaturePlan = object({
   kind: Type.Literal("literature"),
   assignment: text,
 });
-export const codexPlan = object({
-  kind: Type.Literal("codex", {
+export const implementationPlan = object({
+  kind: Type.Literal("implementation", {
     description:
-      "Use Codex rarely for a concrete implementation needed by the mathematical task. Explorer handles mathematical reasoning. Codex writes and runs programs and returns ordinary unverified notes with retained artifacts. To issue mathematical verdicts on existing notes, select verifier with backend codex instead.",
+      "Use implementation rarely for a concrete implementation needed by the mathematical task. Explorer handles mathematical reasoning. The implementation backend writes and runs programs and returns ordinary unverified notes with retained artifacts. To issue mathematical verdicts on existing notes, select verifier with backend external instead.",
   }),
   assignment: Type.String({
     minLength: 1,
     pattern: "\\S",
     description:
-      "State the concrete deliverable, input/domain, expected output, binding constraints, and checks/evidence that complete this implementation assignment. Selected notes may define these requirements. The task's completion criteria provide mathematical context. Codex chooses the implementation and tools.",
+      "State the concrete deliverable, input/domain, expected output, binding constraints, and checks/evidence that complete this implementation assignment. Selected notes may define these requirements. The task's completion criteria provide mathematical context. The implementation backend chooses the implementation and tools.",
   }),
   notes: Type.Array(text, {
     uniqueItems: true,
@@ -262,13 +262,13 @@ export const workPlan = Type.Union([
   explorePlan,
   verifyPlan,
   literaturePlan,
-  codexPlan,
+  implementationPlan,
 ]);
 export const planSchema = (capabilities: {
   literature: boolean;
-  codex: boolean;
+  implementation: boolean;
   explorer: boolean;
-  codexVerifier?: boolean;
+  externalVerifier?: boolean;
 }) =>
   object({
     work: Type.Unsafe<Static<typeof workPlan> | null>(
@@ -276,7 +276,7 @@ export const planSchema = (capabilities: {
         object({
           ...verifyPlan.properties,
           backend: Type.Optional(
-            capabilities.codexVerifier
+            capabilities.externalVerifier
               ? verificationBackendSchema
               : Type.Literal("native"),
           ),
@@ -296,8 +296,8 @@ export const submissionSchemas = {
   coordinator: planSchema({
     explorer: true,
     literature: true,
-    codex: true,
-    codexVerifier: true,
+    implementation: true,
+    externalVerifier: true,
   }),
   correctness: batchSchema(correctnessSchema),
   requirements: batchSchema(verdictSchema),
@@ -323,7 +323,7 @@ export type NoteInfo = Pick<
 export type ExplorerInput = SolverInput & {
   assignment: string;
 };
-export type CodexInput = SolverInput & { assignment: string };
+export type ImplementationInput = SolverInput & { assignment: string };
 export type VerifierInput = SolverInput & {
   targets: string[];
   through: VerificationStage;

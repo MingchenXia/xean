@@ -15,7 +15,7 @@ const owner = await open(path, {
       problem: "Prove 1 = 1.",
       completionCriteria: "A self-contained proof.",
     },
-    settings: { ...defaultSettings, research: false },
+    settings: defaultSettings,
   },
   roles: () => ({
     coordinator: async (input) => ({

@@ -68,7 +68,7 @@ const inspected = JSON.parse(
 assert.deepEqual(inspected.task, await Bun.file(task).json());
 assert.deepEqual(await inspect(quickstart, readStatus), initialized);
 assert.equal(inspected.status.calls.recordedResponses, 0);
-assert.equal(inspected.status.calls.codexInvocations, 0);
+assert.equal(inspected.status.calls.externalInvocations, 0);
 assert.deepEqual(inspected, await inspect(quickstart, readReport));
 for (const [command, expected] of [
   ["pause", "paused"],
