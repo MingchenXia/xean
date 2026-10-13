@@ -13,11 +13,12 @@ Read README.md and the pinned Pi implementation before changing the design.
 - Keep mathematical content authoritative in one place and retain references
   where Pi already stores the value.
 - The outer loop is strictly sequential: Coordinator chooses one worker, that
-  worker commits its complete result or failure, then Coordinator chooses again.
+  worker runs to completion or failure, then Coordinator chooses again. Explorer
+  submissions are durable notebook commits while the worker continues.
   This applies to replacement roles too. A worker may parallelize its own work.
   Use Pi's native task waits. Keep no outer concurrency setting or worker queue.
-  Interrupted decisions and workers recover private progress. Preserve atomic
-  publication and durable event delivery.
+  Interrupted decisions and workers recover Pi progress. Preserve durable event
+  delivery and atomic individual notebook submissions.
 - Have a separate agent review each substantial design change specifically for
   native Pi alternatives and unnecessary application machinery. Resolve findings
   against Pi's implementation before declaring the change complete.

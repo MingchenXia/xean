@@ -1,6 +1,5 @@
 import { copyJson, type Context, type JsonValue } from "@earendil-works/chord";
 import { isDeepStrictEqual } from "node:util";
-import { Check } from "typebox/value";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   Type,
@@ -8,9 +7,7 @@ import {
   cleanupSessionResources,
   registerSessionResourceCleanup,
   lazyStream,
-  type Api,
   type Message,
-  type Model,
   type Static,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
@@ -24,12 +21,10 @@ import {
   hook,
   LiveDoc,
   ProviderDoc,
-  ResetEntry,
   ToolResultEntry,
   type ConversationHandle,
   type ConversationId,
   type Cursor,
-  type EntryId,
   type TaskId,
   type ToolExecutionApi,
   type Tx,
@@ -41,9 +36,15 @@ import {
   type Exploration,
   type Note,
 } from "../math/contracts.ts";
-import { validateExploration, validatePlan } from "../math/notes.ts";
-import { mergeExploration } from "../math/results.ts";
-import { readSnapshot, type SnapshotReader } from "../math/state.ts";
+import { validatePlan } from "../math/notes.ts";
+import { publicationResult } from "../math/results.ts";
+import {
+  publishExploration,
+  readSnapshot,
+  readView,
+  type SnapshotReader,
+} from "../math/state.ts";
+import { Control } from "../workflow.ts";
 import {
   RoleFailure,
   type NoteReference,
@@ -55,6 +56,7 @@ import { profileNames, capacityError, type ProfileName } from "../config.ts";
 registerSessionResourceCleanup(resetOpenAICodexWebSocketDebugStats);
 
 const responseLimitError = "Role exhausted its responses";
+export type ExplorerLimit = "context_capacity" | "response_limit";
 type Call = {
   profile?: ProfileName;
   notes?: Note[];
@@ -63,14 +65,33 @@ type Call = {
   capabilities?: Parameters<typeof planSchema>[0];
   maxResponses?: number;
   maxReads?: number;
+  limit?: ExplorerLimit;
+  notebook?: {
+    root: ConversationId;
+    worker: TaskId;
+    observed: Record<string, number>;
+  };
 };
 const Call = defineDoc({
   kind: "research.role.assignment",
   scope: "conversation",
   history: "latest",
   fork: "initial",
-  version: 2,
+  version: 4,
   initial: (): Call => ({}),
+});
+const Publication = defineDoc({
+  kind: "research.explorer.publication",
+  scope: "task",
+  version: 1,
+  initial: (): {
+    receipt?: Awaited<ReturnType<typeof publishExploration>> & {
+      done: boolean;
+      limited: boolean;
+      responsesRemaining: number;
+      readsRemaining: number;
+    };
+  } => ({}),
 });
 export type Submission<P extends ProfileName> = Static<
   (typeof submissionSchemas)[P]
@@ -83,7 +104,7 @@ async function progress<P extends ProfileName>(
   const result = {
     responses: 0,
     reads: 0,
-    submissions: [] as { id: EntryId; value: Submission<P> }[],
+    submissions: [] as Submission<P>[],
   };
   let cursor: Cursor | undefined;
   do {
@@ -99,17 +120,13 @@ async function progress<P extends ProfileName>(
       if (profile && ToolResultEntry.is(entry)) {
         const message = messages[0];
         if (isSubmission(message, profile))
-          result.submissions.push({
-            id: entry.id,
-            value: message.details as Submission<P>,
-          });
+          result.submissions.push(message.details as Submission<P>);
       }
     }
     cursor = page.next;
   } while (cursor);
   return result;
 }
-export type ExplorerLimit = "context_capacity" | "response_limit";
 
 /** Explain a completed Explorer's forced handoff from Pi's retained settlement. */
 export async function explorerLimit(
@@ -126,49 +143,7 @@ export async function explorerLimit(
     for (const conversation of page.items) {
       const call = await tx.doc(Call, conversation.id);
       if (call.profile !== "explorer") continue;
-      const settled = await tx.submissionByRequest(conversation.id, "role");
-      if (settled?.status === "unanswered") {
-        if (settled.detail === capacityError) return "context_capacity";
-        if (settled.detail === responseLimitError) return "response_limit";
-      }
-      if (
-        settled?.status !== "done" ||
-        settled.type !== "input" ||
-        call.maxResponses === undefined
-      )
-        continue;
-      const head = await tx.latestHeadMarker(conversation.id);
-      if (head && ResetEntry.is(head) && head.id > settled.answer) {
-        if (
-          head.model?.some(
-            (message) =>
-              message.role === "user" && message.content === responseLimitError,
-          )
-        )
-          return "response_limit";
-        continue;
-      }
-      // Tool handoffs record their reason in Pi's reset. A plain-text stop has
-      // no reset, so only that exceptional path needs the retained transcript.
-      const answer = (await tx.entry(settled.answer))?.model?.find(
-        (message) => message.role === "assistant",
-      );
-      if (
-        !answer ||
-        !["stop", "toolUse"].includes(answer.stopReason) ||
-        answer.content.some((part) => part.type === "toolCall")
-      )
-        continue;
-      const history = await progress(tx, conversation.id, "explorer");
-      const last = history.submissions.at(-1)?.value;
-      if (
-        last &&
-        (last.notes.length > 0 || last.edits?.length) &&
-        !last.notes.some((note) => note.candidate) &&
-        !last.edits?.some((edit) => edit.candidate) &&
-        history.responses >= call.maxResponses
-      )
-        return "response_limit";
+      if (call.limit) return call.limit;
     }
     cursor = page.next;
   } while (cursor);
@@ -179,55 +154,6 @@ const responses = (messages: readonly Message[]) =>
       message.role === "assistant" &&
       ["stop", "toolUse"].includes(message.stopReason),
   ).length;
-const reasoningItem = Type.Object({
-  type: Type.Literal("reasoning"),
-  id: Type.String({ minLength: 1 }),
-  encrypted_content: Type.String({ minLength: 1 }),
-  status: Type.Optional(Type.Union([Type.Literal("completed"), Type.Null()])),
-  summary: Type.Array(
-    Type.Object({ type: Type.Literal("summary_text"), text: Type.String() }),
-  ),
-});
-export function modelMessages(
-  messages: readonly Message[],
-  model: Model<Api>,
-): Message[] {
-  const seen = new Set<string>();
-  return messages.flatMap((message): Message[] => {
-    if (message.role !== "assistant") return [message];
-    if (["aborted", "deferred"].includes(message.stopReason)) return [];
-    const failed = message.stopReason === "error";
-    if (
-      failed &&
-      (!["openai-responses", "openai-codex-responses"].includes(model.api) ||
-        message.api !== model.api ||
-        message.provider !== model.provider ||
-        message.model !== model.id ||
-        (message.responseModel !== undefined &&
-          message.responseModel !== model.id))
-    )
-      return [];
-    const content = message.content.filter((part) => {
-      let id: string | undefined;
-      if (part.type === "thinking" && part.thinkingSignature) {
-        try {
-          const item = JSON.parse(part.thinkingSignature);
-          if (Check(reasoningItem, item)) id = item.id;
-        } catch {}
-      }
-      const duplicate = id !== undefined && seen.has(id);
-      if (id !== undefined) seen.add(id);
-      if (duplicate) return false;
-      return failed
-        ? id !== undefined
-        : message.stopReason !== "length" || part.type !== "toolCall";
-    });
-    if (failed && !content.length) return [];
-    return [
-      { ...message, content, stopReason: failed ? "stop" : message.stopReason },
-    ];
-  });
-}
 const readCount = (messages: readonly Message[]) =>
   messages.filter(
     (message) =>
@@ -252,6 +178,20 @@ async function notes(
   context: Context,
   ids?: readonly string[],
 ): Promise<Note[]> {
+  if (call.notebook)
+    return reader.commit(async (tx) => {
+      const { notes } = await readView(tx, call.notebook!.root, {
+        ids,
+        bodies: ids !== undefined,
+        inputs: false,
+      });
+      if (ids) {
+        const current = await tx.doc(Call, reader.conversationId);
+        for (const note of notes)
+          current.notebook!.observed[note.id] = note.revision;
+      }
+      return notes;
+    }, context);
   if (!call.noteSource)
     return ids
       ? (call.notes ?? []).filter((note) => ids.includes(note.id))
@@ -279,7 +219,7 @@ export function conversations(profiles: Profiles) {
       defineTool({
         name: `submit_${name}`,
         description:
-          "Submit complete structured results for this assignment. Explorer may create notes and edit existing notes at their frozen public revisions.",
+          "Submit complete structured results for this assignment. Explorer publishes notes and edits immediately, then may continue working. Use the returned note IDs and revisions for later edits.",
         parameters: submissionSchemas[name],
         callers: ["model"],
         constrainedSampling: { type: "json_schema", strict: "prefer" },
@@ -288,9 +228,7 @@ export function conversations(profiles: Profiles) {
         async execute(value, api, context) {
           const call = (await api.snapshot(Call, api.conversationId, context))!;
           const available =
-            name === "explorer" || name === "coordinator"
-              ? await notes(api, call, context)
-              : [];
+            name === "coordinator" ? await notes(api, call, context) : [];
           const { done, limited, ...allowance } = await api.commit(
             async (tx) => {
               if (
@@ -300,18 +238,26 @@ export function conversations(profiles: Profiles) {
               )
                 throw new Error("Submit exactly once in each response");
               if (name === "explorer") {
+                const saved = await tx.doc(Publication, api.taskId);
+                if (saved.receipt)
+                  return copyJson(saved.receipt) as typeof saved.receipt;
+                const current = await tx.doc(Call, api.conversationId);
+                const { root, worker, observed } = current.notebook!;
+                const control = await tx.doc(Control, root);
+                if (control.cancelled || control.accepted !== null)
+                  throw new Error("Campaign no longer accepts submissions");
                 const draft = value as Exploration;
                 const history = await progress(
                   tx,
                   api.conversationId,
                   "explorer",
                 );
-                validateExploration(
-                  mergeExploration([
-                    ...history.submissions.map(({ value }) => value),
-                    draft,
-                  ]),
-                  available,
+                const publication = await publishExploration(
+                  tx,
+                  root,
+                  worker,
+                  draft,
+                  observed,
                 );
                 const voluntary =
                   draft.notes.some((note) => note.candidate) ||
@@ -319,12 +265,14 @@ export function conversations(profiles: Profiles) {
                   (draft.notes.length === 0 && !draft.edits?.length);
                 const limited =
                   !voluntary && history.responses >= call.maxResponses!;
-                return {
+                if (limited) current.limit = "response_limit";
+                return (saved.receipt = {
+                  ...publication,
                   done: voluntary || limited,
                   limited,
                   responsesRemaining: call.maxResponses! - history.responses,
                   readsRemaining: Math.max(0, call.maxReads! - history.reads),
-                };
+                });
               } else if (name === "coordinator") {
                 validatePlan(value, available, call.capabilities!);
               } else {
@@ -332,10 +280,17 @@ export function conversations(profiles: Profiles) {
                   .results;
                 batchResults(call.ids!, results);
               }
-              return { done: true, limited: false };
+              return {
+                done: true,
+                limited: false,
+                entry: undefined,
+                notes: undefined,
+                edits: undefined,
+              };
             },
             context,
           );
+          const { entry, notes: created, edits, ...remaining } = allowance;
           return {
             output: [
               {
@@ -343,12 +298,13 @@ export function conversations(profiles: Profiles) {
                 text: JSON.stringify({
                   recorded: true,
                   done,
+                  ...(entry === undefined ? {} : { notes: created, edits }),
                   ...(done
                     ? {}
                     : {
                         continuation:
-                          "Continue toward the exact task using your current findings. Address relevant gaps or change approach. Submit new notes or edits using the original public revisions; an empty notes-and-edits submission hands off.",
-                        ...allowance,
+                          "Your submission is published. Continue toward the exact task, address gaps or change approach. Read and edit notes using their published IDs and latest revisions. An empty notes-and-edits submission hands off.",
+                        ...remaining,
                       }),
                 }),
               },
@@ -373,7 +329,7 @@ export function conversations(profiles: Profiles) {
     name: "read_notes",
     callers: ["model"],
     description:
-      "Read frozen detailed summaries or authoritative full notes. Batch independent IDs. Dead notes are diagnostic only.",
+      "Read detailed summaries or authoritative full notes. Explorer reads the current notebook, including its own submissions. Other roles read their frozen inputs. Batch independent IDs. Dead notes are diagnostic only.",
     parameters: Type.Object(
       {
         ids: Type.Array(Type.String({ minLength: 1 }), {
@@ -472,10 +428,9 @@ export function conversations(profiles: Profiles) {
                 const count = responses(history);
                 if (count >= call.maxResponses!)
                   throw new Error(responseLimitError);
-                const messages = modelMessages(history, model);
                 return (profiles[call.profile].stream ?? stream)(
                   model,
-                  { ...transcript, messages },
+                  transcript,
                   options,
                 );
               }),
@@ -512,7 +467,7 @@ export function conversations(profiles: Profiles) {
     runtime: RoleRuntime,
     context: Context,
     options: Omit<Call, "profile"> = {},
-  ): Promise<{ id: EntryId; value: Submission<P> }[]> {
+  ): Promise<Submission<P>[]> {
     const profile = profiles[name];
     const assignment = { ...options };
     // Allow completed reads and corrected submissions; Pi continues provider limits.
@@ -575,10 +530,32 @@ export function conversations(profiles: Profiles) {
       );
       const settled = await submission.wait(context);
       await conversation.waitForIdle(context);
-      let results!: { id: EntryId; value: Submission<P> }[];
+      let history!: Awaited<ReturnType<typeof progress<P>>>;
       await runtime.commit(async (tx) => {
-        results = (await progress(tx, conversationId, name)).submissions;
+        history = await progress(tx, conversationId, name);
+        if (name !== "explorer") return;
+        const call = await tx.doc(Call, conversationId);
+        const last = history.submissions.at(-1) as Exploration | undefined;
+        const partial =
+          last &&
+          (last.notes.length > 0 || last.edits?.length) &&
+          !last.notes.some((note) => note.candidate) &&
+          !last.edits?.some((edit) => edit.candidate);
+        const limit =
+          settled.status === "unanswered" &&
+          [capacityError, responseLimitError].includes(String(settled.detail))
+            ? settled.detail === capacityError
+              ? "context_capacity"
+              : "response_limit"
+            : settled.status === "done" &&
+                call.maxResponses !== undefined &&
+                history.responses >= call.maxResponses &&
+                partial
+              ? "response_limit"
+              : undefined;
+        if (limit) call.limit = limit;
       }, context);
+      const results = history.submissions;
       if (
         settled.status === "unanswered" &&
         !(
@@ -597,10 +574,10 @@ export function conversations(profiles: Profiles) {
           name === "explorer" &&
           results.length
         )
-          error.result = {
-            kind: "submissions",
-            entries: results.map(({ id }) => id),
-          };
+          error.result = publicationResult(
+            results as Exploration[],
+            runtime.taskId,
+          );
         throw error;
       }
       if (!results.length)

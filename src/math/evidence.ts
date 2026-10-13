@@ -19,9 +19,9 @@ export function bindCodex(
     reportedAt: string;
   },
   premises: readonly string[],
+  task?: Task,
   evidence: readonly SourceEvidence[] = [],
   passagePrefix = result.operationId,
-  task?: Task,
 ): ResearchReport {
   const { operationId, searches, value } = result;
   const fromTask = (passage: { url: string; quote: string }) =>

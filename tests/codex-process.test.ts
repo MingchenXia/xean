@@ -2,15 +2,16 @@ import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
 import { access, chmod, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { inspect, open, readReport } from "../src/index.ts";
+import { inspect, open, readReport, type OpenOptions } from "../src/index.ts";
 import { RoleFailure } from "../src/roles/types.ts";
 import { CodexLog, CodexRequest, codexTranscript } from "../src/roles/codex.ts";
-import { context, settings, task } from "./fixture.ts";
+import { context, noteResult, settings, task } from "./fixture.ts";
 
 // Every fixture is an actual child process, including signal and overflow cases.
 async function codexFixture(
   source: string,
   mode: "research" | "worker" = "research",
+  roles?: OpenOptions["roles"],
 ) {
   const directory = await temporaryDirectory("codex-process-");
   const command = join(directory, "codex-fixture");
@@ -18,6 +19,7 @@ async function codexFixture(
   await chmod(command, 0o700);
   const path = join(directory, "campaign.sqlite");
   const owner = await open(path, {
+    roles,
     create: {
       task,
       settings: {
@@ -49,6 +51,43 @@ const review = {
 const completed = { type: "turn.completed", usage: { output_tokens: 7 } };
 const jsonl = (events: unknown[]) =>
   events.map((event) => JSON.stringify(event)).join("\n") + "\n";
+
+test("Codex reuses a completed request without leaking caller edits or conflating assignments", async () => {
+  const output = jsonl([
+    {
+      type: "item.completed",
+      item: { type: "agent_message", text: JSON.stringify(noteResult) },
+    },
+    completed,
+  ]);
+  const { owner } = await codexFixture(
+    `process.stdout.write(${JSON.stringify(output)});`,
+    "worker",
+    (builtins) => ({
+      async codex(input, runtime, context) {
+        const first = await builtins.codex(input, runtime, context);
+        const expected = structuredClone(first);
+        first.notes[0].text = "Caller changed its copy";
+        expect(await builtins.codex(input, runtime, context)).toEqual(expected);
+        const changed = await builtins.codex(
+          { ...input, assignment: "Different assignment" },
+          runtime,
+          context,
+        );
+        expect(changed.notes[0].text).not.toBe(expected.notes[0].text);
+        return changed;
+      },
+    }),
+  );
+  try {
+    await owner.root.waitForIdle(context);
+    const report = await reportOf(owner);
+    expect(report.status.status).toBe("completed");
+    expect(report.records!.filter(CodexLog.is)).toHaveLength(2);
+  } finally {
+    await owner.close();
+  }
+});
 
 test.each(["\n", "\r\n"])(
   "Codex JSONL accepts blank lines and %j separators while retaining results and usage",
@@ -89,13 +128,12 @@ test("Codex malformed final JSON retains later accounting and remains a fault", 
   expect(transcript.error).not.toBeInstanceOf(RoleFailure);
 });
 
-test("Codex blank terminal reason falls back to a provider failure", () => {
+test("Codex parsing leaves an unnamed terminal failure for process diagnostics", () => {
   const transcript = codexTranscript(
     jsonl([{ type: "turn.failed", error: { message: "  " } }]),
   );
   expect(transcript.error).toBeInstanceOf(RoleFailure);
-  expect(transcript.error?.message).toBe("Codex reported a failed turn");
-  expect(transcript.failureReason).toBeUndefined();
+  expect(transcript.error?.message).toBe("");
 });
 
 test.each([1, 0, "bare"] as const)(
@@ -108,8 +146,19 @@ test.each([1, 0, "bare"] as const)(
     const reason =
       "Selected model is at capacity. Please try a different model." +
       (exitCode === 0 ? " Detail".repeat(700) : "");
+    const computation =
+      'require("node:fs").writeFileSync("partial-artifact.txt", "unverified draft"); process.stdout.write("partial output\\n");';
     const output = jsonl([
       { type: "error", message: "Reconnecting... 1/5" },
+      {
+        type: "item.completed",
+        item: {
+          type: "command_execution",
+          command: JSON.stringify([process.execPath, "-e", computation]),
+          aggregated_output: "partial output\n",
+          exit_code: 0,
+        },
+      },
       {
         type: "item.completed",
         item: { type: "agent_message", text: "I will check the source." },
@@ -120,15 +169,19 @@ test.each([1, 0, "bare"] as const)(
         ...(failure === "bare" ? {} : { error: { message: reason } }),
       },
     ]);
-    expect(codexTranscript(output).error?.message).toBe(
-      fallback ? "Codex reported a failed turn" : reason,
-    );
-    const { owner } = await codexFixture(`
+    expect(codexTranscript(output).error?.message).toBe(fallback ? "" : reason);
+    const { owner, path } = await codexFixture(
+      `
 import { writeSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+const computation = spawnSync(process.execPath, ["-e", ${JSON.stringify(computation)}], { encoding: "utf8" });
+if (computation.status !== 0 || computation.stdout !== "partial output\\n") throw new Error("Fixture command failed");
 writeSync(1, ${JSON.stringify(output)});
 writeSync(2, ${JSON.stringify(stderr)});
 process.exitCode = ${exitCode};
-`);
+`,
+      "worker",
+    );
     try {
       await owner.root.waitForIdle(context);
       const report = await reportOf(owner);
@@ -136,24 +189,108 @@ process.exitCode = ${exitCode};
       expect(report.status.error).toStartWith(
         fallback ? stderr : "Selected model is at capacity.",
       );
+      const request = report.records!.find(CodexRequest.is)!;
       const log = report.records!.find(CodexLog.is)!;
+      const worker = report.tasks!.find(({ id }) => id === log.byTaskId)!;
+      if (worker.state.outcome?.status !== "failed")
+        throw new Error("Expected a failed Codex worker");
+      const error = worker.state.outcome.error!.message;
+      expect(error).toContain(`Execution receipt: ${log.data.operationId}`);
+      expect(error).toContain(`Request entry: ${request.id}`);
+      expect(error).toContain(
+        `Codex log entry: ${log.id}; exit code: ${exitCode}`,
+      );
+      expect(error).toContain(request.data.workspace);
+      expect(error).toContain("Failure does not imply that no commands ran");
+      expect(error).not.toContain("partial output");
+      expect(error.length).toBeLessThan(5000);
       expect(log.data).toMatchObject({ stdout: output, stderr, exitCode });
       expect(log.data.outputTruncated).toBeUndefined();
-      expect(
-        report.tasks!.find(({ id }) => id === log.byTaskId)!.state,
-      ).toMatchObject({
-        status: "terminal",
-        outcome: {
-          status: "failed",
-          error: {
-            message: fallback
-              ? stderr
-              : reason.length > 4096
-                ? `${reason.slice(0, 4096)}… [see Codex log]`
-                : reason,
-          },
+      if (reason.length > 4096)
+        expect(error).toStartWith(`${reason.slice(0, 4096)}… [see Codex log]`);
+      expect(report.result).toBeUndefined();
+      await owner.close();
+      const reopened = await open(path);
+      try {
+        await reopened.root.waitForIdle(context);
+        const retained = await reportOf(reopened);
+        expect(retained.status.error).toBe(report.status.error);
+        expect(
+          retained.tasks!.find(({ id }) => id === worker.id)!.state,
+        ).toEqual(worker.state);
+        expect(retained.records!.filter(CodexLog.is)).toEqual([log]);
+        expect(retained.records!.find(CodexRequest.is)).toEqual(request);
+        expect(
+          await Bun.file(
+            join(request.data.workspace, "partial-artifact.txt"),
+          ).text(),
+        ).toBe("unverified draft");
+      } finally {
+        await reopened.close();
+      }
+    } finally {
+      await owner.close();
+    }
+  },
+);
+
+test.each([1, 2])(
+  "Codex failed commit %j references only durable evidence and preserves the fault",
+  async (failedCommit) => {
+    const output = jsonl([
+      {
+        type: "item.completed",
+        item: { type: "agent_message", text: JSON.stringify(noteResult) },
+      },
+      completed,
+    ]);
+    const { owner } = await codexFixture(
+      `require("node:fs").writeFileSync("ran.txt", "ran"); console.log(${JSON.stringify(output)});`,
+      "worker",
+      (builtins) => ({
+        codex(input, runtime, context) {
+          let commits = 0;
+          return builtins.codex(
+            input,
+            {
+              ...runtime,
+              commit: (change, context) =>
+                runtime.commit(async (tx, current) => {
+                  await change(tx, current);
+                  if (++commits === failedCommit)
+                    throw new Error("Fixture receipt commit failed");
+                }, context),
+            },
+            context,
+          );
         },
-      });
+      }),
+    );
+    try {
+      await owner.root.waitForIdle(context);
+      const report = await reportOf(owner);
+      const outcome = report.tasks!.find(
+        (task) => task.state.outcome?.status === "faulted",
+      )!.state.outcome!;
+      const error = outcome.error!.message;
+      expect(error).toStartWith("Fixture receipt commit failed");
+      expect(error).toContain(
+        "Completion unrecorded; execution may have occurred",
+      );
+      expect(error).not.toContain("Codex log entry:");
+      expect(report.records!.filter(CodexLog.is)).toEqual([]);
+      const requests = report.records!.filter(CodexRequest.is);
+      expect(requests).toHaveLength(failedCommit - 1);
+      if (failedCommit === 1) {
+        expect(error).toContain("Codex operation:");
+        expect(error).toContain("Request entry: unrecorded");
+        expect(error).not.toContain("Execution receipt:");
+      } else {
+        expect(error).toContain(`Request entry: ${requests[0]!.id}`);
+        expect(
+          await Bun.file(join(requests[0]!.data.workspace, "ran.txt")).text(),
+        ).toBe("ran");
+      }
       expect(report.result).toBeUndefined();
     } finally {
       await owner.close();
@@ -192,7 +329,10 @@ try {
       const report = await reportOf(owner);
       expect(report.status.status).toBe("blocked");
       expect(report.status.error).toContain("output capture limit");
-      const log = report.records!.find(CodexLog.is)!.data;
+      const entry = report.records!.find(CodexLog.is)!;
+      const log = entry.data;
+      expect(report.status.error).toContain(`Codex log entry: ${entry.id}`);
+      expect(report.status.error).toContain("output truncated: true");
       expect(log.outputTruncated).toBe(true);
       expect(log.exitCode).toBeNull();
       expect(log.usage).toEqual({ output_tokens: 7 });
@@ -253,6 +393,10 @@ process.kill(process.pid, "SIGTERM");`
         );
       const logs = report.records!.filter(CodexLog.is);
       expect(logs).toHaveLength(1);
+      const request = report.records!.find(CodexRequest.is)!;
+      expect(report.status.error).toContain(`Request entry: ${request.id}`);
+      expect(report.status.error).toContain(`Codex log entry: ${logs[0]!.id}`);
+      expect(report.status.error).toContain(request.data.workspace);
       expect(logs[0]!.data).toMatchObject({
         stdout:
           failure === "signal"

@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   createInitialSystemMessage,
+  createModels,
   fauxAssistantMessage,
+  fauxProvider,
   fauxToolCall,
-  Type,
   type Message,
 } from "@earendil-works/pi-ai";
 import type { GenerationHooks, HookApi } from "@earendil-works/pi-durable";
@@ -14,7 +15,8 @@ import { createRuntime, defaultSettings, readSettings } from "../src/config.ts";
 import { open } from "../src/host.ts";
 import { scanTasks } from "../src/workflow.ts";
 import { explorationSchema, type Note } from "../src/math/contracts.ts";
-import { conversations, modelMessages } from "../src/roles/conversation.ts";
+import { readView } from "../src/math/state.ts";
+import { conversations } from "../src/roles/conversation.ts";
 import { createRoles } from "../src/roles/index.ts";
 import { chatgpt } from "../src/roles/chatgpt.ts";
 import type { RoleRuntime } from "../src/roles/types.ts";
@@ -22,89 +24,142 @@ import type { RoleRuntime } from "../src/roles/types.ts";
 const fixtureFetch = (
   callback: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
 ): typeof fetch => Object.assign(callback, { preconnect: fetch.preconnect });
-const submission = {
-  name: "submit",
-  description: "Submit",
-  parameters: Type.Object(
-    { value: Type.String() },
-    { additionalProperties: false },
-  ),
-};
-const messages = [
-  createInitialSystemMessage("Submit a result", [submission])!,
-  { role: "user" as const, content: "Solve", timestamp: 0 },
-];
-test("role input preserves only valid same-model reasoning and complete tool calls", () => {
-  const runtime = createRuntime(defaultSettings, { key: "fixture" });
-  const model = runtime.models.getModel("openai", "gpt-6-astra")!;
-  const thought = (id: string, status: string | null = "completed") => ({
-    type: "thinking" as const,
-    thinking: id,
-    thinkingSignature: JSON.stringify({
-      type: "reasoning",
-      id,
-      encrypted_content: `encrypted-${id}`,
-      status,
-      summary: [],
+const disconnected =
+  "stream error: stream disconnected before completion: stream closed before response.completed";
+const messages: Message[] = [];
+test("an Explorer continues beyond the retry limit and publishes once in the same worker", async () => {
+  const directory = await temporaryDirectory("explorer-stream-recovery-");
+  const provider = fauxProvider({
+    api: "openai-responses",
+    provider: "openai",
+    models: [{ id: "stream-recovery" }],
+  });
+  const models = createModels();
+  models.setProvider(provider.provider);
+  const draft = {
+    ...selection.notes[0]!,
+    text: "UNCOMMITTED DRAFT",
+    candidate: true,
+  };
+  const complete = { ...draft, text: "Completed proof of reflexivity." };
+  const chunks = 5;
+  const retained: string[] = [];
+  provider.setResponses([
+    ...Array.from(
+      { length: chunks },
+      (_, index) => (input: { messages: Message[] }) => {
+        const text = JSON.stringify(input.messages);
+        for (const previous of retained) expect(text).toContain(previous);
+        expect(
+          input.messages.some((message) => message.role === "toolResult"),
+        ).toBe(false);
+        expect(
+          input.messages
+            .flatMap((message) =>
+              message.role === "assistant" ? message.content : [],
+            )
+            .some((part) => part.type === "toolCall"),
+        ).toBe(false);
+        const proof = `${draft.text}-${index}`;
+        const reasoning = `completed-reasoning-${index}`;
+        retained.push(proof, reasoning);
+        return {
+          ...fauxAssistantMessage(
+            [
+              {
+                type: "thinking",
+                thinking: reasoning,
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: `rs_${index}`,
+                  encrypted_content: `encrypted-${index}`,
+                  status: "completed",
+                  summary: [],
+                }),
+              },
+              fauxToolCall("submit_explorer", {
+                notes: [{ ...draft, text: proof }],
+              }),
+            ],
+            { stopReason: "error", errorMessage: disconnected },
+          ),
+          providerError: {},
+        };
+      },
+    ),
+    (input) => {
+      for (const previous of retained)
+        expect(JSON.stringify(input.messages)).toContain(previous);
+      expect(
+        input.messages.some((message) => message.role === "toolResult"),
+      ).toBe(false);
+      expect(
+        input.messages
+          .filter((message) => message.role === "assistant")
+          .flatMap((message) => message.content)
+          .some((part) => part.type === "toolCall"),
+      ).toBe(false);
+      return fauxAssistantMessage(
+        [fauxToolCall("submit_explorer", { notes: [complete] })],
+        { stopReason: "toolUse" },
+      );
+    },
+  ]);
+  let decisions = 0;
+  const owner = await open(join(directory, "campaign.sqlite"), {
+    models,
+    create: {
+      task,
+      settings: readSettings({
+        research: false,
+        maxExplorerResponses: 1,
+        profiles: { default: { provider: "openai", model: "stream-recovery" } },
+      }),
+    },
+    roles: () => ({
+      coordinator: async () => ({
+        work:
+          decisions++ === 0
+            ? { kind: "explorer", assignment: "Prove reflexivity" }
+            : null,
+      }),
     }),
   });
-  const failed = {
-    ...fauxAssistantMessage(
-      [
-        thought("completed"),
-        thought("completed"),
-        thought("unfinished", "in_progress"),
-        { type: "thinking", thinking: "unsigned" },
-        {
-          type: "thinking",
-          thinking: "malformed",
-          thinkingSignature: "not JSON",
-        },
-        { type: "text", text: "Failed text" },
-        fauxToolCall("submit_proof", { proof: "FAILED_TOOL" }),
-      ],
-      { stopReason: "error" },
-    ),
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-  };
-  const partial = fauxToolCall("submit_proof", { proof: "PARTIAL_TOOL" });
-  const history: Message[] = [
-    ...messages,
-    failed,
-    ...[
-      { api: "other" },
-      { provider: "other" },
-      { model: "other" },
-      { responseModel: "other" },
-    ].map((identity) => ({
-      ...failed,
-      content: [thought("wrong identity")],
-      ...identity,
-    })),
-    {
-      ...failed,
-      stopReason: "length",
-      content: [
-        thought("completed"),
-        thought("continued", null),
-        { type: "text", text: "Preserved text" },
-        partial,
-      ],
-    },
-  ];
-  const original = structuredClone(history);
-  const replay = modelMessages(history, model)
-    .filter((message) => message.role === "assistant")
-    .flatMap((message) => message.content);
-  expect(replay).toEqual([
-    thought("completed"),
-    thought("continued", null),
-    { type: "text", text: "Preserved text" },
-  ]);
-  expect(history).toEqual(original);
-});
+  try {
+    await owner.root.waitForIdle(context);
+    expect(provider.state.callCount).toBe(chunks + 1);
+    await owner.root.commit(async (tx) => {
+      const workers = await scanTasks(tx, owner.root.id, "research.worker");
+      expect(workers).toHaveLength(1);
+      expect(workers[0]!.state.outcome?.status).toBe("completed");
+      const notes = (await readView(tx, owner.root.id)).notes;
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toMatchObject({
+        ...complete,
+        id: `${workers[0]!.id}/n1`,
+      });
+      const children = await tx.scanConversations(
+        { ownerTaskId: workers[0]!.id },
+        10,
+      );
+      expect(children.items).toHaveLength(1);
+      const entries = await tx.scanEntries(
+        { conversationId: children.items[0]!.id },
+        100,
+      );
+      const results = entries.items
+        .flatMap((entry) => entry.model ?? [])
+        .filter((message) => message.role === "toolResult");
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        toolName: "submit_explorer",
+        isError: false,
+      });
+    }, context);
+  } finally {
+    await owner.close();
+  }
+}, 20000);
 
 test("failed assignment reads stop requests before provider dispatch", async () => {
   const runtime = createRuntime(defaultSettings, { key: "fixture" });
@@ -253,13 +308,12 @@ test.each(["new notes", "blind edit"])(
       detailedSummary: "UNREAD DETAIL",
       text: "UNREAD CLAIM\n\nUNREAD FULL PROOF",
       revision: 0,
-      imported: true,
       verified: true,
       dead: false,
       accepted: false,
       retired: false,
       candidate: false,
-      checks: {},
+      checks: { external: { entry: 1 } },
     };
     const answer = {
       notes: selection.notes.map((value) => ({ ...value, support: [note.id] })),

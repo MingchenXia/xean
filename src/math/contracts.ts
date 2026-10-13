@@ -67,17 +67,12 @@ export const noteDraftSchema = object({
   ...noteContentSchema.properties,
   support: Type.Array(text),
   candidate: Type.Optional(Type.Boolean()),
+  retired: Type.Optional(Type.Boolean()),
 });
 const revision = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 export const noteEditSchema = object({
   id: text,
   revision,
-  cosmetic: Type.Optional(
-    Type.Boolean({
-      description:
-        "Trusted presentation-only text change preserving mathematical content. Omit or use false for mathematical edits. Support changes always require verification.",
-    }),
-  ),
   ...Type.Partial(noteContentSchema).properties,
   support: Type.Optional(Type.Array(text)),
   candidate: noteDraftSchema.properties.candidate,
@@ -205,15 +200,14 @@ export type Check = Static<typeof checkSchema>;
 /** Published IDs include their worker/input prefix; draft IDs are local. */
 export type Note = Exploration["notes"][number] & {
   revision: number;
-  imported: boolean;
-  checks: Omit<Check, "noteId" | "correction">;
+  checks: Omit<Check, "noteId" | "correction"> & {
+    external?: { entry: number };
+  };
   verified: boolean;
   dead: boolean;
   accepted: boolean;
   candidate: boolean;
   retired: boolean;
-  /** Native publication marker for relevant mathematical changes. */
-  mathRevision?: number;
   /** New quotations for the exact premises since the last source assessment. */
   sourceChanged?: boolean;
 };
@@ -229,10 +223,19 @@ export const verificationStages = [
 ] as const;
 export type VerificationStage = (typeof verificationStages)[number];
 export const verificationStageSchema = StringEnum(verificationStages);
+export const verificationBackendSchema = StringEnum(
+  ["native", "codex"] as const,
+  {
+    description:
+      "Use codex when checking existing claims needs code or artifact access. It can execute checks and issue mathematical verdicts. Native is the default reasoning verifier.",
+  },
+);
+export type VerificationBackend = Static<typeof verificationBackendSchema>;
 export const verifyPlan = object({
   kind: Type.Literal("verifier"),
   notes: Type.Array(text, { minItems: 1, uniqueItems: true }),
   through: verificationStageSchema,
+  backend: Type.Optional(verificationBackendSchema),
 });
 export const literaturePlan = object({
   kind: Type.Literal("literature"),
@@ -241,7 +244,7 @@ export const literaturePlan = object({
 export const codexPlan = object({
   kind: Type.Literal("codex", {
     description:
-      "Use Codex rarely for a concrete implementation needed by the mathematical task. Explorer handles mathematical reasoning. Codex writes and runs programs and returns ordinary unverified notes with retained artifacts.",
+      "Use Codex rarely for a concrete implementation needed by the mathematical task. Explorer handles mathematical reasoning. Codex writes and runs programs and returns ordinary unverified notes with retained artifacts. To issue mathematical verdicts on existing notes, select verifier with backend codex instead.",
   }),
   assignment: Type.String({
     minLength: 1,
@@ -265,23 +268,37 @@ export const planSchema = (capabilities: {
   literature: boolean;
   codex: boolean;
   explorer: boolean;
+  codexVerifier?: boolean;
 }) =>
   object({
-    work: Type.Union([
-      Type.Union(
-        workPlan.anyOf.filter(
+    work: Type.Unsafe<Static<typeof workPlan> | null>(
+      Type.Union([
+        object({
+          ...verifyPlan.properties,
+          backend: Type.Optional(
+            capabilities.codexVerifier
+              ? verificationBackendSchema
+              : Type.Literal("native"),
+          ),
+        }),
+        ...workPlan.anyOf.filter(
           (plan) =>
-            plan.properties.kind.const === "verifier" ||
+            plan.properties.kind.const !== "verifier" &&
             capabilities[plan.properties.kind.const],
         ),
-      ) as typeof workPlan,
-      Type.Null(),
-    ]),
+        Type.Null(),
+      ]),
+    ),
   });
 export type Plan = Static<ReturnType<typeof planSchema>>;
 export const submissionSchemas = {
   explorer: explorationSchema,
-  coordinator: planSchema({ explorer: true, literature: true, codex: true }),
+  coordinator: planSchema({
+    explorer: true,
+    literature: true,
+    codex: true,
+    codexVerifier: true,
+  }),
   correctness: batchSchema(correctnessSchema),
   requirements: batchSchema(verdictSchema),
   proof: batchSchema(proofSchema),
@@ -293,13 +310,16 @@ export type NoteInfo = Pick<
   | "id"
   | "summary"
   | "support"
-  | "imported"
   | "verified"
   | "dead"
   | "candidate"
   | "revision"
   | "retired"
-> & { passed: VerificationStage[]; feedback: string[] };
+> & {
+  external?: { entry: number };
+  passed: VerificationStage[];
+  feedback: string[];
+};
 export type ExplorerInput = SolverInput & {
   assignment: string;
 };
@@ -308,8 +328,12 @@ export type VerifierInput = SolverInput & {
   targets: string[];
   through: VerificationStage;
   evidence?: SourceEvidence[];
+  backend?: VerificationBackend;
 };
-export type ReconstructionInput = SolverInput & { targets: string[] };
+export type ReconstructionInput = SolverInput & {
+  targets: string[];
+  backend?: VerificationBackend;
+};
 export const solverResultSchema = Type.Union([
   object({
     kind: Type.Literal("notes"),

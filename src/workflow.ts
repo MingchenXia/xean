@@ -29,7 +29,7 @@ import {
 } from "./math/state.ts";
 import { readCommand } from "./math/commands.ts";
 import { readDefinition } from "./definition.ts";
-import { resolveResult } from "./math/results.ts";
+import type { PublishedResult } from "./math/results.ts";
 import {
   RoleFailure,
   type NoteReference,
@@ -209,7 +209,13 @@ export function createResearch(roles: Roles) {
           const control = await tx.doc(Control, task.conversationId);
           if (control.accepted !== null || control.cancelled)
             return { status: "terminal", outcome: { status: "aborted" } };
-          if (!("standalone" in task.input) && outcome.result !== undefined)
+          const result = outcome.result as
+            SolverResult | PublishedResult | undefined;
+          if (
+            !("standalone" in task.input) &&
+            outcome.result !== undefined &&
+            result?.kind !== "published"
+          )
             await publishResult(
               tx,
               task.conversationId,
@@ -306,12 +312,8 @@ export function createResearch(roles: Roles) {
               request,
             };
             if (index >= records.length - 4 && outcome?.result !== undefined) {
-              const result = (await resolveResult(
-                tx,
-                outcome.result,
-                worker.id,
-              )) as SolverResult;
-              if (result?.kind === "notes")
+              const result = outcome.result as SolverResult | PublishedResult;
+              if (result?.kind === "notes" || result?.kind === "published")
                 summary.result = {
                   notes: result.notes.length,
                   edits: result.edits?.length ?? 0,

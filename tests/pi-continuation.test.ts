@@ -23,15 +23,25 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { temporaryDirectory } from "./directory.ts";
 
-const limitResponse = (
+const incompleteResponse = (
   content: readonly AssistantMessage["content"][number][],
   reason = "max_output_tokens",
-): AssistantMessage => ({
-  ...fauxAssistantMessage([...content], { stopReason: "length" }),
-  rawStopReason: `incomplete.${reason}`,
-});
+): AssistantMessage =>
+  reason === "disconnect"
+    ? {
+        ...fauxAssistantMessage([...content], {
+          stopReason: "error",
+          errorMessage:
+            "stream error: stream disconnected before completion: stream closed before response.completed",
+        }),
+        providerError: {},
+      }
+    : {
+        ...fauxAssistantMessage([...content], { stopReason: "length" }),
+        rawStopReason: `incomplete.${reason}`,
+      };
 
-async function fixture(steps: FauxResponseStep[]) {
+async function fixture(steps: FauxResponseStep[], retry = false) {
   const directory = await temporaryDirectory("pi-continuation-");
   const path = join(directory, "native.sqlite");
   const provider = fauxProvider({
@@ -46,7 +56,7 @@ async function fixture(steps: FauxResponseStep[]) {
   const tool = defineTool({
     name: "effect",
     description: "Must not execute from truncated output",
-    parameters: Type.Object({}),
+    parameters: Type.Object({ value: Type.String() }),
     replay: "safe",
     execute: async () => {
       toolCalls++;
@@ -61,7 +71,11 @@ async function fixture(steps: FauxResponseStep[]) {
         registry,
         models: authenticated ? models : createModels(),
         settings: {
-          retry: { enabled: false, maxRetries: 0, baseDelayMs: 60000 },
+          retry: {
+            enabled: retry,
+            maxRetries: 2,
+            baseDelayMs: retry ? 0 : 60000,
+          },
           compaction: { enabled: false },
         },
       },
@@ -93,8 +107,9 @@ async function assistants(root: Conversation) {
 test.each([
   { reason: "max_messages", chunks: 10 },
   { reason: "max_output_tokens", chunks: 1 },
+  { reason: "disconnect", chunks: 5 },
 ])(
-  "native Pi continues limit responses with retry disabled (%j)",
+  "native Pi continues incomplete responses with retry disabled (%j)",
   async ({ reason, chunks }) => {
     const seen: string[] = [];
     const current = await fixture([
@@ -106,7 +121,7 @@ test.each([
         const token = `progress-${i}`;
         const thinking = `reasoning-${i}`;
         seen.push(token, thinking);
-        return limitResponse(
+        return incompleteResponse(
           [
             { type: "text", text: token },
             { type: "thinking", thinking },
@@ -136,7 +151,12 @@ test.each([
       expect(current.provider.state.callCount).toBe(chunks + 1);
       expect(current.toolCalls).toBe(0);
       const raw = await assistants(root);
-      expect(raw.filter((m) => m.stopReason === "length")).toHaveLength(chunks);
+      expect(
+        raw.filter(
+          (m) =>
+            m.stopReason === (reason === "disconnect" ? "error" : "length"),
+        ),
+      ).toHaveLength(chunks);
       expect(
         raw.flatMap((m) => m.content).filter((p) => p.type === "toolCall"),
       ).toHaveLength(chunks);
@@ -169,52 +189,55 @@ test.each([
   },
 );
 
-test("a completed encrypted reasoning item suffices for native continuation", async () => {
-  const signature = JSON.stringify({
-    type: "reasoning",
-    id: "rs_complete",
-    encrypted_content: "fixture-opaque",
-    summary: [],
-  });
-  const current = await fixture([
-    limitResponse(
-      [{ type: "thinking", thinking: "", thinkingSignature: signature }],
-      "max_messages",
-    ),
-    (input) => {
-      expect(
-        input.messages.some(
-          (m) =>
-            m.role === "assistant" &&
-            m.content.some(
-              (p) => p.type === "thinking" && p.thinkingSignature === signature,
-            ),
-        ),
-      ).toBe(true);
-      return fauxAssistantMessage("Finished");
-    },
-  ]);
-  const { harness, root } = await current.open();
-  try {
-    const submission = await root.submit(
-      { type: "input", content: "Continue" },
-      context,
-    );
-    expect((await submission.wait(context)).status).toBe("done");
-    expect(current.provider.state.callCount).toBe(2);
-  } finally {
-    await harness.close(context);
-  }
-});
+test.each(["max_messages", "disconnect"])(
+  "completed encrypted reasoning suffices for native continuation: %s",
+  async (reason) => {
+    const signature = JSON.stringify({
+      type: "reasoning",
+      id: "rs_complete",
+      encrypted_content: "fixture-opaque",
+      summary: [],
+    });
+    const current = await fixture([
+      incompleteResponse(
+        [{ type: "thinking", thinking: "", thinkingSignature: signature }],
+        reason,
+      ),
+      (input) => {
+        expect(
+          input.messages.some(
+            (m) =>
+              m.role === "assistant" &&
+              m.content.some(
+                (p) =>
+                  p.type === "thinking" && p.thinkingSignature === signature,
+              ),
+          ),
+        ).toBe(true);
+        return fauxAssistantMessage("Finished");
+      },
+    ]);
+    const { harness, root } = await current.open();
+    try {
+      const submission = await root.submit(
+        { type: "input", content: "Continue" },
+        context,
+      );
+      expect((await submission.wait(context)).status).toBe("done");
+      expect(current.provider.state.callCount).toBe(2);
+    } finally {
+      await harness.close(context);
+    }
+  },
+);
 
 test.each([
   { content: [] },
   { content: [{ type: "text" as const, text: " " }] },
-  { content: [fauxToolCall("effect", {})] },
 ])(
   "an output limit with no resumable content fails without spinning (%j)",
   async ({ content }) => {
-    const current = await fixture([limitResponse(content)]);
+    const current = await fixture([incompleteResponse(content)]);
     const { harness, root } = await current.open();
     try {
       const submission = await root.submit(
@@ -236,9 +259,104 @@ test.each([
   },
 );
 
+test.each([false, true])(
+  "empty disconnected responses obey bounded retry policy after retained progress: %s",
+  async (retry) => {
+    const attempts = retry ? 3 : 1;
+    const current = await fixture(
+      [
+        incompleteResponse([
+          { type: "text", text: "Earlier retained progress" },
+        ]),
+        ...Array.from({ length: attempts }, () =>
+          incompleteResponse([], "disconnect"),
+        ),
+        fauxAssistantMessage("Must not reach this response"),
+      ],
+      retry,
+    );
+    const { harness, root } = await current.open();
+    try {
+      const submission = await root.submit(
+        { type: "input", content: "Continue" },
+        context,
+      );
+      expect(await submission.wait(context)).toMatchObject({
+        status: "unanswered",
+        reason: "model_error",
+      });
+      expect(current.provider.state.callCount).toBe(attempts + 1);
+      expect(current.toolCalls).toBe(0);
+      const raw = await assistants(root);
+      expect(raw.filter((m) => m.stopReason === "error")).toHaveLength(
+        attempts,
+      );
+      expect(raw[0]?.content).toEqual([
+        { type: "text", text: "Earlier retained progress" },
+      ]);
+    } finally {
+      await harness.close(context);
+    }
+  },
+);
+
+test.each(["max_output_tokens", "disconnect"])(
+  "incomplete tool drafts execute only a complete subsequent call: %s",
+  async (reason) => {
+    const draft = fauxToolCall(
+      "effect",
+      { value: "partial draft" },
+      { id: "draft" },
+    );
+    const complete = fauxToolCall(
+      "effect",
+      { value: "completed draft" },
+      { id: "complete" },
+    );
+    const current = await fixture([
+      incompleteResponse([draft], reason),
+      (input) => {
+        expect(current.toolCalls).toBe(0);
+        expect(
+          input.messages.some((message) => message.role === "toolResult"),
+        ).toBe(false);
+        const content = input.messages.flatMap((message) =>
+          message.role === "assistant" ? message.content : [],
+        );
+        expect(content.some((part) => part.type === "toolCall")).toBe(false);
+        expect(content).toContainEqual({
+          type: "text",
+          text: expect.stringContaining(JSON.stringify(draft.arguments)),
+        });
+        return fauxAssistantMessage([complete], { stopReason: "toolUse" });
+      },
+      (input) => {
+        expect(current.toolCalls).toBe(1);
+        expect(
+          input.messages.filter((message) => message.role === "toolResult"),
+        ).toMatchObject([{ toolCallId: "complete", isError: false }]);
+        return fauxAssistantMessage("Finished");
+      },
+    ]);
+    const { harness, root } = await current.open();
+    try {
+      const submission = await root.submit(
+        { type: "input", content: "Finish the tool call" },
+        context,
+      );
+      expect((await submission.wait(context)).status).toBe("done");
+      expect(current.provider.state.callCount).toBe(3);
+      expect(current.toolCalls).toBe(1);
+      expect((await assistants(root))[0]?.content).toEqual([draft]);
+    } finally {
+      await harness.close(context);
+    }
+  },
+);
+
 test("native continuation survives interruption at its atomic handoff", async () => {
   const current = await fixture([
-    limitResponse([{ type: "text", text: "Durable partial proof" }]),
+    incompleteResponse([{ type: "text", text: "Durable partial proof" }]),
   ]);
   const { harness, root } = await current.open();
   const closed = Promise.withResolvers<void>();
@@ -294,7 +412,7 @@ test("continuation retains steering and defers follow-up until the complete answ
     async () => {
       started.resolve();
       await release.promise;
-      return limitResponse([{ type: "text", text: "Partial" }]);
+      return incompleteResponse([{ type: "text", text: "Partial" }]);
     },
     (input) => {
       const text = JSON.stringify(input.messages);
@@ -343,7 +461,7 @@ test("a queued reset ends the incomplete submission and starts fresh context", a
     async () => {
       started.resolve();
       await release.promise;
-      return limitResponse([
+      return incompleteResponse([
         { type: "text", text: "Discarded partial context" },
       ]);
     },
@@ -381,12 +499,12 @@ test("a queued reset ends the incomplete submission and starts fresh context", a
   }
 });
 
-test.each(["cancel", "terminal_error"])(
+test.each(["cancel", "authentication_error", "insufficient_quota"])(
   "a native continuation respects %s",
   async (mode) => {
     const started = Promise.withResolvers<void>();
     const current = await fixture([
-      limitResponse([{ type: "text", text: "Retained progress" }]),
+      incompleteResponse([{ type: "text", text: "Retained progress" }]),
       async (_input, options) => {
         started.resolve();
         if (mode === "cancel")
@@ -397,10 +515,17 @@ test.each(["cancel", "terminal_error"])(
                 once: true,
               });
           });
-        return fauxAssistantMessage([], {
-          stopReason: mode === "cancel" ? "aborted" : "error",
-          errorMessage: "authentication_error: fixture",
-        });
+        return fauxAssistantMessage(
+          [
+            { type: "text", text: "Terminal partial draft" },
+            { type: "thinking", thinking: "Terminal partial reasoning" },
+            fauxToolCall("effect", { value: "must never execute" }),
+          ],
+          {
+            stopReason: mode === "cancel" ? "aborted" : "error",
+            errorMessage: `${mode}: stream disconnected before completion`,
+          },
+        );
       },
     ]);
     const { harness, root } = await current.open();
@@ -416,6 +541,7 @@ test.each(["cancel", "terminal_error"])(
         reason: mode === "cancel" ? "aborted" : "model_error",
       });
       expect(current.provider.state.callCount).toBe(2);
+      expect(current.toolCalls).toBe(0);
       expect(
         (await assistants(root)).some((m) =>
           m.content.some(

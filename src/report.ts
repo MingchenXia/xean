@@ -16,7 +16,7 @@ import {
   type WorkerInput,
 } from "./workflow.ts";
 import { readView } from "./math/state.ts";
-import { resolveResult } from "./math/results.ts";
+import { publicationResult, type PublishedResult } from "./math/results.ts";
 import { closure } from "./math/argument.ts";
 import { stagePassed } from "./math/notes.ts";
 import { verificationStages, type SolverResult } from "./math/contracts.ts";
@@ -173,11 +173,15 @@ async function readOverview(
       task.state.outcome.result !== undefined &&
       (task.state.outcome.status === "completed" ||
         task.state.outcome.status === "failed")
-        ? ((request || task === standalone
-            ? await resolveResult(tx, task.state.outcome.result, task.id)
-            : task.state.outcome.result) as unknown as SolverResult)
+        ? (task.state.outcome.result as SolverResult | PublishedResult)
         : undefined;
     if (task === standalone) standaloneResult = result as JsonValue | undefined;
+    const publication =
+      result?.kind === "notes" && request
+        ? publicationResult([result], task.id)
+        : result?.kind === "published"
+          ? result
+          : undefined;
     const limit =
       (request?.kind ?? definition.mode?.role) === "explorer" &&
       task.state.outcome?.status === "completed"
@@ -203,18 +207,11 @@ async function readOverview(
         details && request && "assignment" in request
           ? request.assignment
           : null,
-      noteIds: !request
-        ? []
-        : result?.kind === "verification"
+      noteIds: publication
+        ? [...new Set([...publication.notes, ...publication.edits])]
+        : request && result?.kind === "verification"
           ? result.checks.map((check) => check.noteId)
-          : result?.kind === "notes"
-            ? [
-                ...new Set([
-                  ...result.notes.map((note) => `${task.id}/${note.id}`),
-                  ...(result.edits ?? []).map((edit) => edit.id),
-                ]),
-              ]
-            : [],
+          : [],
       checkCount: result?.kind === "verification" ? result.checks.length : 0,
     };
   };
@@ -271,9 +268,7 @@ async function readOverview(
   const issues = closure([...candidates], view.notes).flatMap((note) =>
     verificationStages.flatMap((stage) => {
       if (
-        (!candidates.has(note.id) &&
-          (stage === "requirements" ||
-            (stage === "reconstruction" && note.imported))) ||
+        (!candidates.has(note.id) && stage === "requirements") ||
         stagePassed(note, stage)
       )
         return [];
@@ -321,7 +316,7 @@ async function readOverview(
     })),
     notes: {
       total: view.notes.length,
-      imported: view.notes.filter((note) => note.imported).length,
+      trusted: view.notes.filter((note) => note.checks.external).length,
       verified: view.notes.filter((note) => note.verified).length,
       dead: view.notes.filter((note) => note.dead).length,
       candidates: view.notes.filter((note) => note.candidate).length,

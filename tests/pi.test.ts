@@ -22,6 +22,7 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
+  continuationContent,
   createSession,
   defineDoc,
   SessionFailed,
@@ -148,6 +149,9 @@ test("a retained retired watch releases its obsolete document tracker", async ()
     watch.start(async () => {});
     await session.commit((tx) => tx.retireDoc(Doc), context);
     await expect(watch.closed).resolves.toEqual({ reason: "retired" });
+    await session.commit(async (tx) => {
+      await tx.doc(Doc);
+    }, context);
     await setImmediate();
     Bun.gc(true);
     expect(ref.deref()).toBeUndefined();
@@ -463,6 +467,71 @@ test.each([false, true])(
   },
 );
 
+test("Anthropic disconnects retain signatures only after a completed thinking block", async () => {
+  const original = globalThis.fetch;
+  const provider = anthropicProvider();
+  const selected = provider.getModels().find((model) => model.reasoning)!;
+  const thinking = { type: "thinking" as const, thinking: "Partial reasoning" };
+  const signature = "TRUNCATED_SIGNATURE_PREFIX";
+  try {
+    for (const completed of [false, true]) {
+      globalThis.fetch = mockFetch(async () =>
+        sse([
+          {
+            type: "message_start",
+            message: {
+              id: "fixture",
+              model: selected.id,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "", signature: "" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: thinking.thinking },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "signature_delta", signature },
+          },
+          ...(completed ? [{ type: "content_block_stop", index: 0 }] : []),
+          {
+            type: "error",
+            error: {
+              type: "api_error",
+              message: "stream disconnected before completion",
+            },
+          },
+        ]),
+      );
+      const result = await provider
+        .streamSimple(selected, transcript, {
+          apiKey: "fixture",
+          maxRetries: 0,
+        })
+        .result();
+      expect(result.stopReason).toBe("error");
+      expect(isRetryableAssistantError(result)).toBe(true);
+      expect(result.content).toEqual([
+        completed ? { ...thinking, thinkingSignature: signature } : thinking,
+      ]);
+      expect(continuationContent(result)).toEqual([
+        completed
+          ? { ...thinking, thinkingSignature: signature }
+          : { type: "text", text: thinking.thinking },
+      ]);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("HTTP status survives adapter catches for native retry classification", async () => {
   const original = globalThis.fetch;
   try {
@@ -579,6 +648,8 @@ test("terminal usage distinguishes zero from absence without backfilling failed 
 });
 
 test("Codex preserves account limits and classifies transient failures", async () => {
+  const disconnected =
+    "stream error: stream disconnected before completion: stream closed before response.completed";
   for (const [status, code, retry] of [
     [429, "usage_limit_reached", false],
     [429, "usage_not_included", false],
@@ -626,11 +697,33 @@ test("Codex preserves account limits and classifies transient failures", async (
     ["Upstream closed stream without completion", true],
     ["stream_incomplete", true],
     ["Previous response owner account is unavailable", true],
+    [disconnected, true],
+    [
+      "OpenAI Responses stream completed with an unfinished tool call: submit_explorer (call_fixture)",
+      true,
+    ],
+    ["No response body", true],
+    ...[
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "EPIPE",
+      "UND_ERR_SOCKET",
+    ].map((code) => [code, true] as const),
+    [
+      "invalid_request_error: OpenAI Responses stream completed with an unfinished tool call: submit_explorer (call_fixture)",
+      false,
+    ],
+    ["context_length_exceeded: No response body", false],
+    [`authentication_error: ${disconnected}`, false],
+    [`permission_denied: ${disconnected}`, false],
+    [`insufficient_quota: ${disconnected}`, false],
   ] as const)
     expect(
-      isRetryableAssistantError(
-        fauxAssistantMessage([], { stopReason: "error", errorMessage }),
-      ),
+      isRetryableAssistantError({
+        ...fauxAssistantMessage([], { stopReason: "error", errorMessage }),
+        providerError: {},
+      }),
     ).toBe(retry);
 });
 

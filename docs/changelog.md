@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.4.0 — Unreleased
+
+Explorer publishes each submission while continuing its conversation. Caller
+notes and model-generated notes share verification rules, with external trust
+recorded as evidence.
+
+### Notebook and verification
+
+- Each native Explorer submission atomically commits its notes, edits, and replay
+  receipt. Explorer can read and edit those notes immediately. Later failure or
+  cancellation retains committed batches. Coordinator waits for the worker to
+  finish before choosing again.
+- External trust in `checks.external` references a Pi input entry and replaces
+  the `imported` flag. Dependencies still require verification. All notes require
+  faithful statement preparation and reconstruction before final acceptance.
+- Caller submissions accept `trusted` per note or edit. New notes default to
+  trusted, and edits preserve existing trust when omitted. `submit --untrusted`
+  overrides every supplied note and edit. Trust changes invalidate affected checks.
+- Notes use one revision field. The `cosmetic` edit flag is removed. Mathematical
+  edits reopen affected checks. Candidate and retirement flags only advance the
+  revision. Custom replacement roles return ordinary results, replacing the
+  private `{ kind: "submissions", entries }` format.
+- With `settings.codex` enabled, Coordinator can select Codex for verification
+  using retained workspaces and execution evidence. It can reassess INCONCLUSIVE
+  mathematical checks. PASS and FAIL stay closed for unchanged inputs.
+
+### Pi and recovery
+
+- Pi moves to the official 1.2.0 release. Xean uses Pi's context projection with
+  the retained continuation patch. Artifact and patch hashes remain in
+  [Pi provenance](../vendor/pi/provenance.json).
+- Retryable provider failures with reusable text, reasoning, or tool arguments
+  continue the same submission. Empty retryable failures use bounded retries.
+  Incomplete tools never execute. Context and completed-response limits remain.
+- Codex implementation, verification, and research share an executor. Completed
+  requests are memoized within the worker. Interrupted calls restart in fresh
+  workspaces.
+
+### Compatibility
+
+- Notebook and role-conversation document formats have changed. Start fresh
+  campaigns and retain earlier campaigns' frozen runtimes. No migration is provided.
+
 ## 3.3.0 — 2026-10-12
 
 Pi continues incomplete model responses within the same submission, preserving

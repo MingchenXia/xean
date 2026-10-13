@@ -1,8 +1,36 @@
+diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
+index 80e15fe..38804b4 100644
+--- a/dist/harness/context.d.ts
++++ b/dist/harness/context.d.ts
+@@ -1,8 +1,13 @@
+ import type { Context } from "@earendil-works/chord";
+-import type { Message } from "@earendil-works/pi-ai";
++import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+ import type { SessionImpl } from "../session/session.ts";
+ import type { ConversationId, EntryId, EntryRecord, Storage } from "../types.ts";
+ import type { ContextView } from "./types.ts";
++/** Reusable output from an interrupted response; tool drafts are text, never executable calls. */
++export declare function continuationContent(message: AssistantMessage): AssistantMessage["content"];
++/** Identity of a completed, replayable OpenAI Responses reasoning item. */
++export declare function responsesReasoningId(part: AssistantMessage["content"][number]): string | undefined;
++export declare function isIncompleteResponse(message: AssistantMessage): boolean;
+ /** Head marker and newest visible entry that fix one committed context range. */
+ export type ContextBounds = {
+     readonly head: (EntryRecord & {
 diff --git a/dist/harness/context.js b/dist/harness/context.js
-index 8675a14..2ffa5fa 100644
+index 8675a14..f32c9ca 100644
 --- a/dist/harness/context.js
 +++ b/dist/harness/context.js
-@@ -127,7 +127,22 @@ function contribute(entry, edit) {
+@@ -1,4 +1,8 @@
+ import { idFromNumber } from "../ids.js";
++import { Type } from "typebox";
++import { Check } from "typebox/value";
++import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
++import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
+ const SCAN_PAGE_SIZE = 256;
+ const EXCLUDED_STOP_REASONS = new Set(["aborted", "error", "deferred"]);
+ const MISSING_RESULT_TEXT = "Tool result unavailable: history ends before this call completed.";
+@@ -127,7 +131,48 @@ function contribute(entry, edit) {
      if (edit?.action === "omit")
          return Object.freeze([]);
      const contributed = edit?.action === "replace" ? edit.messages : (entry.model ?? []);
@@ -10,31 +38,57 @@ index 8675a14..2ffa5fa 100644
 +    return Object.freeze(contributed.flatMap((message) => {
 +        if (message.role !== "assistant")
 +            return [message];
-+        if (EXCLUDED_STOP_REASONS.has(message.stopReason))
-+            return [];
-+        if (message.stopReason !== "length")
-+            return [message];
++        if (!isIncompleteResponse(message))
++            return EXCLUDED_STOP_REASONS.has(message.stopReason) ? [] : [message];
 +        const content = continuationContent(message);
-+        return content.length === 0 ? [] : [freezeJson({ ...message, content })];
++        return content.length === 0 ? [] : [freezeJson({ ...message, content, stopReason: "length" })];
 +    }));
 +}
-+/** Reusable output from a truncated response. Tool calls remain only in the raw journal. */
++export function isIncompleteResponse(message) {
++    return message.stopReason === "length" || (isRetryableAssistantError(message) && !isContextOverflow(message));
++}
++const reasoningItem = Type.Object({
++    type: Type.Literal("reasoning"),
++    id: Type.String({ minLength: 1 }),
++    encrypted_content: Type.String({ minLength: 1 }),
++    status: Type.Optional(Type.Union([Type.Literal("completed"), Type.Null()])),
++    summary: Type.Array(Type.Object({ type: Type.Literal("summary_text"), text: Type.String() })),
++});
++/** Identity of a completed, replayable OpenAI Responses reasoning item. */
++export function responsesReasoningId(part) {
++    if (part.type === "thinking" && part.thinkingSignature) {
++        try {
++            const item = JSON.parse(part.thinkingSignature);
++            if (Check(reasoningItem, item)) return item.id;
++        } catch {}
++    }
++}
++/** Reusable output from an interrupted response; tool drafts are text, never executable calls. */
 +export function continuationContent(message) {
-+    return message.content.filter((part) => part.type === "text"
++    const responses = ["openai-responses", "openai-codex-responses"].includes(message.api);
++    const sameResponseModel = message.responseModel === undefined || message.responseModel === message.model;
++    return message.content.map((part) => {
++        if (part.type === "toolCall")
++            return { type: "text", text: `Unexecuted tool draft (possibly incomplete) for ${part.name}:\n${JSON.stringify(part.arguments)}\nReissue the complete tool call to execute it.` };
++        if (part.type === "text") return { type: "text", text: part.text };
++        if (part.type === "thinking" && !part.redacted && !(sameResponseModel && (responses ? responsesReasoningId(part) : part.thinkingSignature)))
++            return { type: "text", text: part.thinking };
++        return part;
++    }).filter((part) => part.type === "text"
 +        ? part.text.trim().length > 0
-+        : part.type === "thinking" && (part.thinking.trim().length > 0 || Boolean(part.thinkingSignature)));
++        : part.type === "thinking" && (!part.redacted || sameResponseModel) && (part.thinking.trim().length > 0 || Boolean(part.thinkingSignature)));
  }
  /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
  const deeplyFrozen = new WeakSet();
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 136bed4..bc7e8ec 100644
+index 136bed4..5963691 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
 @@ -6,6 +6,7 @@ import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.j
  import { defineTask } from "../tasks.js";
  import { addTools } from "./agent.js";
  import { createCompaction, estimateContext, selectCut } from "./compaction.js";
-+import { continuationContent } from "./context.js";
++import { continuationContent, isIncompleteResponse } from "./context.js";
  import { applyBoundary, prepareBoundary } from "./inbox.js";
  import { assignJson } from "./json.js";
  import { endRun, LiveDoc } from "./live.js";
@@ -80,32 +134,34 @@ index 136bed4..bc7e8ec 100644
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
              // never gets past it, so it never leaves a partial.
-@@ -355,11 +357,12 @@ async function classify(runtime, request, message, context) {
+@@ -355,12 +357,13 @@ async function classify(runtime, request, message, context) {
          return;
      }
      await runtime.hooks.each("afterResponse", (hook) => hook(message, runtime, context));
-+    const emptyLimit = message.stopReason === "length" && continuationContent(message).length === 0;
++    const incomplete = isIncompleteResponse(message) && continuationContent(message).length > 0;
      const calls = message.content.filter((content) => content.type === "toolCall");
      if (message.stopReason === "toolUse" && calls.length > 0) {
          return startToolRound(runtime, request, message, calls, context);
      }
 -    if (message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse") {
-+    if (!emptyLimit && (message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse")) {
-         return answer(runtime, message, context);
+-        return answer(runtime, message, context);
++    if (incomplete || message.stopReason === "stop" || message.stopReason === "toolUse") {
++        return answer(runtime, message, context, incomplete);
      }
      // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
+     const settings = runtime.settings;
 @@ -402,7 +405,9 @@ async function classify(runtime, request, message, context) {
              };
              return { status: "running", checkpoint };
          }
 -        const text = message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
-+        const text = emptyLimit
++        const text = message.stopReason === "length"
 +            ? "Model response reached its output limit without resumable text or reasoning"
 +            : message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
          endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "model_error", detail: text });
          return {
              status: "terminal",
-@@ -411,12 +416,15 @@ async function classify(runtime, request, message, context) {
+@@ -411,12 +416,14 @@ async function classify(runtime, request, message, context) {
      }, context);
  }
  /**
@@ -116,16 +172,16 @@ index 136bed4..bc7e8ec 100644
 + * reaches the final boundary; its first `onYield` continuation keeps the run only when no user item or reset intervenes.
 + * Both use the ordinary atomic handoff to a successor generation. A reset ends a truncated run without an answer.
   */
- async function answer(runtime, message, context) {
+-async function answer(runtime, message, context) {
 -    let continuation;
-+    const incomplete = message.stopReason === "length";
++async function answer(runtime, message, context, incomplete) {
 +    let continuation = incomplete
 +        ? "Continue from the preceding incomplete response. Finish the response; reissue any incomplete tool call with complete arguments."
 +        : undefined;
      await runtime.hooks.each("onYield", async (hook) => {
          if (continuation !== undefined)
              return;
-@@ -429,15 +437,19 @@ async function answer(runtime, message, context) {
+@@ -429,15 +436,19 @@ async function answer(runtime, message, context) {
          const live = await tx.doc(LiveDoc, conversationId);
          const entry = await appendAssistant(tx, conversationId, message);
          const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
@@ -180,6 +236,30 @@ index ea3adc9..bec59c2 100644
      }>;
      /** Every terminal provider message, before classification. */
      afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 47a494d..8cff5a7 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -3,6 +3,7 @@ export { AssistantEntry, CompactionEntry, defineEntry, ResetEntry, SystemEntry,
+ export { ConversationBusy, ReadAfterWrite, SessionFailed, StorageRequestError } from "./errors.ts";
+ export { AgentDoc, configure, DEFAULT_COMPACTION_POLICY, DEFAULT_PROGRESS_POLICY, DEFAULT_RETRY_POLICY, } from "./harness/agent.ts";
+ export { type CompactionCheckpoint, type CompactionInput, CompactionTask, type SummaryRequest, } from "./harness/compaction.ts";
++export { continuationContent, responsesReasoningId } from "./harness/context.ts";
+ export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.ts";
+ export { type AgentEvent, type AgentEventStream, type MessageChange, type SnapshotEvent, type ToolEventCall, watchEvents, } from "./harness/events.ts";
+ export { type GenerationCheckpoint, type GenerationInput, type GenerationResult, GenerationTask, } from "./harness/generation.ts";
+diff --git a/dist/index.js b/dist/index.js
+index aed8e9d..4c165bd 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3,6 +3,7 @@ export { AssistantEntry, CompactionEntry, defineEntry, ResetEntry, SystemEntry,
+ export { ConversationBusy, ReadAfterWrite, SessionFailed, StorageRequestError } from "./errors.js";
+ export { AgentDoc, configure, DEFAULT_COMPACTION_POLICY, DEFAULT_PROGRESS_POLICY, DEFAULT_RETRY_POLICY, } from "./harness/agent.js";
+ export { CompactionTask, } from "./harness/compaction.js";
++export { continuationContent, responsesReasoningId } from "./harness/context.js";
+ export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.js";
+ export { watchEvents, } from "./harness/events.js";
+ export { GenerationTask, } from "./harness/generation.js";
 diff --git a/dist/session/session.js b/dist/session/session.js
 index 7b7c028..89a6658 100644
 --- a/dist/session/session.js

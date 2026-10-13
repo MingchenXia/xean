@@ -6,15 +6,18 @@ the latest release. Proposed changes are in the [milestones](milestones.md).
 
 ## Can Xean write and run code?
 
-The built-in Explorer and Verifier reason about mathematics and read notes.
-They have no shell or code-execution tools. Xean supports two ways to work:
+Explorer and the native Verifier reason about mathematics without shell or
+code-execution tools. Configuring `codex` lets Coordinator delegate computation
+and select a Codex Verifier:
 
 - **Reasoning without program execution:** leave `codex` unset in settings.
   Explorer develops arguments and Verifier checks them.
 - **Reasoning with delegated computation:** configure `codex`. Coordinator can
   assign a concrete implementation or computation to a Codex worker, supplying
   the relevant notes. That worker can write and run programs and returns its
-  findings as unverified notes. Programs and outputs remain in its workspace.
+  findings as unverified notes. Coordinator can also select Codex to verify
+  claims, write and run checkers, and issue PASS, FAIL, or INCONCLUSIVE directly.
+  Programs and outputs remain in retained workspaces.
 
 To enable delegation, install and authenticate the Codex CLI, then add a `codex`
 field to your existing settings, for example:
@@ -34,9 +37,10 @@ absolute workspace path. Coordinator decides when to use the worker. Selecting
 `openai-codex` as a model provider alone does not enable program execution.
 
 The separate `research` setting controls source retrieval and independent review.
-Setting `research: false` does not disable a configured `codex` worker. For a
-closed-book run, the [bounded runner](../scripts/bounded-solve.ts) provides
-`--offline` and rejects enabled literature, Codex implementation, and ChatGPT Web.
+Setting `research: false` leaves configured Codex implementation and verification
+available. For a closed-book run, the
+[bounded runner](../scripts/bounded-solve.ts) provides `--offline` and rejects
+enabled literature, Codex implementation and verification, and ChatGPT Web.
 
 ## Can I ask for a better bound or a generalization?
 
@@ -63,8 +67,8 @@ built-in policy for improving a bound indefinitely.
 Yes. Notes can contain partial theorems, constructions, conjectures, observations,
 and failed approaches. Mathematical claims can receive correctness and source
 checks even when they do not meet the task's completion criteria. Internal
-acceptance additionally requires the complete result and its generated support
-to pass the required checks, including blind reconstruction.
+acceptance additionally requires the complete result and its complete support
+chain to pass the required checks, including blind reconstruction.
 
 Use `status` for a compact progress report and `inspect` for notes and their
 checks. A user or external agent judges whether an update is significant for
@@ -79,10 +83,26 @@ is a separate result, and neither assessment is a formal proof certificate.
 `INCONCLUSIVE` means a check remains unresolved.
 
 Computation also needs mathematical justification. A program's successful exit
-does not prove its claim. Include the inputs, method, relevant outputs, and
-reproduction information in the returned notes. The current independent reviewer
-has no execution tool. Essential finite checks need analytical justification or
-matching execution evidence, and unsupported checks remain inconclusive.
+does not prove its claim. The Codex Verifier must check that the program covers
+the required cases and establishes the exact claim, retaining the checker, inputs,
+commands, outputs, and environment. Missing proof steps require repairs to the
+authoritative note. Dependency checks and the remaining acceptance stages still
+apply. The separate independent reviewer uses `research` and has no execution tool.
+
+## What happens when verification is inconclusive?
+
+Coordinator chooses work from the unfinished obligation. With `codex` configured,
+it can select `backend: "codex"` on a Verifier request to reassess an
+INCONCLUSIVE correctness, requirements, or reconstruction check. It can also
+select Codex initially when computation or artifact access is useful. These are
+Coordinator decisions, with no automatic fallback.
+
+Coordinator may select Codex again after an INCONCLUSIVE Codex check when
+another attempt could resolve the unfinished obligation. PASS and FAIL checks
+stay closed while their inputs are unchanged. Source checks retain their
+separate rule: new quotations must match the exact unresolved premises.
+Coordinator can instead pursue another approach or leave a peripheral claim
+unverified. An unresolved claim cannot support an accepted proof.
 
 ## Can computation run in the background while Xean explores?
 
@@ -145,6 +165,44 @@ guidance for resumption. Accepted and cancelled campaigns are terminal. Guidance
 preserves the frozen task and completion criteria, so a changed mathematical
 target belongs in a new campaign.
 
+## Should I use guidance or notes for background material?
+
+Use `guide` for short instructions about the next work, such as "Try a geometric
+construction using the existing lemmas." Every Coordinator decision receives
+the full saved guidance. Pasting a paper into `guide` repeats that paper in each
+decision's input.
+
+Use `submit` for initial notes and reference material after `init`, before the
+first `run`, or during an ongoing campaign. Each new note has a local `id`
+(`n1`, `n2`, and so on), a short `summary`, a `detailedSummary`, full `text`, and a
+`support` array of note IDs. Native Coordinator and Explorer receive the short
+index and can read the detailed summary or full text as needed. Preserve the
+result's hypotheses, proof, and provenance in the note.
+
+New caller notes default to external trust, which grants their mathematical
+claims and sources. Set `"trusted": false` on notes that need ordinary
+verification, as Explorer notes do. A batch can mix trusted and untrusted notes.
+
+To submit all new notes in `notes.json` without granting their claims, use:
+
+```sh
+bun run xean submit .xean/demo/campaign.sqlite notes.json --id initial-notes --untrusted
+```
+
+To change an existing note's trust, include `trusted` in an `edits` entry with
+its ID and current revision. A changed trust value clears internal checks on
+the note and its dependents. Omitting `trusted` preserves the existing grant.
+
+`--untrusted` sets every submitted note and edit's `trusted` field to `false`,
+overriding any per-note value. The same JSON fields work through the library
+input interface. `inspect` shows the grant as `checks.external`, referencing the
+caller's Pi input entry. The grant establishes correctness and sources without
+a model call, while declared dependencies must still be verified. Every note
+keeps the same final acceptance requirements, including reconstruction.
+Exact-statement preparation must receive PASS before reconstruction, checking
+statement fidelity without rechecking externally granted truth. It follows the
+ordinary retry and reassessment rules.
+
 ## Can I supply my own results?
 
 `submit` accepts new `notes` and changes to existing notes through `edits`, using
@@ -171,16 +229,30 @@ Replace the example ID and revision with the current values, then run:
 bun run xean submit .xean/demo/campaign.sqlite edit.json --id clarify-lemma
 ```
 
-Each edit preserves the note's ID and rejects a stale revision. A submission
-publishes its new notes and edits atomically. New caller notes are imports: the
-caller grants their mathematical result and sources. Before an import serves as
-verified support, its correctness check must record a faithful exact statement
-with PASS, and its declared dependencies must be verified. Caller edits preserve
-an existing import grant but do not grant one to generated notes. Mathematical
-edits invalidate affected checks. Submit only results you intend to grant. Keep
-the proof, hypotheses, and provenance when reusing a result from another campaign.
-Set `candidate: true` on a new note or in an existing note's edit when it claims
-a complete solution. Candidate status grants no verification evidence.
+Each edit preserves the note's ID and rejects a stale revision. The batch
+publishes atomically, and mathematical edits invalidate affected checks.
+[External trust](#should-i-use-guidance-or-notes-for-background-material) controls
+which claims the caller grants. Keep the proof, hypotheses, and provenance when
+reusing a result from another campaign. Set `candidate: true` on a new note or
+edit when it claims a complete solution. Candidate status grants no verification
+evidence.
+
+To withdraw an unsupported assessment without changing the note, put its current
+ID and revision in `recheck.json`:
+
+```json
+{
+  "notes": [{ "id": "123/n1", "revision": 456 }],
+  "reason": "The verifier treated a generated claim as caller-granted."
+}
+```
+
+Run `bun run xean recheck .xean/demo/campaign.sqlite recheck.json --id audit-1`.
+This withdraws checks and external grants on the named notes and invalidates
+dependent checks. Dependents retain their own external grants. Note text and
+historical evidence remain available. Withdrawal does not declare the claim
+false. A paused campaign stays paused. Accepted and cancelled campaigns reject
+new inputs.
 
 For an independent assessment, put the task and complete argument, including its
 supporting proofs, into a JSON file such as `review.json`:
@@ -210,8 +282,8 @@ bun run xean inspect .xean/review/campaign.sqlite
 Explorer can revise notes, change dependencies, and retire notes from routine
 discovery. Mathematical edits invalidate affected checks. Retirement preserves
 historical reads and existing dependencies. Explorer edits and caller commands
-already share the underlying note-editing path, with distinct trust rules for
-caller imports.
+share the underlying note-editing path. Callers can additionally grant or
+withdraw external trust.
 
 The current system has no automatic phase for reorganizing accumulated knowledge.
 Coordinator and Explorer receive every non-retired note's index entry, so the
@@ -236,13 +308,18 @@ reveal gaps or better arguments that return to research and verification. This
 knowledge and writing component could become a separate system, with Xean as
 one of its users. Its scope and implementation remain open.
 
-## What happens when a model response reaches a provider limit?
+## What happens when a model response reaches a limit or its stream disconnects?
 
-Pi continues the same submission after `max_messages` or `max_output_tokens`
-when reusable text or reasoning is available. These incomplete responses do not
-consume the role's completed-response allowance, and continuations have no fixed
-count. Tools from incomplete responses never execute. A limit response without
-reusable content fails explicitly.
+Pi continues the same submission after an output limit or a retryable provider
+failure when reusable text, reasoning, or unfinished tool arguments are available.
+Tool arguments become unexecuted draft text. These responses do not consume the
+role's completed-response allowance, and continuations have no fixed count.
+Incomplete tools never execute. Empty limit responses fail explicitly. Retryable
+failures without reusable output use Pi's bounded retry policy and backoff.
+Authentication, quota, invalid-request failures, context overflow, and cancellation
+retain their existing handling. Encrypted OpenAI Responses reasoning from failed
+responses needs valid completed-item signatures from the same API, provider, and
+model.
 
 The conversation still has context and completed-response limits. Explorer can
 hand off its complete submissions when either limit is reached. Coordinator

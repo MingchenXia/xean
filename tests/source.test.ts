@@ -60,6 +60,7 @@ test("one exact fact judgment maps to every local premise without rebinding evid
         ],
       });
       return {
+        workspace: "/unused-research-workspace",
         operationId: "op",
         searches: 1,
         reportedAt: "2026-10-05T00:00:00Z",
@@ -121,6 +122,7 @@ test("one exact fact judgment maps to every local premise without rebinding evid
 test("source batches reject missing, duplicate, or unexpected fact judgments", async () => {
   for (const ids of [["f1"], ["f1", "f1"], ["f1", "other"]]) {
     const research = codexResearch(async (_mode, schema) => ({
+      workspace: "/unused-research-workspace",
       operationId: "op",
       searches: 0,
       reportedAt: "2026-10-05T00:00:00Z",

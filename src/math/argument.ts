@@ -41,7 +41,7 @@ export function acceptedArgument(
     .map(
       (note) =>
         `## ${note.id}\n\n${note.text}` +
-        (note.imported && note.id === noteId
+        (note.checks.external
           ? `\n\n### Independent proof\n\n${note.checks.reconstruction!.proof}`
           : ""),
     )

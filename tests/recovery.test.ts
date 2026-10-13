@@ -175,7 +175,7 @@ test.each(["worker", "input"] as const)(
   },
 );
 
-test("closing at each role submission and worker publication reuses every committed native result", async () => {
+test("closing after immediate role publication reuses each committed native result", async () => {
   const directory = await temporaryDirectory("research-recovery-");
   const path = join(directory, "campaign.sqlite");
   const provider = fixture((role, input) =>
@@ -226,7 +226,7 @@ test("closing at each role submission and worker publication reuses every commit
         detach();
       }
       expect((await inspect(path, readView)).notes).toHaveLength(
-        boundary === "publication" ? 1 : 0,
+        boundary === "coordinator" ? 0 : 1,
       );
       owner = await open(path, {
         models: provider.models,

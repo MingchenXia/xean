@@ -6,19 +6,16 @@ further work. Each campaign runs Coordinator, one worker, then Coordinator again
 A worker may parallelize its own internal work. Pi owns tasks, conversations,
 checkpoints, cancellation, and storage.
 
-The database schema is unchanged from 3.2.0. The
-[compatibility checks](#checks-and-current-limits) cover representative paused and
-completed 3.2.0 databases. Pi document versioning rejects 3.0.0 and 3.1.0
-databases. Keep those campaigns with their frozen runtimes. This release includes
-no database migration. The qualification results below identify the revisions
-and provider configurations tested.
+This checkout prepares 3.4.0 and requires fresh campaign databases. Notebook and
+role-conversation document formats have changed. Keep existing campaigns with
+their pinned runtimes. No database migration is provided. The
+[qualification results](#checks-and-current-limits) identify the revisions and
+configurations tested.
 
-The implementation includes staged verification, blind reconstruction, imported
-notes, stable-ID edits, optional literature and Codex implementation work,
-independent review, and a CLI. Exact-task acceptance requires the
-candidate and its generated support to pass the required checks. Independent
-review remains a separate result. The [capability inventory](docs/parity.md)
-maps this behavior to implementation and tests.
+The implementation includes staged verification, blind reconstruction, external
+trust grants, stable-ID edits, optional literature, Codex implementation and
+verification, independent review, and a CLI. The
+[capability inventory](docs/parity.md) maps this behavior to implementation and tests.
 See the [changelog](docs/changelog.md) for changes since 3.0.0.
 The [FAQ](docs/faq.md) covers computation, broader research goals, and current
 limits. The proposed [milestones](docs/milestones.md) cover 4.0 research and
@@ -39,40 +36,54 @@ Validation addresses model mistakes, invalid outputs, stale revisions,
 interrupted operations, and accidental concurrent ownership. Mathematical
 claims still require verification.
 
-The native Pi Explorer continues within the same conversation so later responses can develop
-and revise earlier reasoning. Private partial notes preserve intermediate work
-while exploration continues. A later worker starts a fresh conversation from the
-published notebook, without automatically inheriting the earlier worker's private
-conversation. Prompt caching can reduce the cost of reusing prior
-context, but new reasoning and output still cost tokens. Completed responses and
-available context bound each invocation. Worker simplifications should preserve
-this opportunity for further exploration. A valid partial submission alone does
-not establish that the worker
-has explored enough.
+The native Pi Explorer continues within the same conversation so later responses
+can develop and revise earlier reasoning. Each successful submission publishes
+its notes and edits immediately. Explorer can read and edit those notes while it
+continues working. Coordinator waits for the worker to finish before choosing the
+next worker. A later worker starts a fresh conversation from the published
+notebook. Prompt caching can reduce repeated-context costs, while new reasoning
+and output still cost tokens. A valid partial submission alone does not end
+Explorer's invocation.
 
-Acceptance requires checks across the complete generated dependency chain.
+Acceptance requires checks across the complete dependency chain.
+All notes share the same content and verification rules. External trust is
+recorded in `checks.external` with a reference to the caller's Pi input entry.
+It grants correctness and sources. A note becomes verified only when its
+declared dependencies are verified.
+Before blind reconstruction, Verifier must produce a faithful exact statement
+with PASS for each note. For externally trusted notes, this checks statement
+fidelity without rechecking the granted truth. Preparation follows the ordinary
+retry and reassessment rules.
 Blind reconstruction receives exact statements and approved premises without
 the original proofs. INCONCLUSIVE remains unresolved. Model judgments can be
 wrong, and independent review is recorded separately from internal acceptance.
 
 Explorer repairs notes through `edits`, retaining their IDs. Each edit supplies
-the expected `revision` and only changed fields. A worker publishes its creations
-and edits atomically. Retiring a note hides it from routine discovery and preserves
-historical reads. Existing consumers can still verify their retired dependencies.
-Caller edits preserve an existing import grant. Explorer edits to its
-mathematical text or support revoke that grant. Mathematical edits clear affected
-checks. Explorer and caller edits may mark presentation-only text changes with
-`cosmetic: true`. Xean trusts that classification and preserves checks and import
-trust. Support changes always invalidate affected checks. Unclassified text
-changes are mathematical edits.
+the expected `revision` and only changed fields. Retiring a note hides it from
+routine discovery and preserves historical reads. Existing consumers can still
+verify their retired dependencies.
+Caller edits preserve an existing external grant unless they explicitly change
+`trusted`. Explorer edits to mathematical fields revoke that grant. Changes to
+mathematical fields, support, or trust clear affected checks. Candidate and
+retirement flags only advance the revision.
 Verifier may correct summaries on PASS, while proof text and dependencies change
 through edits.
+Operator `recheck` inputs withdraw assessments for the named note revisions and
+their transitive consumers. They also withdraw external grants on the named
+notes. Note content and prior evidence remain in Pi's journal. Reassessment uses
+the ordinary verification stages.
+Coordinator receives the target IDs and withdrawal reason as guidance.
 
-Completed assessments of unchanged inputs stay closed. Coordinator chooses
-mathematical repairs, relevant source retrieval, another approach, or idle.
+Coordinator can assign Codex to reassess an INCONCLUSIVE correctness,
+requirements, or reconstruction check when computation or artifact access can
+settle the unfinished obligation. This can follow either verifier backend, and
+Coordinator decides whether another attempt is useful. Xean does not retry
+these checks automatically. PASS and FAIL assessments of unchanged inputs stay
+closed. Coordinator can also choose mathematical repairs, relevant source
+retrieval, another approach, or idle.
 New quotations matching a note's exact premises can reopen an eligible
-INCONCLUSIVE source check. Changing receipt IDs, making cosmetic text edits, or
-adding unrelated quotations does not reopen it.
+INCONCLUSIVE source check. Changing receipt IDs or adding unrelated quotations
+does not reopen it.
 
 ## Run a campaign
 
@@ -110,7 +121,13 @@ The same CLI provides `pause`, `resume`, `cancel`, `inspect [--records]`, and
 accepted-only Markdown `export`. `submit` takes a JSON file containing `notes`
 and optional `edits`. Explorer uses the same submission structure. Set
 `candidate: true` on a note or its edit when it claims a complete solution.
-`guide` takes a text file. Both commands require a stable `--id` for exact retries.
+`guide` takes a text file. `recheck` takes note IDs, current revisions, and a reason
+for withdrawing their assessments. These commands require a stable `--id` for
+exact retries.
+Use `guide` for short steering instructions and `submit` for initial notes or
+reference material. New caller notes default to external trust. Set a note or
+edit's `trusted` field to `false`, or pass `submit --untrusted` for the batch, to
+require ordinary verification. See [guidance versus notes](docs/faq.md#should-i-use-guidance-or-notes-for-background-material).
 Live mutations reach the active owner.
 `role NAME INPUT CAMPAIGN SETTINGS` runs a standalone procedure. Use `role review`
 with a JSON input containing `task` and `argument` for independent review. The
@@ -142,15 +159,16 @@ and authenticate the [Codex CLI](https://developers.openai.com/codex/cli).
 Source checking and independent review use its native configuration. Literature is disabled by default, but `literature: false`
 alone leaves source checking and review enabled. External premises remain
 INCONCLUSIVE when research is disabled. `settings.codex` separately enables
-implementation work in a retained workspace.
+implementation work and a shell-capable Verifier in retained workspaces.
 
 To run research without Codex plugins, copy
 [xean-research.config.toml](examples/xean-research.config.toml) into `CODEX_HOME`
 (normally `~/.codex`) and set `research.profile` to `"xean-research"` alongside
 the chosen model. This native Codex profile disables plugins for source checking,
 literature, and independent review while preserving native web search.
-Implementation workers use `codex.profile` separately. Set `research.profile` to
-a plugin-enabled profile when research needs installed plugin tools.
+Implementation workers and Codex verification use `codex.profile` separately.
+Set `research.profile` to a plugin-enabled profile when research needs installed
+plugin tools.
 
 For a one-response ChatGPT Web Explorer, set
 `chatgpt: {"baseUrl":"http://127.0.0.1:17841/v1","model":"chatgpt-web/gpt-6-pro"}`
@@ -180,6 +198,18 @@ guidance remains campaign input for Coordinator.
 Explorer assignments identify relevant note IDs and the remaining gap in the
 complete task, so later workers can continue from published work.
 
+With `settings.codex` enabled, Coordinator can request
+`{kind: "verifier", backend: "codex", notes: [noteId], through: "correctness"}`.
+The same selection supports source, requirements, and reconstruction stages.
+Omitting `backend` selects the native Verifier. Codex judges PASS, FAIL, or
+INCONCLUSIVE under the same dependency, stage, and acceptance rules. Its checks
+and independent proofs use fresh retained workspaces and record execution
+receipts and artifact paths. Source checks still use the research backend.
+Codex blind reconstruction receives only the task, exact statements, and approved
+support and premises. Instructions forbid reading original proofs, campaign transcripts,
+or other workspaces. This boundary relies on instruction compliance, not hostile
+code isolation.
+
 Call `open` for separate databases to run several campaigns in one process.
 Pass the same Pi `models` instance to share its provider registry. Each campaign
 keeps its own Harness and sequential workflow. The CLI runs one campaign per invocation.
@@ -187,51 +217,68 @@ keeps its own Harness and sequential workflow. The CLI runs one campaign per inv
 Notes store `summary`, `detailedSummary`, and authoritative free-form `text`.
 The text can record proofs, conjectures, observations, questions, or failed
 approaches. Correctness records a separate nullable `statement` for later
-verification. Notes with no mathematical claim remain context and cannot
-become verified support or an accepted solution.
-The note reader includes the existing checked statement. Explorer and Verifier
+verification. Without external trust, notes with no mathematical claim remain
+unverified context. The note reader includes the existing checked statement.
+Explorer and Verifier
 use it to distinguish granted support from additional facts that need a proof
 or a separate supporting lemma.
 
 Explorer continues its Pi conversation after partial submissions. A claimed
 complete solution, an empty notes-and-edits submission, or reaching the response
-allowance ends the invocation. Repeated private edits merge changed fields against
-the same expected public revision. Pi retains this private progress until the
-worker publishes its complete result.
-If a provider failure ends the invocation and the submissions still validate
-against the current notebook, the worker publishes those submissions atomically
-with its failed status and error.
+allowance ends the invocation. Submission returns published note IDs and current
+revisions for subsequent reads and edits. Explorer reads the current notebook.
+Stale edits and dependencies changed since Explorer observed them are rejected.
+Each publication and its replay receipt commit together in Pi. Recovery returns
+the saved receipt without publishing twice. Previously committed batches remain
+published after a later failure or cancellation. Worker completion records
+publication references without submitting the notes again.
+
+Standalone Explorer uses the same notebook tools. Supplied notes retain their
+IDs, external grants, and recorded checks, with new revisions assigned by Pi.
+Their checks refer to immutable input evidence. Single-response ChatGPT Web
+and replacement roles returning a batch retain publication on completion.
 
 The native Pi Explorer defaults to eight completed responses and up to four
-note-read calls. An empty notebook disables reading. ChatGPT Web uses one response without
-reads. Each read can request several notes. Reads and rejected submissions consume responses,
-and reading is disabled on the final response. These are ceilings, not a minimum
-amount of exploration. A model can still end early by claiming a complete solution
-or submitting an empty batch.
+note-read calls, including reads of its own published notes when the notebook
+starts empty. ChatGPT Web uses one response without reads. Each read can request
+several notes. Reads and rejected submissions consume responses, and reading is
+disabled on the final response. These are ceilings, not a minimum amount of
+exploration.
 
 Other native Pi role conversations allow up to sixteen completed responses.
 Coordinator allows up to four note-read calls. Responses with reads or rejected
 submissions count toward the limit. Incomplete responses do not. Admitted reads
-also count across recovery. Native Pi handles provider-error retries separately.
+also count across recovery.
 
-When `max_messages` or `max_output_tokens` leaves reusable text or reasoning,
-Pi continues the same submission automatically. There is no fixed continuation
-count. Pi retains the incomplete response and schedules its continuation
-atomically. Tools from incomplete responses never execute. A limit response
-without reusable content fails explicitly. Context and completed-response limits
-still apply, and an operational handoff reports the reason to Coordinator.
+Output limits (`max_messages` or `max_output_tokens`) and retryable provider
+failures with reusable text, reasoning, or tool arguments continue the same
+submission automatically. Continuations have no fixed count. Pi retains the raw
+response and schedules its continuation atomically. Unfinished tool arguments
+become unexecuted draft text. Incomplete tools never execute. Empty limit responses
+fail explicitly. Retryable failures without reusable output use Pi's bounded
+retry policy and backoff. Authentication, quota, invalid-request failures, context
+overflow, and cancellation retain their existing handling. Context and
+completed-response limits still apply, with operational handoffs to Coordinator.
 
-Blind reconstruction assigns batches in dependency order. Code greedily packs
-notes using original text lengths, Pi's token estimator, and the configured
-model's context and output capacities. It reserves space for complete writing,
+Blind reconstruction assigns batches in dependency order. Codex reconstructs
+one note per call. Native verification greedily packs notes using original text
+lengths, Pi's token estimator, and the configured model's context and output
+capacities. It reserves space for complete writing,
 reasoning, structured results, and headroom. Comparisons use the actual returned
 proof lengths and may need smaller batches. Each call must submit every assigned
 note. These estimates guide grouping and do not cap responses or guarantee that
 a proof fits. An oversized note is assigned alone, subject to Pi's input guard.
 Pi checks context use and the provider guard reserves the full output allowance.
-Incomplete responses continue the same assignment under the
-[native Pi continuation rules](docs/parity.md#pi-integration).
-Tools from truncated responses never execute.
+
+Native roles use Pi's model catalog for context and output limits. The packaged
+catalog corrects OpenAI entries that used a pricing threshold as context
+capacity. For example,
+[`openai/gpt-6.1-sol`](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+has a 1,050,000-token context window and a 128,000-token output limit. Pi's
+4,096-token safety margin leaves 917,904 estimated input tokens with the full
+output allowance. Higher pricing above 272,000 input tokens remains in effect.
+Caller-supplied `Models` retain their own capacity metadata.
+
 Pi reuses committed proofs and comparisons after reopening, and an ordinary
 failure retains earlier completed checks.
 If an unresolved generated claim supports a later proof group, Verifier finishes
@@ -273,22 +320,20 @@ console.log((await inspect(path, readReport)).status);
 The host uses Pi's native SQLite adapter with FULL synchronization and excludes
 a second owner. A rewindable Pi catalog and per-note body Documents hold the
 current notebook. Native submissions and outcomes retain execution receipts.
-Workers read the notebook at their frozen Entry cutoff.
+Workers receive a notebook snapshot at their admission cutoff. Explorer reads
+its current notebook after each durable submission.
 `inspect` uses a read-only Pi Session and holds a SQLite read transaction.
 Pi rejects writes from inspection callbacks. Acceptance atomically checks the
 current dependency closure and pins its snapshot for export.
 Closing suspends unfinished execution. Reopening reuses Pi's committed private
 progress. A request interrupted before its answer commits may repeat, except
 that an ambiguously sent ChatGPT Web request is rejected on recovery.
-Completed source checks are memoized before later verification stages. Codex
-executes inside its worker and may repeat if interrupted before that boundary
-or worker completion. The built-in Explorer preserves validated native submissions
-when a provider failure ends its invocation. Its failed outcome references the
-existing Pi Entries. The built-in Verifier preserves structurally validated
-completed checks when a stage fails. Both publish retained results with the error
-in a failed native task outcome only if publication validation succeeds.
-Cancellation, invalid final publications,
-and faults in opaque custom roles publish no partial results. A new Verifier reuses
+All Codex roles share an executor that takes instructions, input, and an output
+schema. Pi memoizes each completed request within its worker. Interrupted calls
+restart in a fresh workspace. Source checks also retain results from custom
+research implementations before later stages. The built-in Verifier preserves
+structurally validated completed checks when a stage fails. Invalid submissions and faults in
+opaque custom roles publish no partial results. A new Verifier reuses
 applicable completed checks. Cleanup errors use Pi's nonfatal
 reporting, preserving submitted results and the primary failure when a call fails.
 Cancellation stops the Codex process group and may leave usage unknown.
@@ -299,6 +344,9 @@ Codex output capture allows 16 Mi decoded characters on stdout and 1 Mi on stder
 Exceeding either limit stops the process group and records a failed call with
 truncated output. Usage received before the limit remains in the receipt.
 Failed calls retain their raw logs and report the provider's error message when available.
+Failures also identify the operation, request and completion records, exit status
+when recorded, and workspace. Coordinator receives these references in the
+failure message. A missing completion record leaves execution unknown.
 Xean sets Pi's `documentRetentionMs` to zero, releasing unobserved document
 trackers after use. Watched documents remain cached until their observers detach
 or the document retires. Later reads reload evicted documents from storage.
@@ -354,7 +402,9 @@ bun run xean role verifier input.json campaign.sqlite settings.json
 ```
 
 Use a fresh campaign path for each case and keep expected answers outside the input.
-Pi stores the task, role input, and settings in the campaign.
+Pi stores the task, role input, and settings in the campaign. Standalone
+`verifier` and `reconstruct` inputs also accept `backend: "codex"` when
+`settings.codex` is enabled.
 
 ## Checks and current limits
 
@@ -396,16 +446,9 @@ preserved data instead of exact prompt sentences. Share repeated setup while
 keeping scenario actions and expectations in the test. Preserve distinct
 publication, cancellation, and recovery boundaries when consolidating cases.
 
-Compatibility checks reopened representative paused and completed databases
-from 3.2.0 and the previous 3.3.0 candidate on Bun 1.4.2 with the updated Pi
-packages, without credentials or model calls. The paused
-fixture preserved task, settings, edited notes and their IDs, candidate flags,
-dependencies, checks, and guidance, then resumed its remaining scripted work.
-The completed fixture retained identical task and entry records and a
-byte-identical accepted export. These checks used scripted judgments and fresh
-fixtures. Transfer of an in-flight model generation remains unqualified.
-Receipts are under `runs/pi-upgrade-20261012/compatibility/`, outside the source
-package.
+The current checks qualify fresh databases only. Historical campaigns remain
+pinned to their recorded runtimes. Transfer of an in-flight model generation
+remains unqualified.
 
 The 3.2.0 qualification passed 213 scripted tests and 2,044 assertions on each
 tested platform: macOS ARM64 with Bun 1.4.3, and Linux ARM64 and x86-64 with
@@ -472,10 +515,8 @@ execution depends on the host's sandbox configuration.
 Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the source
 package.
 
-Pi packages are built together from upstream commit
-`ee409a85f6ad92bf8c6ab8ed735c6cd24f2e749e` using Pi's `pack:packages` command.
-This is an unreleased snapshot after the 1.1.0 release. The packages include frozen
-model data.
+Pi packages come from the official 1.2.0 npm release, tagged at upstream commit
+`06a466935536f8c9bcacb2d5efc0fc021be1bdff`. They include frozen model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records each retained patch,
 including the adapter fixes, the request hook used to select a profile's stream,

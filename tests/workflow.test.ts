@@ -11,7 +11,6 @@ import {
   defineDoc,
   defineExtension,
   Harness,
-  ToolResultEntry,
   type EntryId,
   type Storage,
   type TaskId,
@@ -311,7 +310,7 @@ test("input admission reads only edited bodies and keeps command IDs in native e
     expect([...bodies]).toEqual([note.id]);
     const edited = (await owner.view()).notes[0]!;
     expect(edited.revision).toBeGreaterThan(note.revision);
-    expect(edited.imported).toBe(true);
+    expect(!!edited.checks.external).toBe(true);
     await expect(input({ ...correction, id: "stale" })).rejects.toThrow(
       "Stale note revision",
     );
@@ -330,7 +329,7 @@ test("input admission reads only edited bodies and keeps command IDs in native e
 });
 
 test.each(["completed", "stale"])(
-  "report attributes native Explorer edits only after publication: %s",
+  "report attributes replacement Explorer edits only after publication: %s",
   async (mode) => {
     const started = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -341,58 +340,23 @@ test.each(["completed", "stale"])(
           ? null
           : { kind: "explorer", assignment: "Improve the proof." },
       }),
-      explorer: async ({ notes }, runtime, invocation) => {
+      explorer: async ({ notes }) => {
         invoked = true;
         const note = notes[0] as Note;
-        const entries: EntryId[] = [];
-        await runtime.commit(async (tx) => {
-          const conversation = await tx.createConversation({
-            ownership: { kind: "task", taskId: runtime.taskId },
-          });
-          for (const details of [
-            {
-              notes: [],
-              edits: [
-                {
-                  id: note.id,
-                  revision: note.revision,
-                  text: "Updated proof.",
-                },
-              ],
-            },
-            {
-              notes: [draft()],
-              edits: [
-                {
-                  id: note.id,
-                  revision: note.revision,
-                  summary: "Updated summary.",
-                },
-              ],
-            },
-          ])
-            entries.push(
-              (
-                await tx.appendEntry(ToolResultEntry, conversation.id, {
-                  data: { diagnostics: [] },
-                  model: [
-                    {
-                      role: "toolResult",
-                      toolCallId: `fixture-${entries.length}`,
-                      toolName: "submit_explorer",
-                      content: [],
-                      details,
-                      isError: false,
-                      timestamp: Date.now(),
-                    },
-                  ],
-                })
-              ).id,
-            );
-        }, invocation);
         started.resolve();
         await release.promise;
-        return { kind: "submissions", entries };
+        return {
+          kind: "notes",
+          notes: [draft()],
+          edits: [
+            {
+              id: note.id,
+              revision: note.revision,
+              text: "Updated proof.",
+              summary: "Updated summary.",
+            },
+          ],
+        };
       },
     });
     try {
@@ -403,10 +367,10 @@ test.each(["completed", "stale"])(
       });
       owner.harness.resume();
       await started.promise;
-      const privateReport = await owner.getReport();
-      expect(privateReport.work[0]!.noteIds).toEqual([]);
-      expect(privateReport.notes).toHaveLength(1);
-      const note = privateReport.notes[0]!;
+      const inProgressReport = await owner.getReport();
+      expect(inProgressReport.work[0]!.noteIds).toEqual([]);
+      expect(inProgressReport.notes).toHaveLength(1);
+      const note = inProgressReport.notes[0]!;
       if (mode === "stale")
         await owner.input({
           kind: "submit",
@@ -651,7 +615,9 @@ test("inputs during a decision share one fresh successor and discard its stale p
       if (decisions.length === 1) {
         started.resolve();
         await release.promise;
-        return { work: { kind: "explorer", assignment: "This plan is stale" } };
+        return {
+          work: { kind: "explorer", assignment: "This plan is stale" },
+        };
       }
       return { work: null };
     },
@@ -664,6 +630,7 @@ test("inputs during a decision share one fresh successor and discard its stale p
     await root.commit((tx) => research.initialize(tx, root.id), context);
     harness.resume();
     await started.promise;
+    await input({ kind: "submit", id: "seed", notes: [draft()] });
     for (const id of ["first", "second"]) {
       await input({ kind: "guide", id, text: id });
       expect(
@@ -672,12 +639,25 @@ test("inputs during a decision share one fresh successor and discard its stale p
         ),
       ).toEqual([String(decisions[0]!.id)]);
     }
+    await input({
+      kind: "recheck",
+      id: "audit",
+      notes: (await getReport()).notes.map(({ id, revision }) => ({
+        id,
+        revision,
+      })),
+      reason: "The assessment used the wrong hypothesis.",
+    });
     expect(pendingDecisions(await getTasks())).toHaveLength(1);
     release.resolve();
     await harness.waitForIdle(context);
     expect(decisions.map(({ guidance }) => guidance)).toEqual([
       [],
-      ["first", "second"],
+      [
+        "first",
+        "second",
+        "Assessments withdrawn for input/seed/n1: The assessment used the wrong hypothesis.",
+      ],
     ]);
     expect(decisions[0]!.id).not.toBe(decisions[1]!.id);
     expect(workers).toBe(0);
@@ -920,13 +900,14 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
   }[] = [];
   const roles: Partial<Roles> = {
     coordinator: async (input) => ({
-      work: Object.keys(input.notes[0].checks).length
-        ? null
-        : {
-            kind: "verifier",
-            notes: [input.notes[0].id],
-            through: "requirements",
-          },
+      work:
+        input.notes[0].checks.requirements !== undefined
+          ? null
+          : {
+              kind: "verifier",
+              notes: [input.notes[0].id],
+              through: "requirements",
+            },
     }),
     verifier: async (input, _runtime, invocation, source) => {
       const note = input.notes[0];
@@ -1000,7 +981,9 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
     await harness.close(context);
     expect(carriedOnClose).toBe(true);
     owner = await setup(roles, await openNodeJsonlStorage(directory, context));
-    expect((await owner.view()).notes[0]!.checks).toEqual({});
+    expect((await owner.view()).notes[0]!.checks).toEqual({
+      external: { entry: editedRevision },
+    });
     expect(
       (await owner.harness.getTask(worker!.id, context))!.state.outcome,
     ).toBeUndefined();
@@ -1025,6 +1008,7 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
     expect(seen[2]!.cutoff).toBeGreaterThan(at);
     expect((await owner.view()).notes[0]!.revision).toBe(editedRevision);
     expect((await owner.view()).notes[0]!.checks).toEqual({
+      external: { entry: editedRevision },
       requirements: {
         verdict: "PASS",
         report: `Checked revision ${editedRevision}.`,

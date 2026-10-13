@@ -12,7 +12,6 @@ import {
   createRegistry,
   defineExtension,
   defineTask,
-  ToolResultEntry,
   type EntryId,
   type TaskId,
   type Tx,
@@ -26,7 +25,6 @@ import { Control, type Roles } from "../src/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
 import { Bodies, Catalog } from "../src/math/state.ts";
 import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
-import { RoleFailure } from "../src/roles/types.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
 import { limitRounds, readRounds } from "../scripts/bounded-solve.ts";
@@ -230,7 +228,12 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
   await Bun.write(settingsFile, JSON.stringify(settings));
   await Bun.write(
     input,
-    JSON.stringify({ notes: [{ ...draft, candidate: true }] }),
+    JSON.stringify({
+      notes: [
+        { ...draft, candidate: true, support: ["n2"] },
+        { ...draft, id: "n2" },
+      ],
+    }),
   );
   const prefix = ["--campaign-dir", directory];
   const initialized = await cli(
@@ -261,9 +264,15 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
   expect(inspected.stderr).toBe("");
   expect(inspected.code).toBe(0);
   const full = JSON.parse(inspected.stdout);
+  expect(full.status.verificationIssues.items).toContainEqual({
+    noteId: "input/import/n2",
+    stage: "reconstruction",
+    verdict: "unchecked",
+    report: null,
+  });
   expect(full.notes[0]).toMatchObject({
     id: "input/import/n1",
-    imported: true,
+    checks: { external: { entry: expect.any(Number) } },
     candidate: true,
   });
   expect(full.work).toEqual([]);
@@ -389,30 +398,9 @@ test("sealed acceptance and native note IDs reach reports and CLI export", async
             : { kind: "explorer", assignment: "Prove equality." },
         };
       },
-      explorer: async (_input, runtime, ctx) => {
+      explorer: async () => {
         trace.push("explorer");
-        let id!: EntryId;
-        await runtime.commit(async (tx) => {
-          const conversation = await tx.createConversation({
-            ownership: { kind: "task", taskId: runtime.taskId },
-          });
-          const entry = await tx.appendEntry(ToolResultEntry, conversation.id, {
-            data: { diagnostics: [] },
-            model: [
-              {
-                role: "toolResult",
-                toolCallId: "fixture",
-                toolName: "submit_explorer",
-                content: [],
-                details: { notes: [{ ...draft, candidate: true }] },
-                isError: false,
-                timestamp: Date.now(),
-              },
-            ],
-          });
-          id = entry.id;
-        }, ctx);
-        return { kind: "submissions", entries: [id] };
+        return { kind: "notes", notes: [{ ...draft, candidate: true }] };
       },
       verifier: async (input) => {
         trace.push("verifier");
@@ -479,6 +467,15 @@ test("sealed acceptance and native note IDs reach reports and CLI export", async
         context,
       ),
     ).rejects.toThrow("terminal");
+    await expect(
+      controlCommand(owner, {
+        kind: "recheck",
+        id: "late-recheck",
+        notes: [{ id: full.notes[0]!.id, revision: full.notes[0]!.revision }],
+        reason: "Request an additional assessment.",
+      }),
+    ).rejects.toThrow("terminal");
+    expect((await reportOf(owner)).notes).toEqual(report.notes);
     const accepted = await owner.harness.snapshot(
       Control,
       owner.root.id,
@@ -585,71 +582,6 @@ test("standalone retries report only the latest result and CLI reopening does no
     "No accepted argument",
   );
 }, 30_000);
-
-test("latest standalone null results do not resolve superseded receipts", async () => {
-  const directory = await temporaryDirectory("xean-standalone-receipts-");
-  let attempts = 0;
-  const owner = await open(join(directory, "campaign.sqlite"), {
-    create: { ...definition, mode: { role: "review", input: {} } },
-    roles: () => ({
-      review: async (_input, runtime, ctx) => {
-        if (++attempts === 1) {
-          const error = new RoleFailure("Superseded opaque failure");
-          await runtime.commit(async (tx) => {
-            const conversation = await tx.createConversation({
-              ownership: { kind: "task", taskId: runtime.taskId },
-            });
-            const entry = await tx.appendEntry(
-              ToolResultEntry,
-              conversation.id,
-              {
-                data: { diagnostics: [] },
-                model: [
-                  {
-                    role: "toolResult",
-                    toolCallId: "prior",
-                    toolName: "submit_explorer",
-                    content: [],
-                    details: { notes: [draft] },
-                    isError: false,
-                    timestamp: 1,
-                  },
-                ],
-              },
-            );
-            error.result = { kind: "submissions", entries: [entry.id] };
-          }, ctx);
-          throw error;
-        }
-        return null;
-      },
-    }),
-  });
-  try {
-    expect(await reportOf(owner)).not.toHaveProperty("result");
-    await owner.root.waitForIdle(context);
-    expect(await controlCommand(owner, { kind: "resume" })).toMatchObject({
-      status: "completed",
-    });
-    const report = await owner.root.commit(async (tx) => {
-      const entry = spyOn(tx, "entry").mockImplementation(() => {
-        throw new Error("Superseded receipt must not be resolved");
-      });
-      try {
-        return await readReport(tx, owner.root.id);
-      } finally {
-        entry.mockRestore();
-      }
-    }, context);
-    expect(report).toHaveProperty("result", null);
-    expect(report.work.map(({ status }) => status)).toEqual([
-      "failed",
-      "completed",
-    ]);
-  } finally {
-    await owner.close();
-  }
-});
 
 test("standalone completion waits for owned children and still permits cancellation", async () => {
   const directory = await temporaryDirectory("xean-apps-");
@@ -863,8 +795,33 @@ test("live owner controls admit revision-checked submissions and reject foreign 
     expect(receipt).toMatchObject({ command: { id: "live" } });
     expect((await inspect(path, readReport)).inputs).toHaveLength(1);
     const file = join(directory, "submission.json");
-    await Bun.write(file, JSON.stringify({ notes: [draft] }));
+    const notes = [
+      { ...draft, trusted: true },
+      { ...draft, id: "n2", trusted: false },
+      { ...draft, id: "n3" },
+    ];
+    await Bun.write(file, JSON.stringify({ notes }));
     expect((await cli("submit", path, file, "--id", "seed")).code).toBe(0);
+    expect(
+      (await inspect(path, readReport)).notes.map(
+        (note) => !!note.checks.external,
+      ),
+    ).toEqual([true, false, true]);
+    await Bun.write(file, JSON.stringify({ notes: [notes[0], notes[2]] }));
+    for (let attempt = 0; attempt < 2; attempt++)
+      expect(
+        (await cli("submit", path, file, "--id", "forced", "--untrusted")).code,
+      ).toBe(0);
+    expect(
+      (await cli("submit", path, file, "--id", "forced")).stderr,
+    ).toContain("Input ID already has another value");
+    const preserved = (await inspect(path, readReport)).notes.slice(1);
+    expect(preserved.map((n) => !!n.checks.external)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
     const original = (await inspect(path, readReport)).notes[0]!;
     expect(original.candidate).toBe(false);
     const submission = {
@@ -878,7 +835,14 @@ test("live owner controls admit revision-checked submissions and reject foreign 
       ],
     };
     await Bun.write(file, JSON.stringify(submission));
-    const editedReceipt = await cli("submit", path, file, "--id", "edit");
+    const editedReceipt = await cli(
+      "submit",
+      path,
+      file,
+      "--id",
+      "edit",
+      "--untrusted",
+    );
     expect(editedReceipt.code).toBe(0);
     expect(JSON.parse(editedReceipt.stdout)).toMatchObject({
       command: { id: "edit" },
@@ -889,14 +853,46 @@ test("live owner controls admit revision-checked submissions and reject foreign 
       summary: original.summary,
       detailedSummary: original.detailedSummary,
       text: submission.edits[0]!.text,
-      imported: true,
+      checks: {},
     });
     expect(edited.revision).toBeGreaterThan(original.revision);
-    expect((await cli("submit", path, file, "--id", "edit")).code).toBe(0);
+    expect(
+      (await cli("submit", path, file, "--id", "edit", "--untrusted")).code,
+    ).toBe(0);
     const stale = await cli("submit", path, file, "--id", "stale");
     expect(stale.code).not.toBe(0);
     expect(stale.stderr).toContain("Stale note revision");
-    expect((await inspect(path, readReport)).notes).toEqual([edited]);
+    expect((await inspect(path, readReport)).notes).toEqual([
+      edited,
+      ...preserved,
+    ]);
+    const recheck = {
+      notes: [{ id: edited.id, revision: edited.revision }],
+      reason: "Withdraw an unsupported verification assessment.",
+    };
+    await Bun.write(file, JSON.stringify(recheck));
+    const recheckedReceipt = await cli(
+      "--expected-owner-id",
+      "active",
+      "recheck",
+      path,
+      file,
+      "--id",
+      "audit",
+    );
+    expect(recheckedReceipt.code).toBe(0);
+    expect(JSON.parse(recheckedReceipt.stdout)).toMatchObject({
+      command: { kind: "recheck", id: "audit", ...recheck },
+    });
+    const rechecked = (await inspect(path, readReport)).notes[0]!;
+    expect(rechecked).toMatchObject({
+      ...edited,
+      revision: rechecked.revision,
+    });
+    expect(rechecked.revision).toBeGreaterThan(edited.revision);
+    expect((await cli("recheck", path, file, "--id", "audit")).stdout).toBe(
+      recheckedReceipt.stdout,
+    );
     const obsolete = await cli("correct", path, file, "--id", "obsolete");
     expect(obsolete.code).not.toBe(0);
     expect(obsolete.stderr).toContain("unknown command 'correct'");
@@ -911,6 +907,20 @@ test("live owner controls admit revision-checked submissions and reject foreign 
     expect((await reportOf(owner)).status.status).toBe("running");
     await requestOwner(canonical, { kind: "cancel" }, "active");
     expect((await reportOf(owner)).status.status).toBe("cancelled");
+    await Bun.write(
+      file,
+      JSON.stringify({
+        ...recheck,
+        notes: [{ id: rechecked.id, revision: rechecked.revision }],
+      }),
+    );
+    expect(
+      (await cli("recheck", path, file, "--id", "after-cancel")).stderr,
+    ).toContain("terminal");
+    expect((await inspect(path, readReport)).notes).toEqual([
+      rechecked,
+      ...preserved,
+    ]);
     for (const body of [
       "{",
       JSON.stringify({ kind: "resume", expectedOwnerId: "active" }),
@@ -928,6 +938,14 @@ test("live owner controls admit revision-checked submissions and reject foreign 
   } finally {
     await server.close(true);
     await owner.close();
+  }
+  const reopened = await open(path);
+  try {
+    expect(
+      (await reportOf(reopened)).notes.map((note) => !!note.checks.external),
+    ).toEqual([false, false, true, false, false]);
+  } finally {
+    await reopened.close();
   }
 }, 30_000);
 

@@ -12,6 +12,7 @@ import {
   type Plan,
   type SolverResult,
   type SourceEvidence,
+  type VerificationBackend,
   type VerificationStage,
 } from "./contracts.ts";
 
@@ -81,22 +82,34 @@ export function validateExploration(
   }
 }
 
-/** Caller trust establishes an import's correctness and sources. */
-export function stagePassed(note: Note, stage: VerificationStage): boolean {
-  if (!note.checks.correctness?.statement) return false;
-  const result = note.checks[stage];
-  return (
-    result?.verdict === "PASS" ||
-    (note.imported && stage === "source" && result?.verdict !== "FAIL")
-  );
+export function statementPrepared(note: Note): boolean {
+  const check = note.checks.correctness;
+  return check?.verdict === "PASS" && !!check.statement;
 }
 
-/** A completed assessment closes its unchanged inputs. */
-export function stagePending(note: Note, stage: VerificationStage): boolean {
+/** External grants and completed checks establish the same mathematical stages. */
+export function stagePassed(note: Note, stage: VerificationStage): boolean {
+  const result = note.checks[stage];
+  if (result?.verdict === "FAIL") return false;
+  if (note.checks.external && (stage === "correctness" || stage === "source"))
+    return true;
+  return statementPrepared(note) && result?.verdict === "PASS";
+}
+
+/** Codex can reassess uncertainty; native checks require changed inputs. */
+export function stagePending(
+  note: Note,
+  stage: VerificationStage,
+  backend: VerificationBackend = "native",
+): boolean {
   if (note.dead || note.checks.correctness?.statement === null) return false;
   const result = note.checks[stage];
   if (stagePassed(note, stage) || result?.verdict === "FAIL") return false;
-  if (result && !(stage === "source" && note.sourceChanged)) return false;
+  if (result) {
+    const reassess =
+      stage === "source" ? note.sourceChanged : backend === "codex";
+    if (result.verdict !== "INCONCLUSIVE" || !reassess) return false;
+  }
   if (stage === "correctness") return true;
   if (stage === "source") return stagePassed(note, "correctness");
   return note.verified;
@@ -170,15 +183,13 @@ export function refresh(notes: Note[]): Note[] {
     if (
       note.verified &&
       supportReconstructed &&
-      (note.imported || stagePassed(note, "reconstruction"))
+      stagePassed(note, "reconstruction")
     )
       reconstructed.add(note.id);
     note.accepted =
       !note.retired &&
-      note.verified &&
-      supportReconstructed &&
-      note.checks.requirements?.verdict === "PASS" &&
-      note.checks.reconstruction?.verdict === "PASS";
+      reconstructed.has(note.id) &&
+      note.checks.requirements?.verdict === "PASS";
   }
   return notes;
 }
@@ -188,7 +199,7 @@ export function noteInfo(note: Note): NoteInfo {
     id: note.id,
     summary: note.summary,
     support: note.support,
-    imported: note.imported,
+    external: note.checks.external,
     verified: note.verified,
     dead: note.dead,
     candidate: note.candidate,
@@ -209,11 +220,25 @@ export function pendingChecks(
   targets: readonly string[],
   through: VerificationStage,
   notes: readonly Note[],
+  backend: VerificationBackend = "native",
 ) {
   const ordered = closure(targets, notes);
   const requested = ordered.filter((note) => targets.includes(note.id));
   const support = new Set(ordered.flatMap((note) => note.support));
   return (stage: VerificationStage): Note[] => {
+    const needsCheck = (note: Note) => {
+      if (stage === "reconstruction" && !statementPrepared(note)) return false;
+      // Statement preparation follows the same retry rules as other checks.
+      return stagePending(
+        stage === "correctness" &&
+          through === "reconstruction" &&
+          note.checks.external
+          ? { ...note, checks: { ...note.checks, external: undefined } }
+          : note,
+        stage,
+        backend,
+      );
+    };
     let selected = ordered;
     if (stage === "source" && through === "correctness")
       selected = ordered.filter((note) => support.has(note.id));
@@ -232,7 +257,7 @@ export function pendingChecks(
       selected = closure(
         roots.map((note) => note.id),
         ordered,
-      ).filter((note) => !note.imported || roots.includes(note));
+      );
     }
     const eligible = new Map<string, boolean>();
     if (stage === "correctness" || stage === "reconstruction")
@@ -240,12 +265,11 @@ export function pendingChecks(
         eligible.set(
           note.id,
           note.support.every((id) => eligible.get(id)) &&
-            (stagePassed(note, stage) ||
-              (stage === "reconstruction" && note.imported) ||
-              stagePending(note, stage)),
+            (stagePassed(note, stage) || needsCheck(note)),
         );
+
     return selected.filter(
-      (note) => stagePending(note, stage) && eligible.get(note.id) !== false,
+      (note) => needsCheck(note) && eligible.get(note.id) !== false,
     );
   };
 }
@@ -263,7 +287,12 @@ export function validatePlan(
       if (!note || note.dead) throw new Error(`Unknown or dead note: ${id}`);
       if (note.retired) throw new Error(`Retired note: ${id}`);
     }
-    const pending = pendingChecks(plan.work.notes, plan.work.through, notes);
+    const pending = pendingChecks(
+      plan.work.notes,
+      plan.work.through,
+      notes,
+      plan.work.backend,
+    );
     if (!verificationStages.some((stage) => pending(stage).length))
       throw new Error("Requested verification has no pending checks");
   }

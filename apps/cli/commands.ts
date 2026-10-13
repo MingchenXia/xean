@@ -31,7 +31,9 @@ const program = new Command("xean")
   .hook("preAction", (_program, action) => {
     if (
       program.opts<Flags>().expectedOwnerId !== undefined &&
-      !["resume", "pause", "cancel", "submit", "guide"].includes(action.name())
+      !["resume", "pause", "cancel", "submit", "guide", "recheck"].includes(
+        action.name(),
+      )
     )
       throw new Error("--expected-owner-id requires a live control command");
   });
@@ -167,16 +169,32 @@ program
       });
     },
   );
-for (const kind of ["submit", "guide"] as const)
-  program
+for (const kind of ["submit", "guide", "recheck"] as const) {
+  const command = program
     .command(`${kind} <campaign> <file>`)
-    .requiredOption("--id <id>", "Stable command ID for exact retries")
-    .action(async (campaign: string, file: string, flags: { id: string }) => {
+    .requiredOption("--id <id>", "Stable command ID for exact retries");
+  if (kind === "submit")
+    command.option(
+      "--untrusted",
+      "Require ordinary verification of submitted notes and edits, overriding per-note trust",
+    );
+  command.action(
+    async (
+      campaign: string,
+      file: string,
+      flags: { id: string; untrusted?: boolean },
+    ) => {
       const content =
         kind === "guide"
           ? { text: await Bun.file(resolve(file)).text() }
           : await read(file);
-      await send(campaign, readCommand({ ...content, kind, id: flags.id }));
-    });
+      const value = readCommand({ ...content, kind, id: flags.id });
+      if (value.kind === "submit" && flags.untrusted)
+        for (const note of [...value.notes, ...(value.edits ?? [])])
+          note.trusted = false;
+      await send(campaign, value);
+    },
+  );
+}
 
 await program.parseAsync();

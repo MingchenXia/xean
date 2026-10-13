@@ -28,24 +28,22 @@ import {
   validateExploration,
   validateResult,
 } from "./notes.ts";
-import { resolveResult } from "./results.ts";
 
 export type ResearchEvent =
   { type: "input"; command: SolverCommand } | { type: "result" };
 export const Events = defineEntry<ResearchEvent>("research.event");
-type CheckRef = { worker: number; index: number };
+const NotebookInput = defineEntry<{ checks: Check[] }>(
+  "research.notebook.input",
+);
+type CheckRef =
+  { worker: number; index: number } | { entry: number; index: number };
 type Head = Pick<
   Note,
-  | "id"
-  | "summary"
-  | "support"
-  | "revision"
-  | "imported"
-  | "candidate"
-  | "retired"
+  "id" | "summary" | "support" | "revision" | "candidate" | "retired"
 > & {
-  mathRevision: number;
-  checks: Partial<Record<VerificationStage, CheckRef>>;
+  checks: Partial<Record<VerificationStage, CheckRef>> & {
+    external?: { entry: number };
+  };
   sourceInputs?: string[];
 };
 type CatalogValue = {
@@ -58,7 +56,7 @@ export const Catalog = defineDoc({
   scope: "conversation",
   history: "rewindable",
   fork: "asOf",
-  version: 1,
+  version: 3,
   initial: emptyCatalog,
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 31,
 });
@@ -113,7 +111,9 @@ async function materialize(
       options.bodies !== false && selected
         ? await reads.body(head.id)
         : undefined;
-    const checks: Note["checks"] = {};
+    const checks: Note["checks"] = head.checks.external
+      ? { external: { ...head.checks.external } }
+      : {};
     for (const stage of verificationStages) {
       const ref = head.checks[stage];
       if (!ref) continue;
@@ -127,8 +127,6 @@ async function materialize(
       summary: head.summary,
       support: [...head.support],
       revision: head.revision,
-      mathRevision: head.mathRevision,
-      imported: head.imported,
       candidate: head.candidate,
       retired: head.retired,
       detailedSummary: body?.detailedSummary ?? "",
@@ -160,7 +158,13 @@ async function materialize(
       ? notes.filter((note) => options.ids!.includes(note.id))
       : notes,
     guidance: inputs.flatMap(({ command }) =>
-      command.kind === "guide" ? [command.text] : [],
+      command.kind === "guide"
+        ? [command.text]
+        : command.kind === "recheck"
+          ? [
+              `Assessments withdrawn for ${command.notes.map(({ id }) => id).join(", ")}: ${command.reason}`,
+            ]
+          : [],
     ),
     inputs,
   };
@@ -168,35 +172,40 @@ async function materialize(
 
 function readChecks(
   get: (id: TaskId) => Promise<EvidenceTask | undefined>,
+  entry: (id: EntryId) => Promise<EntryRecord | undefined>,
 ): Reads["check"] {
-  const cache = new Map<number, Promise<Check[]>>();
+  const cache = new Map<number, Promise<EvidenceTask | undefined>>();
+  const inputs = new Map<number, Promise<EntryRecord | undefined>>();
   return async (ref) => {
-    let checks = cache.get(ref.worker);
-    if (!checks) {
-      checks = (async () => {
-        const task = await get(ref.worker as TaskId);
-        if (
-          !task ||
-          (task.state.status !== "terminal" &&
-            task.state.status !== "completing")
-        )
-          throw new Error(`Unsettled verification evidence: ${ref.worker}`);
-        const outcome = task.state.outcome;
-        if (
-          !outcome ||
-          (outcome.status !== "completed" && outcome.status !== "failed") ||
-          outcome.result === undefined
-        )
-          throw new Error(`Missing verification outcome: ${ref.worker}`);
-        // Catalog references commit only after publication validates this immutable outcome.
-        const result = outcome.result as SolverResult;
-        if (result.kind !== "verification")
-          throw new Error(`Not verification evidence: ${ref.worker}`);
-        return result.checks;
-      })();
-      cache.set(ref.worker, checks);
+    if ("entry" in ref) {
+      const pending = inputs.get(ref.entry) ?? entry(ref.entry as EntryId);
+      inputs.set(ref.entry, pending);
+      const input = await pending;
+      const check = NotebookInput.is(input) && input.data.checks[ref.index];
+      if (!check)
+        throw new Error(`Missing input check: ${ref.entry}/${ref.index}`);
+      return check;
     }
-    const check = (await checks)[ref.index];
+    const pending = cache.get(ref.worker) ?? get(ref.worker as TaskId);
+    cache.set(ref.worker, pending);
+    const task = await pending;
+    if (
+      !task ||
+      (task.state.status !== "terminal" && task.state.status !== "completing")
+    )
+      throw new Error(`Unsettled verification evidence: ${ref.worker}`);
+    const outcome = task.state.outcome;
+    if (
+      !outcome ||
+      (outcome.status !== "completed" && outcome.status !== "failed") ||
+      outcome.result === undefined
+    )
+      throw new Error(`Missing verification outcome: ${ref.worker}`);
+    // Catalog references commit only after publication validates this immutable outcome.
+    const result = outcome.result as SolverResult;
+    if (result.kind !== "verification")
+      throw new Error(`Not verification evidence: ${ref.worker}`);
+    const check = result.checks[ref.index];
     if (!check) throw new Error(`Missing check: ${ref.worker}/${ref.index}`);
     return check;
   };
@@ -213,7 +222,10 @@ export async function readView(
     catalog,
     {
       body: (id) => tx.doc(Bodies, root, id, { detailedSummary: "", text: "" }),
-      check: readChecks((id) => tx.task(id)),
+      check: readChecks(
+        (id) => tx.task(id),
+        (id) => tx.entry(NotebookInput, id),
+      ),
       input: async (id) => {
         const entry = await tx.entry(Events, id as EntryId);
         if (entry?.data.type !== "input")
@@ -240,7 +252,10 @@ export async function readSnapshot(
     catalog,
     {
       body: (id) => reader.snapshotAsOf(Bodies, root, id, cutoff, context),
-      check: readChecks((id) => reader.getTask(id, context)),
+      check: readChecks(
+        (id) => reader.getTask(id, context),
+        (id) => reader.entry(id, context),
+      ),
       input: async (id) => {
         const entry = await reader.entry(id as EntryId, context);
         if (!Events.is(entry) || entry.data.type !== "input")
@@ -270,14 +285,24 @@ function invalidate(
 ): void {
   for (const head of catalog.notes) {
     if (!ids.has(head.id)) continue;
-    head.checks = {};
-    head.mathRevision = marker;
+    head.checks = head.checks.external
+      ? { external: head.checks.external }
+      : {};
+    head.revision = marker;
   }
 }
-function normalize(value: Exploration, prefix: string): Exploration {
+function normalize(
+  value: Exploration,
+  prefix: string,
+  known?: ReadonlySet<string>,
+): Exploration {
   const ids = new Set(value.notes.map((note) => note.id));
+  const canonical = (id: string) =>
+    /^n[1-9][0-9]*$/.test(id) && known?.has(`${prefix}/${id}`)
+      ? `${prefix}/${id}`
+      : id;
   const support = (list: string[]) =>
-    list.map((id) => (ids.has(id) ? `${prefix}/${id}` : id));
+    list.map((id) => (ids.has(id) ? `${prefix}/${id}` : canonical(id)));
   return {
     ...value,
     notes: value.notes.map((note) => ({
@@ -289,6 +314,7 @@ function normalize(value: Exploration, prefix: string): Exploration {
       ? {
           edits: value.edits.map((edit) => ({
             ...edit,
+            id: ids.has(edit.id) ? edit.id : canonical(edit.id),
             ...(edit.support ? { support: support(edit.support) } : {}),
           })),
         }
@@ -301,7 +327,7 @@ async function applyNotes(
   catalog: CatalogValue,
   known: Note[],
   value: Exploration,
-  imported: boolean,
+  caller: boolean,
   marker: number,
 ) {
   const invalid = new Set<string>();
@@ -311,11 +337,12 @@ async function applyNotes(
       summary: draft.summary,
       support: draft.support,
       revision: marker,
-      mathRevision: marker,
-      imported,
       candidate: draft.candidate ?? false,
-      retired: false,
-      checks: {},
+      retired: draft.retired ?? false,
+      checks:
+        caller && (!("trusted" in draft) || draft.trusted !== false)
+          ? { external: { entry: marker } }
+          : {},
     });
     await tx.doc(Bodies, root, draft.id, {
       detailedSummary: draft.detailedSummary,
@@ -330,26 +357,31 @@ async function applyNotes(
         ? await tx.doc(Bodies, root, edit.id, { detailedSummary: "", text: "" })
         : undefined;
     if (body) Object.assign(before, body);
-    const {
-      id: _id,
-      revision: _revision,
-      cosmetic: _cosmetic,
-      ...fields
-    } = edit;
+    const { id: _id, revision: _revision, ...fields } = edit;
+    const changed = Object.entries(fields).filter(
+      ([key, value]) =>
+        !isDeepStrictEqual(
+          key === "trusted"
+            ? !!before.checks.external
+            : before[key as keyof Note],
+          value,
+        ),
+    );
+    if (!changed.length) continue;
     if (
-      Object.entries(fields).every(([key, value]) =>
-        isDeepStrictEqual(before[key as keyof Note], value),
+      changed.some(([key]) =>
+        ["summary", "detailedSummary", "text", "support", "trusted"].includes(
+          key,
+        ),
       )
-    )
-      continue;
-    const proofChanged =
-      !edit.cosmetic && edit.text !== undefined && edit.text !== before.text;
-    const edgesChanged =
-      edit.support !== undefined &&
-      !isDeepStrictEqual(edit.support, before.support);
-    if (proofChanged || edgesChanged) {
+    ) {
       invalid.add(head.id);
-      if (!imported) head.imported = false;
+      if (!caller) delete head.checks.external;
+      else if (head.checks.external) head.checks.external = { entry: marker };
+    }
+    if (caller && "trusted" in edit) {
+      if (edit.trusted === true) head.checks.external = { entry: marker };
+      else delete head.checks.external;
     }
     for (const field of ["summary", "support", "candidate", "retired"] as const)
       if (edit[field] !== undefined)
@@ -364,11 +396,117 @@ async function applyNotes(
   if (invalid.size) invalidate(catalog, consumers(catalog, invalid), marker);
 }
 
+/** Standalone Explorer input joins the same notebook, with immutable check evidence. */
+export async function seedNotebook(
+  tx: Tx,
+  root: ConversationId,
+  notes: Note[],
+): Promise<void> {
+  const catalog = await tx.doc(Catalog, root);
+  if (catalog.notes.length || catalog.inputs.length || !notes.length) return;
+  const evidence = sourceEvidence(refresh(structuredClone(notes)));
+  const marker = (
+    await tx.appendEntry(NotebookInput, root, {
+      data: {
+        checks: notes.map((note) => ({ noteId: note.id, ...note.checks })),
+      },
+    })
+  ).id;
+  await applyNotes(tx, root, catalog, [], { notes }, false, marker);
+  for (const [index, note] of notes.entries()) {
+    const head = catalog.notes[index]!;
+    if (note.checks.external) head.checks.external = { entry: marker };
+    for (const stage of verificationStages)
+      if (note.checks[stage]) head.checks[stage] = { entry: marker, index };
+    if (note.checks.source) head.sourceInputs = sourceInputKeys(note, evidence);
+  }
+}
+
+async function publicationOwner(tx: Tx, root: ConversationId, id: TaskId) {
+  const worker = await tx.task(id);
+  if (
+    !worker ||
+    worker.conversationId !== root ||
+    worker.state.status === "terminal" ||
+    worker.state.status === "completing"
+  )
+    throw new Error(`Invalid publication owner: ${id}`);
+}
+
+async function publishNotes(
+  tx: Tx,
+  root: ConversationId,
+  catalog: CatalogValue,
+  known: Note[],
+  value: Exploration,
+): Promise<EntryId> {
+  validateExploration(value, known);
+  const marker = (
+    await tx.appendEntry(Events, root, { data: { type: "result" } })
+  ).id;
+  await applyNotes(tx, root, catalog, known, value, false, marker);
+  return marker;
+}
+
+/** Publish one submission against the notebook the Explorer has actually observed. */
+export async function publishExploration(
+  tx: Tx,
+  root: ConversationId,
+  workerId: TaskId,
+  delta: Exploration,
+  observed: Record<string, number>,
+): Promise<{
+  entry?: EntryId;
+  notes: { id: string; revision: number }[];
+  edits: { id: string; revision: number }[];
+}> {
+  await publicationOwner(tx, root, workerId);
+  if (!delta.notes.length && !delta.edits?.length)
+    return { notes: [], edits: [] };
+  const current = await readView(tx, root, { bodies: false, inputs: false });
+  const known = new Set(current.notes.map((note) => note.id));
+  const normalized = normalize(delta, String(workerId), known);
+  for (const note of closure(
+    [
+      ...(normalized.edits ?? []).map((edit) => edit.id),
+      ...[...normalized.notes, ...(normalized.edits ?? [])]
+        .flatMap((note) => note.support ?? [])
+        .filter((id) => known.has(id)),
+    ],
+    current.notes,
+  ))
+    if (observed[note.id] !== note.revision)
+      throw new Error(
+        `${observed[note.id] === undefined ? "Unseen mathematical input" : "Stale note revision"}: ${note.id}`,
+      );
+  const catalog = await tx.doc(Catalog, root);
+  const entry = await publishNotes(
+    tx,
+    root,
+    catalog,
+    current.notes,
+    normalized,
+  );
+  const revisions = (values: { id: string }[]) =>
+    values.map(({ id }) => ({
+      id,
+      revision: catalog.notes.find((note) => note.id === id)!.revision,
+    }));
+  const publication = {
+    entry,
+    notes: revisions(normalized.notes),
+    edits: revisions(normalized.edits ?? []),
+  };
+  for (const { id } of [...publication.notes, ...publication.edits])
+    observed[id] = catalog.notes.find((note) => note.id === id)!.revision;
+  return publication;
+}
+
 function assertFrozen(current: Note[], frozen: Note[], ids: string[]): void {
   const signature = (note: Note) => ({
-    mathRevision: note.mathRevision ?? note.revision,
+    revision: note.revision,
     support: note.support,
-    imported: note.imported,
+    external: note.checks.external,
     correctness: note.checks.correctness,
     source: note.checks.source,
   });
@@ -388,25 +526,8 @@ export async function publishResult(
   frozen: MathView,
   failed = false,
 ): Promise<EntryId> {
-  const worker = await tx.task(workerId);
-  if (
-    !worker ||
-    worker.conversationId !== root ||
-    worker.state.status === "terminal" ||
-    worker.state.status === "completing"
-  )
-    throw new Error(`Invalid publication owner: ${workerId}`);
-  // Failed exploration may publish only owned, validated native submissions.
-  const submitted =
-    value !== null &&
-    typeof value === "object" &&
-    "kind" in value &&
-    value.kind === "submissions";
-  const result = validateResult(
-    await resolveResult(tx, value, workerId),
-    frozen.notes,
-    failed && !submitted,
-  );
+  await publicationOwner(tx, root, workerId);
+  const result = validateResult(value, frozen.notes, failed);
   const current = await readView(tx, root, { bodies: false, inputs: false });
   const catalog = await tx.doc(Catalog, root);
   if (result.kind === "notes") {
@@ -420,20 +541,7 @@ export async function publishResult(
         .flatMap((note) => note.support)
         .filter((id) => frozen.notes.some((note) => note.id === id)),
     ]);
-    validateExploration(normalized, current.notes);
-    const marker = (
-      await tx.appendEntry(Events, root, { data: { type: "result" } })
-    ).id;
-    await applyNotes(
-      tx,
-      root,
-      catalog,
-      current.notes,
-      normalized,
-      false,
-      marker,
-    );
-    return marker;
+    return publishNotes(tx, root, catalog, current.notes, normalized);
   }
   assertFrozen(
     current.notes,
@@ -466,7 +574,11 @@ export async function publishResult(
     await tx.appendEntry(Events, root, { data: { type: "result" } })
   ).id;
   invalidate(catalog, changed, marker);
-  for (const note of current.notes) if (changed.has(note.id)) note.checks = {};
+  for (const note of current.notes)
+    if (changed.has(note.id))
+      note.checks = note.checks.external
+        ? { external: note.checks.external }
+        : {};
   let evidence: ReturnType<typeof sourceEvidence> | undefined;
   for (const [index, check] of result.checks.entries()) {
     const head = catalog.notes.find((note) => note.id === check.noteId)!;
@@ -514,7 +626,7 @@ export async function publishResult(
   return marker;
 }
 
-/** Caller inputs share publication and revision checks and preserve existing import trust. */
+/** Caller inputs share publication, revision checks, and evidence withdrawal. */
 export async function publishCommand(
   tx: Tx,
   root: ConversationId,
@@ -533,6 +645,17 @@ export async function publishCommand(
       ? normalize(command, `input/${command.id}`)
       : undefined;
   if (exploration) validateExploration(exploration, current.notes);
+  const recheck = new Set<string>();
+  if (command.kind === "recheck")
+    for (const target of command.notes) {
+      if (recheck.has(target.id))
+        throw new Error(`Duplicate recheck target: ${target.id}`);
+      const note = current.notes.find((note) => note.id === target.id);
+      if (!note) throw new Error(`Unknown recheck target: ${target.id}`);
+      if (note.revision !== target.revision)
+        throw new Error(`Stale note revision: ${target.id}`);
+      recheck.add(target.id);
+    }
   const marker = (
     await tx.appendEntry(Events, root, { data: { type: "input", command } })
   ).id;
@@ -546,6 +669,11 @@ export async function publishCommand(
       true,
       marker,
     );
+  if (recheck.size) {
+    for (const head of catalog.notes)
+      if (recheck.has(head.id)) delete head.checks.external;
+    invalidate(catalog, consumers(catalog, recheck), marker);
+  }
   catalog.inputs.push({ entry: marker });
   return { entry: marker, created: true };
 }

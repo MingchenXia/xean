@@ -4,6 +4,8 @@ import { temporaryDirectory } from "./directory.ts";
 import { cliModels } from "../apps/cli/models.ts";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   createModels,
   envApiKeyAuth,
@@ -540,18 +542,103 @@ test("native stream routes require and preserve usage attribution headers", asyn
   expect(faux.state.callCount).toBe(1);
 });
 
-test("native custom-provider routes guard implicit limits and clamp explicit ceilings", async () => {
+test("default and CLI catalogs use native model capacity separately from pricing thresholds", async () => {
+  const original = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = await temporaryDirectory("xean-models-");
+  try {
+    const native = builtinModels({ authContext: auth({}) });
+    const targets = ["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-luna"];
+    for (const models of [
+      createRuntime(defaultSettings).models,
+      await cliModels(),
+    ]) {
+      for (const id of targets) {
+        const baseline = native.getModel("openai", id)!;
+        expect(baseline).toMatchObject({
+          contextWindow: 1_050_000,
+          maxTokens: 128_000,
+        });
+        expect(baseline.cost.tiers?.[0]?.inputTokensAbove).toBe(272_000);
+        expect(models.getModel("openai", id)).toEqual(baseline);
+      }
+      expect(models.getAllModels("openai-codex")).toEqual(
+        native.getAllModels("openai-codex"),
+      );
+    }
+  } finally {
+    if (original === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = original;
+  }
+});
+
+test("public OpenAI requests retain full output through the corrected input boundary", async () => {
+  const models = builtinModels({ authContext: auth({}) });
   const faux = fauxProvider({
-    provider: "custom",
-    models: [{ id: "small", contextWindow: 8192, maxTokens: 1024 }],
+    provider: "openai",
+    models: [{ id: "gpt-6.1-sol" }],
+  });
+  models.setProvider({
+    ...models.getProvider("openai")!,
+    auth: faux.provider.auth,
+    streamSimple: faux.provider.streamSimple,
+  });
+  const runtime = createRuntime(
+    { profiles: { default: { provider: "openai", model: "gpt-6.1-sol" } } },
+    { models },
+  );
+  const seen: unknown[] = [];
+  const respond: Parameters<typeof faux.setResponses>[0][number] = (
+    context,
+    options,
+    _state,
+    model,
+  ) => {
+    seen.push({
+      input: estimateContextTokens(context).tokens,
+      output: options?.maxTokens,
+      capacity: model.contextWindow,
+    });
+    return fauxAssistantMessage("ok");
+  };
+  faux.setResponses([respond, respond, respond]);
+  // Pi estimates text at 3.5 characters/token and reserves 4096 safety tokens.
+  for (const tokens of [139_905, 169_537, 917_904, 917_905]) {
+    const messages: Context["messages"] = [
+      {
+        role: "user",
+        content: "x".repeat(Math.floor(tokens * 3.5)),
+        timestamp: 0,
+      },
+    ];
+    expect(estimateContextTokens(messages).tokens).toBe(tokens);
+    const result = await complete(runtime, "explorer", { messages });
+    if (tokens <= 917_904) expect(result.stopReason).toBe("stop");
+    else expect(result.errorMessage).toBe(capacityError);
+  }
+  expect(seen).toEqual([
+    { input: 139_905, output: 128_000, capacity: 1_050_000 },
+    { input: 169_537, output: 128_000, capacity: 1_050_000 },
+    { input: 917_904, output: 128_000, capacity: 1_050_000 },
+  ]);
+  expect(faux.state.callCount).toBe(3);
+});
+
+test("an explicit same-model collection retains its smaller limits and explicit ceilings", async () => {
+  const faux = fauxProvider({
+    provider: "openai",
+    models: [{ id: "gpt-6-astra", contextWindow: 8192, maxTokens: 1024 }],
   });
   const models = createModels();
   models.setProvider(faux.provider);
   const runtime = createRuntime(
     readSettings({
-      profiles: { default: { provider: "custom", model: "small" } },
+      profiles: { default: { provider: "openai", model: "gpt-6-astra" } },
     }),
     { models },
+  );
+  expect(runtime.models).toBe(models);
+  expect(runtime.models.getModel("openai", "gpt-6-astra")).toEqual(
+    faux.getModel(),
   );
   expect(
     (

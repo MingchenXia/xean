@@ -23,6 +23,11 @@ await access(join(root, "bun.lock"));
 
 const { inspect } = await import(manifest.name);
 const { readReport, readStatus } = await import(`${manifest.name}/report`);
+const { cliModels } = await import("../apps/cli/models.ts");
+assert.equal(
+  (await cliModels()).getModel("openai", "gpt-6.1-sol")!.contextWindow,
+  1_050_000,
+);
 await using temporary = await mkdtempDisposable(
   join(tmpdir(), "xean-package-smoke-"),
 );

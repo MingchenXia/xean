@@ -47,6 +47,10 @@ export interface Research {
 }
 
 const taskEvidence = `The supplied task is authoritative for its explicitly granted assumptions and permitted background. Verify their exact scope and application; a claim merely asserted in a note or requested as a conclusion is not a granted assumption. For a task-granted premise, return a passage with url="${taskSource}" and an exact quote from task.problem or task.completionCriteria. That passage needs no web retrieval.`;
+const noPremises = {
+  verdict: "PASS" as const,
+  report: "The correctness check identified no nonroutine external premise.",
+};
 const sourceInstructions =
   "Check each distinct external fact against primary-source evidence. Return one judgment per supplied fact in results; noteId identifies the fact's temporary id. Include verdict, report, and passages. Each fact has one exact statement, so every passage uses premise:0. Assess the statement's exact hypotheses, quantifiers, conclusion, and variant. Correctness handles the notes' derivations and applications of these facts; requirements handles task completion. Preserve conditional claims as implications without establishing their antecedents. Statements must stand alone for a blind prover. Source names and citations are allowed. Mathematical scope, including quantified applicability and constructive guarantees, is part of the claim. Instructions for proving a note and validation commentary belong outside the statement. If the frozen wording includes such guidance or is too ambiguous to stand alone, return INCONCLUSIVE and explain the issue. A concrete mathematical mismatch gives FAIL. Never silently repair or rewrite a frozen statement. PASS approves exactly the supplied statement. First assess the task and supplied evidence. Evidence retains each quotation's original statement and ID. Judge whether each quotation establishes the current fact; an earlier PASS does not establish a different claim. When supplied evidence suffices, return without web activity. Reuse sufficient quotations with {premise:0, passageId}. Retrieve only evidence missing for a specific fact, then stop once that gap is settled. For fresh evidence, open a primary source and return {premise:0, url, quote} with an exact quotation. Search snippets and remembered theorems are insufficient. Missing necessary evidence gives INCONCLUSIVE. Citation typos alone do not fail valid mathematics. " +
   taskEvidence;
@@ -88,21 +92,15 @@ export function codexResearch(askCodex: AskCodex): Research {
             bindCodex(
               { ...response, value: results[index]! },
               [fact.statement],
+              input.task,
               input.evidence,
               `${response.operationId}/${fact.id}`,
-              input.task,
             ),
           );
         });
       }
       return input.notes.map((note): Source & { noteId: string } => {
-        if (!note.premises.length)
-          return {
-            noteId: note.id,
-            verdict: "PASS",
-            report:
-              "The correctness check identified no nonroutine external premise.",
-          };
+        if (!note.premises.length) return { noteId: note.id, ...noPremises };
         const judgments = note.premises.map((premise) => reports.get(premise)!);
         return {
           ...judgments[0]!,
@@ -147,13 +145,7 @@ export function codexResearch(askCodex: AskCodex): Research {
         runtime,
         context,
       );
-      return bindCodex(
-        result,
-        result.value.premises,
-        [],
-        result.operationId,
-        input.task,
-      );
+      return bindCodex(result, result.value.premises, input.task);
     },
   };
 }
@@ -169,11 +161,7 @@ export const closedBookResearch: Research = {
             report:
               "External premises remain unresolved because source retrieval is disabled.",
           }
-        : {
-            verdict: "PASS" as const,
-            report:
-              "The correctness check identified no nonroutine external premise.",
-          }),
+        : noPremises),
     }));
   },
   async literature() {

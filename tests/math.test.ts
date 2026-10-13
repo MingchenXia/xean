@@ -22,42 +22,6 @@ import {
   validateResult,
 } from "../src/math/notes.ts";
 import { acceptedArgument, closure } from "../src/math/argument.ts";
-import { mergeExploration } from "../src/math/results.ts";
-import type { NoteEdit } from "../src/math/contracts.ts";
-
-test.each([
-  [[{ text: "formatted", cosmetic: true }, { text: "new proof" }], false],
-  [[{ text: "new proof" }, { text: "formatted", cosmetic: true }], false],
-  [[{ text: "formatted", cosmetic: true }, { summary: "shorter" }], true],
-  [
-    [
-      { text: "formatted", cosmetic: true },
-      { text: "formatted again", cosmetic: true },
-    ],
-    true,
-  ],
-  [[{ text: "new proof" }, { cosmetic: true }], false],
-  [[{ summary: "shorter" }, { text: "formatted", cosmetic: true }], true],
-] as [Partial<NoteEdit>[], boolean][])(
-  "private edit merging preserves mathematical changes: %j",
-  (edits, cosmetic) => {
-    const result = mergeExploration(
-      edits.map((edit) => ({
-        notes: [],
-        edits: [{ id: "n1", revision: 1, ...edit }],
-      })),
-    );
-    expect(result.edits).toEqual([
-      {
-        id: "n1",
-        revision: 1,
-        ...Object.assign({}, ...edits),
-        cosmetic,
-      },
-    ]);
-  },
-);
-
 const pass = { verdict: "PASS" as const, report: "Checked exact statement." };
 const content = (claim: string) => ({
   summary: claim,
@@ -68,11 +32,11 @@ const note = (id: string, support: string[] = [], imported = false): Note => ({
   id,
   ...content(id),
   support,
-  imported,
   revision: 0,
   retired: false,
   candidate: false,
   checks: {
+    ...(imported ? { external: { entry: 1 } } : {}),
     correctness: { ...pass, statement: id, premises: [] },
     ...(imported ? {} : { source: pass }),
   },
@@ -106,6 +70,77 @@ test("caller and worker submissions reject batch-level candidate flags", () => {
   }
 });
 
+test("only caller notes accept a boolean trust choice", () => {
+  const draft = { id: "n1", ...content("Claim"), support: [] };
+  for (const trusted of [true, false]) {
+    expect(() =>
+      validateResult({ kind: "notes", notes: [{ ...draft, trusted }] }, []),
+    ).toThrow("Invalid value");
+    expect(() =>
+      validateResult(
+        {
+          kind: "notes",
+          notes: [],
+          edits: [{ id: "prior", revision: 0, trusted }],
+        },
+        [note("prior")],
+      ),
+    ).toThrow("Invalid value");
+  }
+  for (const trusted of [null, "false", 0]) {
+    expect(() =>
+      readCommand({
+        kind: "submit",
+        id: "reference",
+        notes: [{ ...draft, trusted }],
+      }),
+    ).toThrow("Invalid value");
+  }
+});
+
+test("external grants require verified dependencies and cannot be forged by workers", () => {
+  const base = note("base");
+  base.checks = {};
+  const target = note("target", [base.id]);
+  target.checks = { external: { entry: 1 } };
+  expect(refresh([base, target])[1]!.verified).toBe(false);
+  base.checks = note("base").checks;
+  refresh([base, target]);
+  expect(target.verified).toBe(true);
+  expect(target.accepted).toBe(false);
+  expect(target.checks.correctness).toBeUndefined();
+  expect(() =>
+    validateResult(
+      {
+        kind: "verification",
+        checks: [{ noteId: base.id, external: { entry: 1 } }],
+      },
+      [base],
+    ),
+  ).toThrow("Invalid value");
+});
+
+test("external statement preparation retains normal uncertainty and retry rules", () => {
+  const target = note("external");
+  target.checks = { external: { entry: 1 }, requirements: pass };
+  const notes = refresh([target]);
+  const pending = pendingChecks([target.id], "reconstruction", notes);
+  expect(pending("correctness")).toEqual([target]);
+  for (const statement of [null, "Unconfirmed extraction"]) {
+    target.checks.correctness = {
+      verdict: "INCONCLUSIVE",
+      report: "Extraction unresolved",
+      statement,
+      premises: [],
+    };
+    expect(pending("correctness")).toEqual([]);
+    expect(pending("reconstruction")).toEqual([]);
+  }
+  expect(
+    pendingChecks([target.id], "reconstruction", notes, "codex")("correctness"),
+  ).toEqual([target]);
+});
+
 test("completed uncertain checks stay closed on unchanged inputs", () => {
   const candidate = refresh([note("candidate")])[0]!;
   const report = "The completion criterion is not established.";
@@ -121,34 +156,66 @@ test("completed uncertain checks stay closed on unchanged inputs", () => {
   ]);
 });
 
-test.each(["correctness", "reconstruction"] as const)(
-  "%s uncertainty blocks unchanged verification requests",
+test.each(["correctness", "requirements", "reconstruction"] as const)(
+  "Coordinator can select Codex for %s uncertainty without changing the claim",
   (stage) => {
     const target = note("target");
     const uncertain = {
       verdict: "INCONCLUSIVE" as const,
-      report: "Unresolved.",
+      report: "The finite certificate still needs exhaustive checking.",
     };
     if (stage === "correctness")
       target.checks = {
         correctness: { ...uncertain, statement: target.id, premises: [] },
       };
+    else if (stage === "requirements") target.checks.requirements = uncertain;
     else
       Object.assign(target.checks, {
         requirements: pass,
-        reconstruction: { ...uncertain, proof: "Partial proof." },
+        reconstruction: { ...uncertain, proof: "Finite checks unfinished." },
       });
     const notes = refresh([target]);
-    const plan: Plan = {
+    const plan = {
       work: { kind: "verifier", notes: [target.id], through: stage },
-    };
-    expect(() => validatePlan(plan, notes, capabilities)).toThrow(
+    } satisfies Plan;
+    const enabled = { ...capabilities, codexVerifier: true };
+    expect(() => validatePlan(plan, notes, enabled)).toThrow(
       "no pending checks",
     );
-    expect(target.dead).toBe(false);
-    expect(target.accepted).toBe(false);
+    const codex = { work: { ...plan.work, backend: "codex" as const } };
+    expect(() => validatePlan(codex, notes, capabilities)).toThrow();
+    expect(() =>
+      validatePlan(codex, notes, { ...capabilities, codex: true }),
+    ).toThrow();
+    expect(validatePlan(codex, notes, enabled)).toEqual(codex);
+    expect(target).toMatchObject({ dead: false, accepted: false });
   },
 );
+
+test("Codex cannot reopen settled checks, absent claims, or unchanged source evidence", () => {
+  for (const verdict of ["PASS", "FAIL"] as const) {
+    const target = note("settled");
+    target.checks.correctness!.verdict = verdict;
+    refresh([target]);
+    expect(stagePending(target, "correctness", "codex")).toBe(false);
+  }
+  const question = note("question");
+  question.checks = {
+    correctness: {
+      verdict: "INCONCLUSIVE",
+      statement: null,
+      premises: [],
+      report: "No claim is asserted.",
+    },
+  };
+  expect(stagePending(question, "correctness", "codex")).toBe(false);
+  const unsourced = note("unsourced");
+  unsourced.checks.source = {
+    verdict: "INCONCLUSIVE",
+    report: "The required primary-source evidence is missing.",
+  };
+  expect(stagePending(unsourced, "source", "codex")).toBe(false);
+});
 
 test("Coordinator plans contain one worker or an intentional wait", () => {
   const plan: Plan = {
@@ -200,9 +267,10 @@ test("correctness targets still establish sources when they support another targ
   );
 });
 
-test("acceptance reconstructs generated dependencies beneath trusted imports and preserves useful requirements failures", () => {
+test("acceptance reconstructs generated dependencies including externally trusted notes and preserves useful requirements failures", () => {
   const base = note("base");
   const imported = note("import", ["base"], true);
+  imported.text = "Externally supplied theorem statement.";
   const target = note("solution", ["import"]);
   base.checks.requirements = {
     verdict: "FAIL",
@@ -232,10 +300,14 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
     ...pass,
     proof: "Independent lemma proof",
   };
+  imported.checks.reconstruction = {
+    ...pass,
+    proof: "Independent imported result proof",
+  };
   refresh(notes);
   expect(target.accepted).toBe(true);
   expect(acceptedArgument(notes, target.id)).toBe(
-    "## base\n\nbase\n\nProof of base.\n\n## import\n\nimport\n\nProof of import.\n\n## solution\n\nsolution\n\nProof of solution.",
+    "## base\n\nbase\n\nProof of base.\n\n## import\n\nExternally supplied theorem statement.\n\n### Independent proof\n\nIndependent imported result proof\n\n## solution\n\nsolution\n\nProof of solution.",
   );
   expect(base.dead).toBe(false);
   expect(base.accepted).toBe(false);
@@ -304,8 +376,8 @@ test("correctness PASS freezes the claim without suppressing later FAIL", () => 
   );
 });
 
-test("a null checked statement cannot establish support or acceptance even with PASS records", () => {
-  const question = note("question", [], true);
+test("acceptance requires a confirmed statement even with other PASS records", () => {
+  const question = note("question");
   question.text = "Could an exchange argument settle the conjecture?";
   question.checks.correctness!.statement = null;
   const candidate = note("candidate", [question.id]);
@@ -322,6 +394,17 @@ test("a null checked statement cannot establish support or acceptance even with 
     });
   expect(stagePassed(question, "source")).toBe(false);
   expect(stagePending(question, "correctness")).toBe(false);
+  question.checks.external = { entry: 1 };
+  for (const statement of [null, "Unconfirmed extraction"]) {
+    question.checks.correctness = {
+      verdict: "INCONCLUSIVE",
+      statement,
+      premises: [],
+      report: "Exact statement not confirmed.",
+    };
+    for (const entry of refresh([candidate, question]))
+      expect(entry).toMatchObject({ verified: true, accepted: false });
+  }
 });
 
 test("completed source judgments close retries and unresolved premises remain frozen", () => {
@@ -410,8 +493,6 @@ test("source evidence reuse preserves immutable original bindings", () => {
       },
     },
     [],
-    [],
-    "review",
     task,
   );
   expect(selfContained.verdict).toBe("PASS");
@@ -426,6 +507,7 @@ test("source evidence reuse preserves immutable original bindings", () => {
         },
       },
       [evidence.statement],
+      undefined,
       [evidence],
     ).verdict,
   ).toBe("PASS");

@@ -27,7 +27,6 @@ import {
   validatePlan,
 } from "../src/math/notes.ts";
 import type { Check, Note, SolverResult } from "../src/math/contracts.ts";
-import { mergeExploration } from "../src/math/results.ts";
 
 const pass = { verdict: "PASS" as const, report: "Checked." };
 const content = (text: string) => ({
@@ -208,8 +207,8 @@ test("proof repairs invalidate only their dependency chain and retain stable not
     });
     const summarized = (await owner.view()).notes[0]!;
     expect(summarized.revision).toBeGreaterThan(base!.revision);
-    expect(summarized.checks).toEqual(base!.checks);
-    expect((await owner.view()).notes[1]!.accepted).toBe(true);
+    expect(summarized.checks).toEqual({});
+    expect((await owner.view()).notes[1]!.accepted).toBe(false);
     await owner.publish({
       kind: "notes",
       notes: [],
@@ -241,7 +240,11 @@ test("proof repairs invalidate only their dependency chain and retain stable not
       accepted: false,
       checks: {},
     });
-    await owner.publish({ kind: "verification", checks: [checked(consumer!)] });
+    const currentConsumer = (await owner.view()).notes[1]!;
+    await owner.publish({
+      kind: "verification",
+      checks: [checked(currentConsumer)],
+    });
     expect((await owner.view()).notes[1]!.accepted).toBe(true);
 
     await owner.publish({
@@ -250,7 +253,7 @@ test("proof repairs invalidate only their dependency chain and retain stable not
       edits: [
         {
           id: consumer!.id,
-          revision: consumer!.revision,
+          revision: currentConsumer.revision,
           support: ["n1"],
         },
       ],
@@ -268,7 +271,115 @@ test("proof repairs invalidate only their dependency chain and retain stable not
   }
 });
 
-test("cosmetic and no-op edits preserve diagnosis; stale mathematical publications fail atomically", async () => {
+test("operator recheck withdraws evidence atomically without editing notes or accepting stale work", async () => {
+  const owner = await fixture();
+  try {
+    const [base, consumer] = await seed(owner);
+    await owner.command({
+      kind: "submit",
+      id: "grants",
+      notes: [
+        { id: "n1", ...content("Imported theorem"), support: [] },
+        { id: "n2", ...content("Unrelated theorem"), support: [] },
+      ],
+    });
+    await owner.publish({
+      kind: "notes",
+      notes: [
+        {
+          id: "n1",
+          ...content("Transitive consumer"),
+          support: [consumer!.id],
+        },
+      ],
+    });
+    await owner.publish({
+      kind: "verification",
+      checks: (await owner.view()).notes.slice(2).map((note) => checked(note)),
+    });
+    const before = await owner.view();
+    const at = await owner.marker();
+    const imported = before.notes[2]!;
+    const unrelated = before.notes[3]!;
+    const command = {
+      kind: "recheck" as const,
+      id: "unsupported-pass",
+      notes: [base!, imported].map(({ id, revision }) => ({ id, revision })),
+      reason: "The verifier relied on an unsupported trust assumption.",
+    };
+    for (const invalid of [
+      { ...command, reason: " " },
+      { ...command, notes: [] },
+      { ...command, notes: [...command.notes, command.notes[0]] },
+      { ...command, notes: [...command.notes, { id: "missing", revision: 0 }] },
+      {
+        ...command,
+        notes: [...command.notes, { id: consumer!.id, revision: 0 }],
+      },
+    ]) {
+      await expect(owner.command(invalid)).rejects.toThrow();
+      expect(await owner.view()).toEqual(before);
+    }
+    const receipt = await owner.command(command);
+    const after = await owner.view();
+    for (const old of before.notes) {
+      const note = after.notes.find((note) => note.id === old.id)!;
+      const { sourceChanged: _sourceChanged, ...prior } = old;
+      expect(note).toEqual(
+        old.id === unrelated.id
+          ? old
+          : {
+              ...prior,
+              revision: old.id === unrelated.id ? old.revision : receipt.entry,
+              checks: {},
+              verified: false,
+              accepted: false,
+            },
+      );
+    }
+    expect(after.inputs.at(-1)).toEqual({ id: receipt.entry, command });
+    expect(await owner.snapshot(at)).toEqual(before);
+    expect((await owner.command(command)).entry).toBe(receipt.entry);
+    await expect(
+      owner.command({ ...command, reason: "Different reason" }),
+    ).rejects.toThrow("Input ID already");
+    await expect(owner.command({ ...command, id: "stale" })).rejects.toThrow(
+      "Stale note revision",
+    );
+    for (const result of [
+      { kind: "verification", checks: [checked(base!)] },
+      {
+        kind: "notes",
+        notes: [
+          {
+            id: "n1",
+            ...content("Stale derived result"),
+            support: [consumer!.id],
+          },
+        ],
+      },
+    ] satisfies SolverResult[]) {
+      const outcome = await owner.run(result, before);
+      expect(outcome.status).toBe("faulted");
+      expect(JSON.stringify(outcome)).toContain("Stale mathematical input");
+    }
+    expect(await owner.view()).toEqual(after);
+    await owner.publish({
+      kind: "verification",
+      checks: after.notes
+        .filter((note) => note.id !== unrelated.id)
+        .map((note) => checked(note)),
+    });
+    const reassessed = await owner.view();
+    expect(reassessed.notes.every((note) => note.verified)).toBe(true);
+    await owner.command(command);
+    expect(await owner.view()).toEqual(reassessed);
+  } finally {
+    await owner.harness.close(context);
+  }
+});
+
+test("changed edits reopen checks and stale publications fail atomically", async () => {
   const owner = await fixture();
   try {
     const [base] = await seed(owner);
@@ -281,27 +392,14 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
           id: base!.id,
           revision: base!.revision,
           summary: "A clearer summary",
-          text: "Lemma proof\n",
-          cosmetic: true,
+          text: "Changed proof",
         },
       ],
     });
-    const summaryEdited = (await owner.view()).notes[0]!;
-    expect(summaryEdited.mathRevision).toBe(base!.mathRevision);
-    expect(summaryEdited.checks).toEqual(base!.checks);
-    expect(summaryEdited.revision).toBeGreaterThan(base!.revision);
-    expect((await owner.view()).notes[1]!.accepted).toBe(true);
-    await owner.publish(
-      { kind: "verification", checks: [checked(base!)] },
-      frozen,
-    );
-    await owner.publish({
-      kind: "notes",
-      notes: [],
-      edits: [
-        { id: base!.id, revision: summaryEdited.revision, text: "New proof" },
-      ],
-    });
+    const changed = (await owner.view()).notes[0]!;
+    expect(changed.revision).toBeGreaterThan(base!.revision);
+    expect(changed.checks).toEqual({});
+    expect(changed.accepted).toBe(false);
     const afterEdit = await owner.view();
     const stale = await owner.run(
       { kind: "verification", checks: [checked(base!)] },
@@ -309,21 +407,6 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
     );
     expect(stale.status).toBe("faulted");
     expect(await owner.view()).toEqual(afterEdit);
-    const now = afterEdit.notes[0]!;
-    await owner.publish({
-      kind: "verification",
-      checks: [
-        {
-          noteId: now.id,
-          correctness: {
-            verdict: "INCONCLUSIVE",
-            report: "Missing case",
-            statement: now.id,
-            premises: [],
-          },
-        },
-      ],
-    });
     const assessed = (await owner.view()).notes[0]!;
     await owner.publish({
       kind: "notes",
@@ -333,36 +416,18 @@ test("cosmetic and no-op edits preserve diagnosis; stale mathematical publicatio
           id: assessed.id,
           revision: assessed.revision,
           text: assessed.text,
-          cosmetic: true,
         },
       ],
     });
     const unchanged = (await owner.view()).notes[0]!;
     expect(unchanged.revision).toBe(assessed.revision);
-    expect(stagePending(unchanged, "correctness")).toBe(false);
-    await owner.publish({
-      kind: "notes",
-      notes: [],
-      edits: [
-        {
-          id: assessed.id,
-          revision: assessed.revision,
-          text: `${assessed.text}\n`,
-          cosmetic: true,
-        },
-      ],
-    });
-    const formatted = (await owner.view()).notes[0]!;
-    expect(formatted.revision).toBeGreaterThan(assessed.revision);
-    expect(formatted.mathRevision).toBe(assessed.mathRevision);
-    expect(formatted.checks).toEqual(assessed.checks);
-    expect(stagePending(formatted, "correctness")).toBe(false);
+    expect(unchanged.checks).toEqual({});
   } finally {
     await owner.harness.close(context);
   }
 });
 
-test("caller and Explorer cosmetic edits preserve import trust, but support changes revoke it", async () => {
+test("all changed imported edits revoke trust and checks", async () => {
   const owner = await fixture();
   try {
     await owner.command({
@@ -374,14 +439,12 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
       kind: "verification",
       checks: (await owner.view()).notes.map((note) => checked(note)),
     });
-    const original = (await owner.view()).notes[0]!;
     for (const actor of ["caller", "explorer"]) {
       const before = (await owner.view()).notes[0]!;
       const edit = {
         id: before.id,
         revision: before.revision,
         text: `${before.text}\n`,
-        cosmetic: true,
       };
       if (actor === "caller") {
         await owner.command({
@@ -399,10 +462,10 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
       }
       const after = (await owner.view()).notes[0]!;
       expect(after.revision).toBeGreaterThan(before.revision);
-      expect(after.mathRevision).toBe(original.mathRevision);
-      expect(after.checks).toEqual(original.checks);
-      expect(after.imported).toBe(true);
-      expect(after.verified).toBe(true);
+      expect(after.checks).toEqual(
+        actor === "caller" ? { external: { entry: after.revision } } : {},
+      );
+      expect(after.verified).toBe(actor === "caller");
     }
     const before = (await owner.view()).notes[0]!;
     await owner.publish({
@@ -413,21 +476,116 @@ test("caller and Explorer cosmetic edits preserve import trust, but support chan
           id: before.id,
           revision: before.revision,
           support: ["n2"],
-          cosmetic: true,
         },
       ],
     });
     const after = (await owner.view()).notes[0]!;
-    expect(after.mathRevision).toBeGreaterThan(original.mathRevision!);
     expect(after.checks).toEqual({});
-    expect(after.imported).toBe(false);
     expect(after.verified).toBe(false);
   } finally {
     await owner.harness.close(context);
   }
 });
 
-test("caller mathematical edits preserve import trust; Explorer edits revoke it", async () => {
+test("caller notes carry individual trust and untrusted claims require source checks", async () => {
+  const owner = await fixture();
+  try {
+    const command = {
+      kind: "submit" as const,
+      id: "mixed",
+      notes: [false, true, undefined].map((trusted, index) => ({
+        id: `n${index + 1}`,
+        ...content("Claim under P"),
+        support: [],
+        ...(trusted === undefined ? {} : { trusted }),
+      })),
+    };
+    const receipt = await owner.command(command);
+    expect(await owner.command(command)).toEqual({
+      ...receipt,
+      created: false,
+    });
+    await expect(
+      owner.command({
+        ...command,
+        notes: command.notes.map((note) => ({ ...note, trusted: true })),
+      }),
+    ).rejects.toThrow("Input ID already has another value");
+    const initial = await owner.view();
+    expect(initial.inputs[0]!.command).toEqual(command);
+    expect(initial.notes.map((n) => !!n.checks.external)).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    await owner.publish({
+      kind: "verification",
+      checks: [
+        {
+          noteId: initial.notes[0]!.id,
+          correctness: { ...pass, statement: "Claim under P", premises: ["P"] },
+        },
+      ],
+    });
+    const assessed = (await owner.view()).notes;
+    expect(assessed.map((note) => note.verified)).toEqual([false, true, true]);
+    expect(stagePending(assessed[0]!, "source")).toBe(true);
+    await owner.publish({
+      kind: "verification",
+      checks: [{ noteId: assessed[0]!.id, source: pass }],
+    });
+    expect((await owner.view()).notes[0]!.verified).toBe(true);
+  } finally {
+    await owner.harness.close(context);
+  }
+});
+
+test("caller trust edits invalidate the note and its consumers", async () => {
+  const owner = await fixture();
+  try {
+    await seed(owner);
+    for (const trusted of [true, false]) {
+      const before = (await owner.view()).notes;
+      const command = {
+        kind: "submit" as const,
+        id: `trust-${trusted}`,
+        notes: [],
+        edits: [{ id: before[0]!.id, revision: before[0]!.revision, trusted }],
+      };
+      const receipt = await owner.command(command);
+      const changed = (await owner.view()).notes;
+      expect(changed.map((note) => note.checks)).toEqual([
+        trusted ? { external: { entry: receipt.entry } } : {},
+        {},
+      ]);
+      expect(changed.map((note) => note.text)).toEqual(
+        before.map((note) => note.text),
+      );
+      expect(
+        changed.every((note, i) => note.revision > before[i]!.revision),
+      ).toBe(true);
+      expect(await owner.command(command)).toEqual({
+        ...receipt,
+        created: false,
+      });
+      await owner.publish({
+        kind: "verification",
+        checks: changed.map((note) => checked(note)),
+      });
+      const assessed = (await owner.view()).notes;
+      await owner.command({
+        ...command,
+        id: `same-${trusted}`,
+        edits: [{ ...command.edits[0]!, revision: assessed[0]!.revision }],
+      });
+      expect((await owner.view()).notes).toEqual(assessed);
+    }
+  } finally {
+    await owner.harness.close(context);
+  }
+});
+
+test("caller mathematical edits preserve external grants; Explorer edits revoke them", async () => {
   const owner = await fixture();
   try {
     await owner.command({
@@ -443,7 +601,7 @@ test("caller mathematical edits preserve import trust; Explorer edits revoke it"
       ],
     });
     const imported = (await owner.view()).notes[0]!;
-    expect(imported.imported).toBe(true);
+    expect(!!imported.checks.external).toBe(true);
     await owner.command({
       kind: "submit",
       id: "change",
@@ -457,8 +615,7 @@ test("caller mathematical edits preserve import trust; Explorer edits revoke it"
       ],
     });
     const revised = (await owner.view()).notes[0]!;
-    expect(revised.imported).toBe(true);
-    expect(revised.checks).toEqual({});
+    expect(revised.checks).toEqual({ external: { entry: revised.revision } });
     await owner.publish({
       kind: "notes",
       notes: [],
@@ -470,7 +627,7 @@ test("caller mathematical edits preserve import trust; Explorer edits revoke it"
         },
       ],
     });
-    expect((await owner.view()).notes[0]!.imported).toBe(false);
+    expect(!!(await owner.view()).notes[0]!.checks.external).toBe(false);
   } finally {
     await owner.harness.close(context);
   }
@@ -791,26 +948,25 @@ test("current stage checks retain dominant evidence and workers keep their resul
   }
 });
 
-test("candidate flags survive private merging and edits without granting evidence", async () => {
+test("publishing candidate and retirement flags does not grant evidence", async () => {
   const owner = await fixture();
   try {
-    const merged = mergeExploration([
-      {
-        notes: [
-          { id: "n1", ...content("Candidate"), support: [], candidate: true },
-          {
-            id: "n2",
-            ...content("Observation"),
-            support: [],
-            candidate: false,
-          },
-        ],
-      },
-      { notes: [{ id: "n3", ...content("Later observation"), support: [] }] },
-    ]);
-    await owner.publish({ kind: "notes", ...merged });
+    await owner.publish({
+      kind: "notes",
+      notes: [
+        { id: "n1", ...content("Candidate"), support: [], candidate: true },
+        { id: "n2", ...content("Observation"), support: [], candidate: false },
+        {
+          id: "n3",
+          ...content("Retired observation"),
+          support: [],
+          retired: true,
+        },
+      ],
+    });
     const notes = (await owner.view()).notes;
     expect(notes.map((note) => note.candidate)).toEqual([true, false, false]);
+    expect(notes.map((note) => note.retired)).toEqual([false, false, true]);
     for (const note of notes) {
       expect(note.checks).toEqual({});
       expect(note.verified).toBe(false);
@@ -1183,7 +1339,13 @@ test("Pi snapshots survive reopen and stale verification cannot restore current 
       kind: "submit",
       id: "seed",
       notes: [
-        { id: "n1", ...content("Original"), support: [], candidate: true },
+        {
+          id: "n1",
+          ...content("Original"),
+          support: [],
+          candidate: true,
+          trusted: false,
+        },
       ],
     });
     const frozenAt = await owner.marker();
