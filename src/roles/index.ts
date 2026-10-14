@@ -1,8 +1,8 @@
+import { selectBatch } from "./batch.ts";
 import type { Context } from "@earendil-works/chord";
+import type { Profiles } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
-import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import { Assert } from "typebox/value";
 import {
   batchResults,
@@ -11,7 +11,6 @@ import {
   planSchema,
   type ImplementationInput,
   type Exploration,
-  submissionSchemas,
   literatureResultSchema,
   verdictSchema,
   verificationStageSchema,
@@ -28,7 +27,7 @@ import {
   type VerificationStage,
   type VerificationBackend,
   verificationBackendSchema,
-} from "../math/contracts.ts";
+} from "../core/math/contracts.ts";
 import {
   correctionInstructions,
   noteInfo,
@@ -39,33 +38,30 @@ import {
   statementPrepared,
   validateNotes,
   validateResult,
-} from "../math/notes.ts";
-import { closure, keepsPrior } from "../math/argument.ts";
-import {
-  conversations,
-  type ExplorerLimit,
-  type Submission,
-} from "./conversation.ts";
+} from "../core/math/notes.ts";
+import { closure, keepsPrior } from "../core/math/argument.ts";
+import { conversations, type Submission } from "./conversation.ts";
 import {
   explorerResponseLimit,
   defaultMaxExplorerReads,
+  submissionSchemas,
   type ProfileName,
   type Settings,
-} from "../config.ts";
+} from "./config.ts";
 import { externalEvidence, type ExternalRoles } from "./backend.ts";
 import {
   RoleFailure,
   type NoteReference,
-  type Profiles,
   type RoleRuntime,
-} from "./types.ts";
+} from "../core/roles.ts";
+import { closedBookResearch } from "./research.ts";
+import type { Research, LiteratureInput } from "./backend.ts";
 import {
-  closedBookResearch,
-  type Research,
-  type LiteratureInput,
-} from "./research.ts";
-import { publicationResult, type PublishedResult } from "../math/results.ts";
-import { readView, seedNotebook } from "../math/state.ts";
+  publicationResult,
+  type PublishedResult,
+  type ExplorerLimit,
+} from "../core/math/results.ts";
+import { readView, seedNotebook } from "../core/math/state.ts";
 
 const mathematicalCheck = `Judge the authoritative full text first. Check both summaries against it: preserve hypotheses, quantitative guarantees, conditionality, negative conclusions, and unresolved gaps. A summary must not strengthen a claim or present an unresolved result as established. For notes without external trust, PASS requires the original argument to establish the full claimed statement under declared transitive support, listed external premises, and task-permitted assumptions. A substantive argument supplied only in a report or independent proof cannot repair that note. If missing justification is the only blocker, return INCONCLUSIVE even if you can prove the result. Do not omit conclusions to obtain PASS. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. ${correctionInstructions} External trust grants the mathematical claims stated in the supplied note at their exact scope. When an externally trusted support has no checked statement, use its authoritative full text. Treat established support results as given, but verify their applicability against their exact statements, including hypotheses absent from summaries, and check all new reasoning. Do not infer mathematical truth from an earlier model's confidence.`;
 const externalStatementInstructions =
@@ -215,18 +211,45 @@ export function createRoles(options: RoleOptions) {
   const research = () => functions.external.research ?? closedBookResearch;
   const literature = () =>
     (options.literature ?? false) && research().retrieval;
-  const batch = async <
+  const nextBatch = async <
     P extends Exclude<ProfileName, "explorer" | "coordinator">,
   >(
     profile: P,
     instructions: string,
-    input: { notes: { id: string }[]; [key: string]: unknown },
+    pending: Note[],
+    inputFor: (group: Note[]) => {
+      notes: { id: string }[];
+      [key: string]: unknown;
+    },
     runtime: RoleRuntime,
     context: Context,
-    backend: VerificationBackend = "native",
-  ): Promise<Omit<Submission<P>["results"][number], "noteId">[]> => {
-    if (!input.notes.length) return [];
-    const ids = input.notes.map((note) => note.id);
+    backend: VerificationBackend,
+    writtenTokens = (note: Note) => estimateTextTokens(note.text),
+  ) => {
+    const ref = options.profiles[profile].model;
+    const model =
+      backend === "native"
+        ? runtime.models.getModel(ref.provider, ref.modelId)!
+        : undefined;
+    // External backends own their model capacity; Pi profiles may name another model.
+    const group =
+      backend === "native"
+        ? selectBatch(
+            pending,
+            model!,
+            (selected) => [
+              instructions,
+              inputFor(selected),
+              submissionSchemas[profile],
+              selected.map((note) => note.id),
+            ],
+            writtenTokens,
+          )
+        : profile === "proof" || profile === "reconstruction"
+          ? pending.slice(0, 1)
+          : pending;
+    const input = inputFor(group);
+    const ids = group.map((note) => note.id);
     const system = `Return exactly one result for every requested ID in notes, never additional results for support. ${instructions}`;
     let results: Submission<P>["results"];
     if (backend === "external") {
@@ -245,16 +268,14 @@ export function createRoles(options: RoleOptions) {
         else if ("proof" in result) result.proof += externalEvidence(answer);
       }
     } else {
-      const ref = options.profiles[profile].model;
-      const model = runtime.models.getModel(ref.provider, ref.modelId)!;
       const result = await ask(
         profile,
         system,
         {
           ...input,
           capacity: {
-            contextTokens: model.contextWindow,
-            outputTokens: model.maxTokens,
+            contextTokens: model!.contextWindow,
+            outputTokens: model!.maxTokens,
           },
         },
         runtime,
@@ -263,9 +284,12 @@ export function createRoles(options: RoleOptions) {
           ids,
         },
       );
-      results = result.at(-1)!.results;
+      results = result.submissions.at(-1)!.results;
     }
-    return batchResults<Submission<P>["results"][number]>(ids, results);
+    return {
+      group,
+      results: batchResults<Submission<P>["results"][number]>(ids, results),
+    };
   };
   const reconstruction = (
     input: ReconstructionInput,
@@ -310,45 +334,6 @@ export function createRoles(options: RoleOptions) {
           group.flatMap((note) => note.support),
           notes,
         ).filter((note) => !group.includes(note));
-      const select = (
-        profile: "proof" | "reconstruction",
-        pending: Note[],
-        instructions: string,
-        inputFor: (group: Note[]) => unknown,
-        writtenTokens: (note: Note) => number,
-      ) => {
-        // The external backend owns its model context. Do not size its calls using a Pi profile
-        // that may select a different model; give it one complete claim at a time.
-        if (backend === "external") return pending.slice(0, 1);
-        const ref = options.profiles[profile].model;
-        const model = runtime.models.getModel(ref.provider, ref.modelId)!;
-        let count = 1;
-        let output = 0;
-        for (let size = 1; size <= pending.length; size++) {
-          const group = pending.slice(0, size);
-          // Reserve complete writing, JSON framing, and three times as much
-          // reasoning. These estimates are scheduling hints, never output caps.
-          output += Math.max(512, writtenTokens(group.at(-1)!)) + 128;
-          if (output * (model.reasoning ? 4 : 1) > model.maxTokens * 0.8) break;
-          const content = JSON.stringify([
-            instructions,
-            inputFor(group),
-            submissionSchemas[profile],
-            group.map((note) => note.id),
-          ]);
-          const room = clampMaxTokensToContext(
-            { ...model, contextWindow: model.contextWindow * 0.8 },
-            normalizeContext({
-              messages: [{ role: "user", content, timestamp: 0 }],
-            }),
-            model.maxTokens,
-          );
-          if (room < model.maxTokens) break;
-          count = size;
-        }
-        // An oversized estimate gets one note, subject to Pi's input guard.
-        return pending.slice(0, count);
-      };
       const instructions =
         "Independently prove every requested statement, returning one complete proof per note. Declared support outside the assigned group may be assumed at its exact stated scope without reproving it. Check applicability and submit results for every assigned note. Write complete arguments, not abbreviated sketches. Original arguments, methods, summaries, and comparison reports are withheld. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Approved external premises may be assumed at exactly their stated scope; check their hypotheses and applications. Previously attempted support may be assumed conditionally, but final acceptance still requires reconstruction throughout the dependency chain. Never use a descendant or unrelated claim. Prove every new step, including composition and theorem applicability. To prove P implies Q, assume P and derive Q; this does not establish P. Set complete=false and state the unresolved gap when you cannot complete a proof. Supporting lemmas need not solve the original task.";
       const comparisonInstructions = `${mathematicalCheck} First check that the extracted statement faithfully represents the result asserted in the full text, preserving scope without leaking proof instructions. Also check externally trusted support statements against their supplied full text. A bad extraction gives INCONCLUSIVE and is not a defect in the original mathematics. For notes without external trust, compare the original argument in the full text with the independent proof. Both arguments must establish that statement, including its hypotheses, quantitative guarantees, and permitted assumptions. The supplied premises records bind the exact external claims to source PASS or external trust. Use those approved claims without demanding another proof or source search, but check their exact hypotheses and applications. A stronger theorem, an unmet hypothesis, or an undeclared inference is not approved. Supporting claims must follow declared transitive dependencies, in dependency order, without circular or unrelated assumptions. Code requires the whole dependency chain to pass; supporting lemmas need not solve the original task. An explicit conditional P implies Q may assume P, but does not establish P. For notes without external trust, PASS requires a correct original argument and a correct independent proof of the same claim. For an externally trusted target, caller trust grants the original result and sources; no original proof is required. PASS requires faithful statement extraction and a complete correct independent proof of that exact claim. External trust does not replace reconstruction. FAIL requires a concrete defect in the original statement or argument. An incomplete, incorrect, or unsupported independent proof alone gives INCONCLUSIVE, even if it claims completeness. So do missing approval records or proof recipes leaked through the extracted statement or external premises. Distinguish a construction that is itself the claimed result from guidance for finding its proof. Never silently edit an approved premise. For notes without external trust, audit the original even when reconstruction is incomplete: identify whether it supplies the missing step. For FAIL or INCONCLUSIVE, begin with the exact blocker. Then report Original argument:, Independent proof:, and Statement and premises:. Explain concrete defects with a quotation, formula, or note ID, distinguishing mathematical errors from missing evidence, input problems, and harmless wording. No defect found does not establish correctness. Record unresolved obligations, not work requests.`;
@@ -358,25 +343,20 @@ export function createRoles(options: RoleOptions) {
           notes: group.map(statement),
           support: supportFor(group).map(statement),
         });
-        const group = select(
+        const { group, results: proofs } = await nextBatch(
           "proof",
-          pending,
           instructions,
+          pending,
           proofInput,
+          runtime,
+          context,
+          backend,
           (note) =>
             3 *
             Math.max(
               estimateTextTokens(note.text),
               estimateTextTokens(JSON.stringify(statement(note))),
             ),
-        );
-        const proofs = await batch(
-          "proof",
-          instructions,
-          proofInput(group),
-          runtime,
-          context,
-          backend,
         );
         let remaining = group;
         while ((remaining = unblocked(remaining)).length) {
@@ -403,25 +383,20 @@ export function createRoles(options: RoleOptions) {
               })),
             };
           };
-          const comparisonGroup = select(
+          const { group: selected, results: judgments } = await nextBatch(
             "reconstruction",
-            remaining,
             comparisonInstructions,
+            remaining,
             comparisonInput,
+            runtime,
+            context,
+            backend,
             (note) =>
               estimateTextTokens(note.text) +
               estimateTextTokens(proofs[group.indexOf(note)]!.proof),
           );
-          const judgments = await batch(
-            "reconstruction",
-            comparisonInstructions,
-            comparisonInput(comparisonGroup),
-            runtime,
-            context,
-            backend,
-          );
           for (const [index, judgment] of judgments.entries()) {
-            const note = remaining[index]!;
+            const note = selected[index]!;
             const proof = proofs[group.indexOf(note)]!;
             record(note, "reconstruction", {
               ...judgment,
@@ -434,7 +409,7 @@ export function createRoles(options: RoleOptions) {
                 : {}),
             });
           }
-          remaining = remaining.slice(judgments.length);
+          remaining = remaining.slice(selected.length);
         }
         pending = unblocked(pending.slice(group.length));
         if (
@@ -560,7 +535,11 @@ export function createRoles(options: RoleOptions) {
           },
         },
       );
-      return publicationResult(result as Exploration[], runtime.taskId);
+      return publicationResult(
+        result.submissions as Exploration[],
+        runtime.taskId,
+        result.limit,
+      );
     },
 
     async coordinator(
@@ -597,7 +576,7 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
           ...(source ? { noteSource: source } : { notes }),
           capabilities: prompt.capabilities,
         },
-      ).then((result) => result.at(-1)!);
+      ).then((result) => result.submissions.at(-1)!);
     },
 
     async verifier(
@@ -622,16 +601,15 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
         const assess = async (
           stage: "correctness" | "requirements",
           instructions: string,
-          selected = pending(stage),
+          remaining = pending(stage),
         ) => {
-          const support = closure(
-            selected.flatMap((note) => note.support),
-            notes,
-          ).filter((note) => !selected.includes(note));
-          const results = await batch(
-            stage,
-            `Check all requested notes together. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
-            {
+          instructions = `Check all requested notes together. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`;
+          const inputFor = (selected: Note[]) => {
+            const support = closure(
+              selected.flatMap((note) => note.support),
+              notes,
+            ).filter((note) => !selected.includes(note));
+            return {
               task: input.task,
               support: support.map((note) =>
                 stage === "requirements"
@@ -657,14 +635,26 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
                     })),
                   }
                 : {}),
-            },
-            runtime,
-            context,
-            backend,
-          );
-          selected.forEach((note, index) =>
-            record(note, stage, results[index]!),
-          );
+            };
+          };
+          while (remaining.length) {
+            const { group, results } = await nextBatch(
+              stage,
+              instructions,
+              remaining,
+              inputFor,
+              runtime,
+              context,
+              backend,
+            );
+            group.forEach((note, index) =>
+              record(note, stage, results[index]!),
+            );
+            refresh(notes);
+            remaining = remaining
+              .slice(group.length)
+              .filter((note) => !note.dead);
+          }
         };
         await assess(
           "correctness",
@@ -745,3 +735,18 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
   const implementation = functions.implementation;
   return Object.assign(functions, { extension: native.extension });
 }
+
+export {
+  createRuntime,
+  readSettings,
+  defaultSettings,
+  type Settings,
+} from "./config.ts";
+export { externalResearch, closedBookResearch } from "./research.ts";
+export type {
+  ExternalAnswer,
+  ExternalCall,
+  ExternalRoles,
+  Research,
+} from "./backend.ts";
+export { selectBatch } from "./batch.ts";

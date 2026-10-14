@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { awaitWithContext } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { defaultSettings } from "../src/config.ts";
+import { defaultSettings } from "../src/roles/config.ts";
 import { open, inspect, ResearchOwnedError } from "../src/host.ts";
 import { readStatus } from "../src/report.ts";
 import { hostPath, serveHost, type HostCommand } from "../apps/cli/host.ts";

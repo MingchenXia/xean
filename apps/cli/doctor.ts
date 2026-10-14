@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { createRuntime, readSettings } from "../../src/config.ts";
+import { createRuntime, readSettings } from "../../src/roles/config.ts";
 import { cliModels } from "./models.ts";
 
 /** Local setup only: never creates a campaign or invokes a provider or an external backend. */

@@ -22,24 +22,29 @@ import {
   type SqliteValue,
 } from "@earendil-works/pi-durable/storage/sqlite";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createRuntime } from "./config.ts";
+import { createRuntime, readSettings } from "./roles/config.ts";
 import {
   DefinitionDoc,
   readDefinition,
   UninitializedResearchError,
   validateDefinition,
   type Definition,
-} from "./definition.ts";
+} from "./core/definition.ts";
 import { createRoles } from "./roles/index.ts";
+import type { ExternalRoles } from "./roles/backend.ts";
 import {
   Control,
   createResearch,
   roleNames,
   type RoleName,
   type Roles,
-} from "./workflow.ts";
-import { Catalog, readSnapshot, type SnapshotReader } from "./math/state.ts";
-import { acceptedArgument } from "./math/argument.ts";
+} from "./core/workflow.ts";
+import {
+  Catalog,
+  readSnapshot,
+  type SnapshotReader,
+} from "./core/math/state.ts";
+import { acceptedArgument } from "./report.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -50,7 +55,9 @@ export class ResearchOwnedError extends Error {
 export type OpenOptions = {
   create?: Definition;
   models?: Models;
-  roles?: (builtins: Roles) => Partial<Roles>;
+  roles?: (
+    builtins: ReturnType<typeof createRoles>,
+  ) => Partial<Roles> & { external?: ExternalRoles };
   key?: string;
   usagePrefix?: string;
   registry?: Registry;
@@ -159,6 +166,7 @@ function piDatabase(database: Database, readOnly = false) {
 /** Own one native Harness. Close it to suspend; reopen it to recover. */
 export async function open(path: string, options: OpenOptions = {}) {
   const requested = options.create && validateDefinition(options.create);
+  if (requested) readSettings(requested.settings);
   const canonical = await canonicalPath(path, requested !== undefined);
   const release = acquireOwnership(canonical);
   let storage: Storage | undefined;
@@ -199,11 +207,12 @@ export async function open(path: string, options: OpenOptions = {}) {
     if (!definition) throw new UninitializedResearchError();
     if (!stored && (await storage.conversation(ROOT_CONVERSATION_ID, context)))
       throw new UninitializedResearchError();
+    const configured = readSettings(definition.settings);
     const settings =
       options.usagePrefix === undefined
-        ? definition.settings
+        ? configured
         : {
-            ...definition.settings,
+            ...configured,
             usagePrefix: options.usagePrefix,
           };
     const runtime = createRuntime(settings, {

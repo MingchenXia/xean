@@ -1,6 +1,6 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { getJsonSchemaToolParameters } from "@earendil-works/pi-ai/api/constrained-sampling";
-import { RoleFailure } from "../../roles/types.ts";
+import { RoleFailure } from "../../core/roles.ts";
 import {
   cliCall,
   cliRoles,

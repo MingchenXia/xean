@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { ConversationId, EntryId, Tx } from "@earendil-works/pi-durable";
 import { open, readSettings, type Roles } from "../src/index.ts";
-import { scanTasks, type WorkerInput } from "../src/workflow.ts";
+import { scanTasks, type WorkerInput } from "../src/core/workflow.ts";
 import {
   controlCommand,
   observeOwner,

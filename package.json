@@ -28,6 +28,8 @@
   ],
   "exports": {
     ".": "./src/index.ts",
+    "./core": "./src/core/index.ts",
+    "./roles": "./src/roles/index.ts",
     "./report": "./src/report.ts",
     "./plugins/codex": "./src/plugins/role-backends/codex.ts",
     "./plugins/claude": "./src/plugins/role-backends/claude.ts",

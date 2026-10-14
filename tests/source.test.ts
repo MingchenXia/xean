@@ -4,9 +4,9 @@ import {
   decode,
   sourceSchema,
   type SourceEvidence,
-} from "../src/math/contracts.ts";
+} from "../src/core/math/contracts.ts";
 import { externalResearch } from "../src/roles/research.ts";
-import type { RoleRuntime } from "../src/roles/types.ts";
+import type { RoleRuntime } from "../src/core/roles.ts";
 
 const task = {
   problem: "Prove the claim.",

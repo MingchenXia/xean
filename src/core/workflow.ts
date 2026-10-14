@@ -36,15 +36,12 @@ import {
 } from "./math/state.ts";
 import { readCommand } from "./math/commands.ts";
 import { readDefinition } from "./definition.ts";
-import type { PublishedResult } from "./math/results.ts";
 import {
-  RoleFailure,
-  type NoteReference,
-  type RoleRuntime,
-} from "./roles/types.ts";
-
-import type { ExternalRoles } from "./roles/backend.ts";
-import { explorerLimit, type ExplorerLimit } from "./roles/conversation.ts";
+  explorerLimit,
+  type ExplorerLimit,
+  type PublishedResult,
+} from "./math/results.ts";
+import { RoleFailure, type NoteReference, type RoleRuntime } from "./roles.ts";
 
 // These are application admission choices. Pi retains all execution state.
 export const Control = defineDoc({
@@ -75,12 +72,13 @@ export const roleNames = [
   "review",
 ] as const;
 export type RoleName = (typeof roleNames)[number];
-export type Roles = Record<RoleName, Role> & {
-  external?: ExternalRoles;
-  capabilities: (input: any) => Parameters<typeof planSchema>[0] & {
-    sourceRetrieval?: boolean;
+export type Roles = Record<"coordinator" | "explorer" | "verifier", Role> &
+  Partial<Record<RoleName, Role>> & {
+    external?: Record<string, unknown>;
+    capabilities: (input: any) => Parameters<typeof planSchema>[0] & {
+      sourceRetrieval?: boolean;
+    };
   };
-};
 type Request = NonNullable<Plan["work"]>;
 export type WorkerInput = { retryOf?: TaskId } & (
   { at: EntryId; request: Request } | { standalone: true }
@@ -217,7 +215,9 @@ export function createResearch(roles: Roles) {
             throw new Error(
               "Role backend registration changed during recovery",
             );
-          const result = await roles[name!](value, runtime, context, source);
+          const role = roles[name!];
+          if (!role) throw new Error(`Role is not registered: ${name!}`);
+          const result = await role(value, runtime, context, source);
           outcome = { status: "completed", result };
         } catch (error) {
           if (!(error instanceof RoleFailure)) throw error;
@@ -227,7 +227,7 @@ export function createResearch(roles: Roles) {
             ...(error.result ? { result: error.result } : {}),
           };
         }
-        if ("standalone" in task.input && outcome.result !== undefined) {
+        if (outcome.result !== undefined) {
           const input = value as {
             notes?: Parameters<typeof validateResult>[1];
           };
@@ -239,11 +239,12 @@ export function createResearch(roles: Roles) {
             if (name! !== "explorer")
               throw new Error("Only Explorer publishes during execution");
           } else {
-            validateResult(
-              result,
-              input.notes ?? [],
-              outcome.status === "failed",
-            );
+            if ("standalone" in task.input)
+              validateResult(
+                result,
+                input.notes ?? [],
+                outcome.status === "failed",
+              );
             const expected =
               name! === "verifier" || name! === "reconstruct"
                 ? "verification"
@@ -347,7 +348,7 @@ export function createResearch(roles: Roles) {
             const outcome = worker.state.outcome;
             const limit =
               request?.kind === "explorer" && outcome?.status === "completed"
-                ? await explorerLimit(tx, worker.id)
+                ? explorerLimit(outcome?.result)
                 : undefined;
             const summary: (typeof workers)[number] = {
               id: worker.id,

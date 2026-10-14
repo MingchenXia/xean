@@ -5,6 +5,16 @@
 External role backends are opt-in, and multiple campaigns can share a foreground
 host while Pi owns each campaign's execution and recovery. This version is unreleased.
 
+- Import `xean/core` for the workflow, notebook rules, and role contracts without
+  loading bundled role implementations, CLI, or adapters. `xean/roles` exports
+  the default roles, and `xean/report` provides inspection. `open` from `xean`
+  retains the default setup. Core records role settings as JSON, while the
+  default setup validates its model profiles and options.
+- Campaign workers now enforce the same role/result-kind contract as standalone
+  calls. A Verifier cannot publish notes, and Explorer cannot submit verification checks.
+- Native correctness, requirements, proof generation, and proof comparison share
+  `selectBatch` in `xean/roles`. Large assessments split with support and source
+  records scoped to each group. Completed groups survive interruption through Pi.
 - Register Codex, Claude, or ChatGPT adapters through `open({ roles })` or an explicit CLI
   `--roles` module. Default installation uses native Pi roles and closed-book
   source checking without external CLI dependencies.
@@ -12,8 +22,9 @@ host while Pi owns each campaign's execution and recovery. This version is unrel
   selected by the caller's role module. Remove its campaign-wide quota and
   browser-specific state from the core.
 - Implementation work uses `kind: "implementation"`. External verification uses
-  `backend: "external"`. Core retains schemas, frozen inputs, blind reconstruction,
-  dependency checks, and acceptance. External request receipts identify their provider.
+  `backend: "external"`. Core retains schemas, frozen inputs,
+  dependency checks, and acceptance. Bundled roles perform blind reconstruction.
+  External request receipts identify their provider.
 - Codex and Claude share Execa process handling and native Pi memos. Completed calls
   are reused and interrupted CLI calls use fresh workspaces. Native Pi memos guard
   worker backend registration and packaged adapter request configuration.

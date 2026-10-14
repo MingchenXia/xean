@@ -35,7 +35,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { defaultSettings } from "../src/config.ts";
+import { defaultSettings } from "../src/roles/config.ts";
 import {
   inspect,
   open,
@@ -46,9 +46,9 @@ import {
   DefinitionDoc,
   readDefinition,
   UninitializedResearchError,
-} from "../src/definition.ts";
-import { Control } from "../src/workflow.ts";
-import { Catalog } from "../src/math/state.ts";
+} from "../src/core/definition.ts";
+import { Control } from "../src/core/workflow.ts";
+import { Catalog } from "../src/core/math/state.ts";
 
 const definition = {
   task: {

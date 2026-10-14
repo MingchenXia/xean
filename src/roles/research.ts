@@ -1,51 +1,15 @@
-import type { Context } from "@earendil-works/chord";
 import { Assert } from "typebox/value";
-import type { RoleRuntime } from "./types.ts";
 import {
   batchResults,
   batchSchema,
   literatureResultSchema,
   sourceSchema,
   reviewSchema,
-  type LiteratureResult,
-  type NoteInfo,
-  type ReviewInput,
   type ResearchReport,
   type Source,
-  type SourceEvidence,
-  type Task,
-} from "../math/contracts.ts";
-import type { ExternalCall } from "./backend.ts";
-import { bindExternal, taskSource } from "../math/evidence.ts";
-
-export type LiteratureInput = {
-  task: Task;
-  assignment: string;
-  notes: NoteInfo[];
-};
-export interface Research {
-  readonly retrieval: boolean;
-  /** PASS approves the exact standalone premises for blind reuse; never normalize after approval. */
-  source(
-    input: {
-      task: Task;
-      notes: { id: string; premises: string[] }[];
-      evidence?: SourceEvidence[];
-    },
-    runtime: RoleRuntime,
-    context: Context,
-  ): Promise<(Source & { noteId: string })[]>;
-  literature(
-    input: LiteratureInput,
-    runtime: RoleRuntime,
-    context: Context,
-  ): Promise<LiteratureResult>;
-  review(
-    input: ReviewInput,
-    runtime: RoleRuntime,
-    context: Context,
-  ): Promise<ResearchReport>;
-}
+} from "../core/math/contracts.ts";
+import type { ExternalCall, Research } from "./backend.ts";
+import { bindExternal, taskSource } from "./evidence.ts";
 
 const taskEvidence = `The supplied task is authoritative for its explicitly granted assumptions and permitted background. Verify their exact scope and application; a claim merely asserted in a note or requested as a conclusion is not a granted assumption. For a task-granted premise, return a passage with url="${taskSource}" and an exact quote from task.problem or task.completionCriteria. That passage needs no web retrieval.`;
 const noPremises = {

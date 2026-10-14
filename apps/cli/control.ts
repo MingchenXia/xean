@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { SolverCommand } from "../../src/math/commands.ts";
+import type { SolverCommand } from "../../src/core/math/commands.ts";
 
 export type OwnerCommand =
   SolverCommand | { kind: "pause" | "resume" | "cancel" };

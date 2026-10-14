@@ -18,12 +18,12 @@ import {
 } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { defaultSettings } from "../src/config.ts";
+import { defaultSettings } from "../src/roles/config.ts";
 import { inspect, open } from "../src/host.ts";
-import { readDefinition, type Definition } from "../src/definition.ts";
-import { Control, type Roles } from "../src/workflow.ts";
+import { readDefinition, type Definition } from "../src/core/definition.ts";
+import { Control, type Roles } from "../src/core/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
-import { Bodies, Catalog } from "../src/math/state.ts";
+import { Bodies, Catalog } from "../src/core/math/state.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";

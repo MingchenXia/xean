@@ -288,18 +288,6 @@ export const planSchema = (capabilities: {
     ),
   });
 export type Plan = Static<ReturnType<typeof planSchema>>;
-export const submissionSchemas = {
-  explorer: explorationSchema,
-  coordinator: planSchema({
-    literature: true,
-    implementation: true,
-    externalVerifier: true,
-  }),
-  correctness: batchSchema(correctnessSchema),
-  requirements: batchSchema(verdictSchema),
-  proof: batchSchema(proofSchema),
-  reconstruction: batchSchema(verdictSchema),
-};
 export type SolverInput = { task: Task; notes: Note[] };
 export type NoteInfo = Pick<
   Note,

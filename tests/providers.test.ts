@@ -11,15 +11,19 @@ import {
   type Message,
 } from "@earendil-works/pi-ai";
 import type { GenerationHooks, HookApi } from "@earendil-works/pi-durable";
-import { createRuntime, defaultSettings, readSettings } from "../src/config.ts";
+import {
+  createRuntime,
+  defaultSettings,
+  readSettings,
+} from "../src/roles/config.ts";
 import { open } from "../src/host.ts";
-import { scanTasks } from "../src/workflow.ts";
-import { explorationSchema, type Note } from "../src/math/contracts.ts";
-import { readView } from "../src/math/state.ts";
+import { scanTasks } from "../src/core/workflow.ts";
+import { explorationSchema, type Note } from "../src/core/math/contracts.ts";
+import { readView } from "../src/core/math/state.ts";
 import { conversations } from "../src/roles/conversation.ts";
 import { createRoles } from "../src/roles/index.ts";
 import { chatgpt, chatgptCall } from "../src/plugins/role-backends/chatgpt.ts";
-import type { RoleRuntime } from "../src/roles/types.ts";
+import type { RoleRuntime } from "../src/core/roles.ts";
 
 const fixtureFetch = (
   callback: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,

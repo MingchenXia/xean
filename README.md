@@ -134,7 +134,7 @@ with a JSON input containing `task` and `argument` for independent review. The
 [FAQ](docs/faq.md#can-i-supply-my-own-results) includes edit and review examples. Use
 `--help` for arguments and owner, credential, and usage-attribution options.
 
-[Settings](src/config.ts) use native Pi profiles for OpenAI, `openai-codex`,
+[Settings](src/roles/config.ts) use native Pi profiles for OpenAI, `openai-codex`,
 Anthropic, and Google, with per-role overrides. Custom Responses gateways use
 `openai` with `baseUrl` and an explicit `apiKeyEnv` or `--key-stdin` credential.
 This keeps saved subscription credentials on their native provider route.
@@ -278,12 +278,21 @@ cleanup behavior without another Pi patch.
 
 ## Library
 
-[The public entry point](src/index.ts) exports `open`, `inspect`, `createResearch`,
-mathematical types, note projections, and reports. Construct the built-in solver
-through `open`, which returns the native Harness, root Conversation, workflow,
-and `close`. Coordinator returns one `work` request, or `work: null` to become idle.
-Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`
-and a `roles` callback that receives the built-in functions. Register custom `Research`
+[The public entry point](src/index.ts), `xean`, supplies the default setup through
+`open`, which returns the native Harness, root Conversation, workflow, and `close`.
+For custom roles, import `xean/core` and call `createResearch(roles)` when assembling
+your own native Pi Harness, registry, models, and storage. Core contains the
+sequential workflow, note publication, dependency and verification rules, and role
+contracts. It records role settings as JSON and runs without the bundled roles,
+CLI, or adapters.
+
+`xean/roles` exports `createRoles` for the bundled prompts, conversations, and
+verification strategy, plus `selectBatch` for capacity-based grouping with caller-supplied
+inputs and output estimates. `xean/report` supplies status and reports. The ordinary
+`open` setup validates settings for the bundled roles and accepts native Pi `models`
+and a `roles` callback that receives the built-in functions. Coordinator returns
+one `work` request, or `work: null` to become idle. Replacement roles follow the
+same sequential outer loop. Register custom `Research`
 through that callback's `external.research` field. Register custom tools and tasks
 through Pi's native `registry` option.
 Coordinator supplies an `assignment` to Explorer, Literature, and implementation. Caller
@@ -352,6 +361,9 @@ retry policy and backoff. Authentication, quota, invalid-request failures, conte
 overflow, and cancellation retain their existing handling. Context and
 completed-response limits still apply, with operational handoffs to Coordinator.
 
+Native correctness and requirements checks also use `selectBatch`, with each group
+receiving its declared support and relevant source records. Earlier judgments
+update later groups, and refuted dependencies skip their later consumers.
 Blind reconstruction assigns batches in dependency order. External verification reconstructs
 one note per call. Native verification greedily packs notes using original text
 lengths, Pi's token estimator, and the configured model's context and output

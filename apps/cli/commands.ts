@@ -8,8 +8,8 @@ import {
   exportAccepted,
   type OpenOptions,
 } from "../../src/host.ts";
-import { type Definition } from "../../src/definition.ts";
-import { readCommand } from "../../src/math/commands.ts";
+import { type Definition } from "../../src/core/definition.ts";
+import { readCommand } from "../../src/core/math/commands.ts";
 import { readReport, readStatus } from "../../src/report.ts";
 import { version } from "../../package.json";
 import { requestOwner, type OwnerCommand } from "./control.ts";

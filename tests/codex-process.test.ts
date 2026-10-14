@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { access, chmod, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { inspect, open, readReport, type OpenOptions } from "../src/index.ts";
-import { RoleFailure } from "../src/roles/types.ts";
+import { RoleFailure } from "../src/core/roles.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { codex, codexTranscript } from "../src/plugins/role-backends/codex.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
@@ -81,8 +81,10 @@ test("Codex reuses a completed request without leaking caller edits or conflatin
     (builtins) => ({
       async implementation(input, runtime, context) {
         const first = await builtins.implementation(input, runtime, context);
+        if (first.kind !== "notes")
+          throw new Error("Expected implementation notes");
         const expected = structuredClone(first);
-        first.notes[0].text = "Caller changed its copy";
+        first.notes[0]!.text = "Caller changed its copy";
         expect(await builtins.implementation(input, runtime, context)).toEqual(
           expected,
         );
@@ -91,7 +93,9 @@ test("Codex reuses a completed request without leaking caller edits or conflatin
           runtime,
           context,
         );
-        expect(changed.notes[0].text).not.toBe(expected.notes[0].text);
+        if (changed.kind !== "notes")
+          throw new Error("Expected implementation notes");
+        expect(changed.notes[0]!.text).not.toBe(expected.notes[0]!.text);
         return changed;
       },
     }),

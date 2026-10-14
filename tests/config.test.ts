@@ -22,7 +22,7 @@ import {
   defaultSettings,
   readSettings,
   type ProfileName,
-} from "../src/config.ts";
+} from "../src/roles/config.ts";
 
 const auth = (values: Record<string, string>): AuthContext => ({
   env: async (name) => values[name],

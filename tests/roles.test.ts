@@ -35,25 +35,26 @@ import {
   type CoordinationInput,
   type RoleOptions,
 } from "../src/roles/index.ts";
-import type { RoleRuntime } from "../src/roles/types.ts";
-import { closedBookResearch, type Research } from "../src/roles/research.ts";
-import { capacityError, createRuntime } from "../src/config.ts";
+import type { RoleRuntime } from "../src/core/roles.ts";
+import { closedBookResearch } from "../src/roles/research.ts";
+import type { Research } from "../src/roles/backend.ts";
+import { capacityError, createRuntime } from "../src/roles/config.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { codex } from "../src/plugins/role-backends/codex.ts";
-import type { Note, SolverResult } from "../src/math/contracts.ts";
-import { DefinitionDoc, type Definition } from "../src/definition.ts";
-import { createResearch, scanTasks } from "../src/workflow.ts";
+import type { Note, SolverResult } from "../src/core/math/contracts.ts";
+import { DefinitionDoc, type Definition } from "../src/core/definition.ts";
+import { createResearch, scanTasks } from "../src/core/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
-import { explorerLimit } from "../src/roles/conversation.ts";
+import { explorerLimit } from "../src/core/math/results.ts";
 import {
   Bodies,
   Events,
   readView,
   readSnapshot,
   type SnapshotReader,
-} from "../src/math/state.ts";
-import { refresh, validateResult } from "../src/math/notes.ts";
-import { acceptedArgument } from "../src/math/argument.ts";
+} from "../src/core/math/state.ts";
+import { refresh, validateResult } from "../src/core/math/notes.ts";
+import { acceptedArgument } from "../src/report.ts";
 import type { TaskId } from "@earendil-works/pi-durable";
 
 const context = BACKGROUND_CONTEXT;
@@ -707,7 +708,9 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
         input.notes.map(({ id }: { id: string }) => id),
       ]),
     ).toEqual([
-      ["correctness", ["n1", "n2", "n3", "n4"]],
+      // The fixture model reserves output/reasoning room for two claims per call.
+      ["correctness", ["n1", "n2"]],
+      ["correctness", ["n3", "n4"]],
       ["requirements", ["n4"]],
       ...Array.from({ length: 5 }, () => ["proof", ["n1", "n2"]]),
       ["reconstruction", ["n1"]],
@@ -721,7 +724,7 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
       1,
     );
     expect(proofs.at(-2)!.session).toBe(proofs.at(-1)!.session);
-    expect(new Set(provider.calls.map(({ session }) => session)).size).toBe(7);
+    expect(new Set(provider.calls.map(({ session }) => session)).size).toBe(8);
     const comparisons = provider.calls.filter(
       ({ name }) => name === "reconstruction",
     );
@@ -736,6 +739,159 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
     await current.harness.close(context);
   }
 });
+
+test.each(["correctness", "requirements"] as const)(
+  "%s splits oversized assignments, scopes support and evidence, and resumes completed groups",
+  async (stage) => {
+    const directory = await temporaryDirectory("pi-role-assessment-");
+    const notes = ["n1", "n2"].map((id) => ({
+      ...(stage === "correctness" ? note(id) : preparedNote(id)),
+      text: "Detailed argument. ".repeat(2400),
+      support: [`${id}-support`],
+      candidate: true,
+    }));
+    for (const item of notes) delete item.checks.requirements;
+    const supports = notes.map(({ support: [id] }) => ({
+      ...preparedNote(id!),
+      checks: { ...preparedNote(id!).checks, external: { entry: 1 } },
+    }));
+    const provider = fixture(
+      (name, input) => {
+        expect(name).toBe(stage);
+        expect(input.notes).toHaveLength(1);
+        const id = input.notes[0].id;
+        expect(input.support.map((item: { id: string }) => item.id)).toEqual([
+          `${id}-support`,
+        ]);
+        if (stage === "requirements")
+          expect(
+            input.sources.map((item: { noteId: string }) => item.noteId),
+          ).toEqual([`${id}-support`, id]);
+        return {
+          results: [
+            {
+              noteId: id,
+              verdict: "PASS",
+              report: "Checked",
+              ...(stage === "correctness"
+                ? { statement: `${id} exact claim`, premises: [] }
+                : {}),
+            },
+          ],
+        };
+      },
+      {},
+      32768,
+    );
+    let current = await provider.open(directory);
+    try {
+      const closed = current.closeAfterEntry((entry) =>
+        entry.model?.some(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolName === `submit_${stage}` &&
+            !message.isError,
+        ),
+      );
+      const id = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes: [...notes, ...supports],
+          targets: ["n1", "n2"],
+          through: stage,
+        },
+      });
+      current.harness.resume();
+      await closed.promise;
+      expect(provider.calls).toHaveLength(1);
+      current = await provider.open(directory);
+      expect(await resultOf(current.harness, id)).toMatchObject({
+        status: "completed",
+        result: {
+          checks: ["n1", "n2"].map((noteId) => ({
+            noteId,
+            [stage]: { verdict: "PASS" },
+          })),
+        },
+      });
+      expect(
+        provider.calls.map(({ input }) =>
+          input.notes.map(({ id }: { id: string }) => id),
+        ),
+      ).toEqual([["n1"], ["n2"]]);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
+
+test.each(["PASS", "FAIL", "INCONCLUSIVE"] as const)(
+  "later correctness groups use earlier %s assessments without checking refuted consumers",
+  async (verdict) => {
+    const provider = fixture(
+      (name, input) => {
+        expect(name).toBe("correctness");
+        const ids = input.notes.map(({ id }: { id: string }) => id);
+        if (ids.includes("n1")) expect(ids).toEqual(["n1"]);
+        if (ids.includes("n2")) {
+          expect(verdict).not.toBe("FAIL");
+          expect(input.support).toMatchObject([
+            {
+              id: "n1",
+              statement: "n1 newly extracted claim",
+              summary: verdict === "PASS" ? "Clarified summary" : "n1 claim",
+            },
+          ]);
+        }
+        return {
+          results: ids.map((noteId: string) => ({
+            noteId,
+            verdict: noteId === "n1" ? verdict : "PASS",
+            statement: `${noteId} newly extracted claim`,
+            premises: [],
+            report: "Checked",
+            ...(noteId === "n1" && verdict === "PASS"
+              ? {
+                  correction: {
+                    summary: "Clarified summary",
+                    detailedSummary: null,
+                  },
+                }
+              : {}),
+          })),
+        };
+      },
+      {},
+      32768,
+    );
+    const current = await provider.open();
+    try {
+      const id = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes: [note("n1"), note("n2", ["n1"]), note("n3")].map((item) => ({
+            ...item,
+            text:
+              item.id === "n3" ? item.text : "Detailed argument. ".repeat(1350),
+          })),
+          targets: ["n2", "n3"],
+          through: "correctness",
+        },
+      });
+      const outcome = await resultOf(current.harness, id);
+      expect(outcome.status).toBe("completed");
+      expect(
+        provider.calls.flatMap(({ input }) =>
+          input.notes.map(({ id }: { id: string }) => id),
+        ),
+      ).toEqual(verdict === "FAIL" ? ["n1", "n3"] : ["n1", "n2", "n3"]);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
 
 test.each(["oversized writing", "limited context", "native reserve"] as const)(
   "reconstruction attempts singleton groups for %s and respects Pi's input guard",
@@ -2090,7 +2246,7 @@ strict(schema);
 const fields = schema.properties.results.items.properties;
 const stage = fields.statement ? "correctness" : fields.complete ? "proof" : input.independent ? "reconstruction" : "requirements";
 await Bun.write("invocation.json", JSON.stringify({stage, input}));
-const value = {results: input.notes.map(note => ({
+const value = {results: input.notes.toReversed().map(note => ({
   noteId: note.id,
   ...(stage === "proof" ? {complete:${complete}, proof: "Independent proof of " + note.id} : {
     verdict:"PASS", report:"Checked " + stage, correction:null,
@@ -2152,6 +2308,54 @@ async function externalVerifierReceipts(harness: Harness) {
   );
   return { requests, logs, calls };
 }
+
+test("Codex verification groups assessments but reconstructs each note independently", async () => {
+  const provider = await externalVerifierFixture();
+  const current = await provider.open();
+  try {
+    const id = await current.invoke({
+      role: "verifier",
+      input: {
+        task,
+        notes: ["n1", "n2"].map((id) => ({ ...note(id), candidate: true })),
+        targets: ["n1", "n2"],
+        through: "reconstruction",
+        backend: "external",
+      },
+    });
+    expect(await resultOf(current.harness, id)).toMatchObject({
+      status: "completed",
+      result: {
+        kind: "verification",
+        checks: ["n1", "n2"].map((noteId) => ({
+          noteId,
+          correctness: { verdict: "PASS", statement: `${noteId} exact claim` },
+          requirements: { verdict: "PASS" },
+          reconstruction: {
+            verdict: "PASS",
+            proof: expect.stringContaining(`Independent proof of ${noteId}`),
+          },
+        })),
+      },
+    });
+    const { calls } = await externalVerifierReceipts(current.harness);
+    expect(
+      calls.map(({ stage, input }) => [
+        stage,
+        input.notes.map(({ id }: { id: string }) => id),
+      ]),
+    ).toEqual([
+      ["correctness", ["n1", "n2"]],
+      ["requirements", ["n1", "n2"]],
+      ["proof", ["n1"]],
+      ["reconstruction", ["n1"]],
+      ["proof", ["n2"]],
+      ["reconstruction", ["n2"]],
+    ]);
+  } finally {
+    await current.harness.close(context);
+  }
+});
 
 test.each([false, true])(
   "Codex verification preserves stage evidence and blindness (interrupted comparison failure=%s)",
@@ -2593,7 +2797,7 @@ test.each([false, true])(
         (await entries(current.harness)).filter(ToolResultEntry.is),
       ).toHaveLength(submitted ? 2 : 1);
       expect(
-        await current.root.commit((tx) => explorerLimit(tx, id), context),
+        explorerLimit((await resultOf(current.harness, id)).result),
       ).toBeUndefined();
     } finally {
       await current.harness.close(context);
@@ -2629,9 +2833,9 @@ test("capacity after a note read retains published notes without another provide
       result: { kind: "published", notes: [`${id}/n1`], edits: [] },
     });
     expect(provider.calls).toHaveLength(2);
-    expect(
-      await current.root.commit((tx) => explorerLimit(tx, id), context),
-    ).toBe("context_capacity");
+    expect(explorerLimit((await resultOf(current.harness, id)).result)).toBe(
+      "context_capacity",
+    );
   } finally {
     await current.harness.close(context);
   }
@@ -2787,9 +2991,9 @@ test.each([
           edits: edit ? ["prior"] : [],
         },
       });
-      expect(
-        await current.root.commit((tx) => explorerLimit(tx, id), context),
-      ).toBe(reason);
+      expect(explorerLimit((await resultOf(current.harness, id)).result)).toBe(
+        reason,
+      );
       expect(provider.calls).toHaveLength(Math.min(allowance, 2));
     } finally {
       await current.harness.close(context);
@@ -3235,7 +3439,12 @@ test.each([
         status: "completed",
         result:
           role === "explorer"
-            ? { kind: "published", notes: [`${id}/n1`], edits: [] }
+            ? {
+                kind: "published",
+                notes: [`${id}/n1`],
+                edits: [],
+                limit: "response_limit",
+              }
             : submission,
       });
       expect(calls).toBe(1);
@@ -3293,6 +3502,7 @@ test("Explorer preserves dependencies and response limits across transcript page
         kind: "published",
         notes: Array.from({ length: 70 }, (_, i) => `${id}/n${i + 1}`),
         edits: [],
+        limit: "response_limit",
       },
     });
     const view = await current.root.commit(

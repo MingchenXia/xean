@@ -1,8 +1,46 @@
 import type { Context } from "@earendil-works/chord";
 import type { Static, TSchema } from "@earendil-works/pi-ai";
 import { defineEntry } from "@earendil-works/pi-durable";
-import type { RoleRuntime } from "./types.ts";
-import type { Research } from "./research.ts";
+import type { RoleRuntime } from "../core/roles.ts";
+
+import type {
+  Task,
+  NoteInfo,
+  SourceEvidence,
+  Source,
+  LiteratureResult,
+  ReviewInput,
+  ResearchReport,
+} from "../core/math/contracts.ts";
+
+export type LiteratureInput = {
+  task: Task;
+  assignment: string;
+  notes: NoteInfo[];
+};
+export interface Research {
+  readonly retrieval: boolean;
+  /** PASS approves the exact standalone premises for blind reuse; never normalize after approval. */
+  source(
+    input: {
+      task: Task;
+      notes: { id: string; premises: string[] }[];
+      evidence?: SourceEvidence[];
+    },
+    runtime: RoleRuntime,
+    context: Context,
+  ): Promise<(Source & { noteId: string })[]>;
+  literature(
+    input: LiteratureInput,
+    runtime: RoleRuntime,
+    context: Context,
+  ): Promise<LiteratureResult>;
+  review(
+    input: ReviewInput,
+    runtime: RoleRuntime,
+    context: Context,
+  ): Promise<ResearchReport>;
+}
 
 export type ExternalAnswer<S extends TSchema> = {
   value: Static<S>;

@@ -5,8 +5,8 @@ import {
   type Task,
   type reviewSchema,
   type sourceSchema,
-} from "./contracts.ts";
-import { sourceEvidence } from "./notes.ts";
+} from "../core/math/contracts.ts";
+import { sourceEvidence } from "../core/math/notes.ts";
 
 export const taskSource = "urn:xean:task";
 

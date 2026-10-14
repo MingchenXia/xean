@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { temporaryDirectory } from "./directory.ts";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import { readCommand } from "../src/math/commands.ts";
+import { readCommand } from "../src/core/math/commands.ts";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -20,13 +20,13 @@ import {
   readView,
   type MathView,
   type SnapshotReader,
-} from "../src/math/state.ts";
+} from "../src/core/math/state.ts";
 import {
   pendingChecks,
   stagePending,
   validatePlan,
-} from "../src/math/notes.ts";
-import type { Check, Note, SolverResult } from "../src/math/contracts.ts";
+} from "../src/core/math/notes.ts";
+import type { Check, Note, SolverResult } from "../src/core/math/contracts.ts";
 
 const pass = { verdict: "PASS" as const, report: "Checked." };
 const content = (text: string) => ({

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { Roles } from "../../workflow.ts";
+import type { Roles } from "../../core/workflow.ts";
 import type { ExternalAnswer, ExternalCall } from "../../roles/backend.ts";
-import { decode } from "../../math/contracts.ts";
+import { decode } from "../../core/math/contracts.ts";
 
 export type ChatGPTOptions = { baseUrl: string; model: string };
 

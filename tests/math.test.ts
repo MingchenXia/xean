@@ -7,9 +7,9 @@ import {
   type Plan,
   type SourceEvidence,
   type SolverResult,
-} from "../src/math/contracts.ts";
-import { readCommand } from "../src/math/commands.ts";
-import { bindExternal } from "../src/math/evidence.ts";
+} from "../src/core/math/contracts.ts";
+import { readCommand } from "../src/core/math/commands.ts";
+import { bindExternal } from "../src/roles/evidence.ts";
 import {
   refresh,
   noteInfo,
@@ -20,8 +20,9 @@ import {
   validateNotes,
   validatePlan,
   validateResult,
-} from "../src/math/notes.ts";
-import { acceptedArgument, closure } from "../src/math/argument.ts";
+} from "../src/core/math/notes.ts";
+import { closure } from "../src/core/math/argument.ts";
+import { acceptedArgument } from "../src/report.ts";
 const pass = { verdict: "PASS" as const, report: "Checked exact statement." };
 const content = (claim: string) => ({
   summary: claim,

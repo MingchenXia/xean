@@ -28,13 +28,18 @@ import {
   blockedDecision,
   pendingDecisions,
   type Roles,
-} from "../src/workflow.ts";
-import { DefinitionDoc } from "../src/definition.ts";
-import { Bodies, Catalog, readSnapshot, readView } from "../src/math/state.ts";
+} from "../src/core/workflow.ts";
+import { DefinitionDoc } from "../src/core/definition.ts";
+import {
+  Bodies,
+  Catalog,
+  readSnapshot,
+  readView,
+} from "../src/core/math/state.ts";
 import { readReport } from "../src/report.ts";
-import { RoleFailure } from "../src/roles/types.ts";
-import type { Note } from "../src/math/contracts.ts";
-import { createRuntime } from "../src/config.ts";
+import { RoleFailure } from "../src/core/roles.ts";
+import type { Note } from "../src/core/math/contracts.ts";
+import { createRuntime } from "../src/roles/config.ts";
 import { createRoles } from "../src/roles/index.ts";
 import { closedBookResearch } from "../src/roles/research.ts";
 
@@ -812,6 +817,70 @@ test("a worker fault wakes Coordinator after reopening without repeating the fai
     await owner.harness.close(context);
   }
 });
+
+test.each([
+  ["verifier", "notes", false],
+  ["explorer", "verification", false],
+  ["explorer", "verification", true],
+  ["verifier", "published", false],
+  ["verifier", "published", true],
+] as const)(
+  "campaign %s rejects a %s result (failed: %s) before publishing",
+  async (role, kind, failed) => {
+    let decisions = 0;
+    const owner = await setup({
+      coordinator: async (input) => ({
+        work: decisions++
+          ? null
+          : role === "verifier"
+            ? {
+                kind: role,
+                notes: [input.notes[0].id],
+                through: "requirements",
+              }
+            : { kind: role, assignment: "Explore." },
+      }),
+      [role]: async (input: { notes: Note[] }) => {
+        const result =
+          kind === "notes"
+            ? { kind, notes: [draft()] }
+            : kind === "published"
+              ? { kind, notes: [], edits: [] }
+              : {
+                  kind,
+                  checks: [
+                    {
+                      noteId: input.notes[0]!.id,
+                      requirements: { verdict: "PASS", report: "Checked." },
+                    },
+                  ],
+                };
+        if (failed)
+          throw Object.assign(new RoleFailure("Worker failed"), { result });
+        return result;
+      },
+    });
+    try {
+      await owner.input({ kind: "submit", id: "seed", notes: [draft()] });
+      const before = await owner.view();
+      await owner.harness.waitForIdle(context);
+      const [worker] = await owner.getTasks("research.worker");
+      expect(worker!.state.outcome).toMatchObject({
+        status: "faulted",
+        error: {
+          message:
+            kind === "published"
+              ? "Only Explorer publishes during execution"
+              : `Invalid ${role} result kind`,
+        },
+      });
+      expect(worker!.state.outcome!.result).toBeUndefined();
+      expect((await owner.view()).notes).toEqual(before.notes);
+    } finally {
+      await owner.harness.close(context);
+    }
+  },
+);
 
 test.each(["invalid batch", "invalid kind", "cancelled"])(
   "failed verification publishes no carried checks or corrections when %s",

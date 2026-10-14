@@ -17,9 +17,9 @@ import {
   type ExternalAnswer,
   type ExternalCall,
 } from "../../roles/backend.ts";
-import { RoleFailure } from "../../roles/types.ts";
+import { RoleFailure } from "../../core/roles.ts";
 import { externalResearch } from "../../roles/research.ts";
-import type { Roles } from "../../workflow.ts";
+import type { Roles } from "../../core/workflow.ts";
 
 export type CliOptions = {
   model: string;

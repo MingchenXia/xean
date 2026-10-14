@@ -3,7 +3,7 @@ import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { open, readReport, type OpenOptions } from "../src/index.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
-import { RoleFailure } from "../src/roles/types.ts";
+import { RoleFailure } from "../src/core/roles.ts";
 import {
   claude,
   claudeCall,
@@ -11,7 +11,7 @@ import {
 } from "../src/plugins/role-backends/claude.ts";
 import { codex, codexCall } from "../src/plugins/role-backends/codex.ts";
 import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
-import { explorationSchema } from "../src/math/contracts.ts";
+import { explorationSchema } from "../src/core/math/contracts.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
 

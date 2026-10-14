@@ -10,8 +10,8 @@ import {
 import { awaitWithContext } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { inspect, open } from "../src/host.ts";
-import { scanTasks } from "../src/workflow.ts";
-import { Bodies, readView } from "../src/math/state.ts";
+import { scanTasks } from "../src/core/workflow.ts";
+import { Bodies, readView } from "../src/core/math/state.ts";
 import { context, fixture, task, settings, noteResult } from "./fixture.ts";
 
 test.each(["worker", "input"] as const)(

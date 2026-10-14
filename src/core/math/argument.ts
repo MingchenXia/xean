@@ -30,20 +30,3 @@ export function closure<T extends Pick<Note, "id" | "support">>(
   ids.forEach(visit);
   return [...found.values()];
 }
-
-export function acceptedArgument(
-  notes: readonly Note[],
-  noteId: string,
-): string {
-  if (!notes.find((note) => note.id === noteId)?.accepted)
-    throw new Error("No accepted argument");
-  return closure([noteId], notes)
-    .map(
-      (note) =>
-        `## ${note.id}\n\n${note.text}` +
-        (note.checks.external
-          ? `\n\n### Independent proof\n\n${note.checks.reconstruction!.proof}`
-          : ""),
-    )
-    .join("\n\n");
-}

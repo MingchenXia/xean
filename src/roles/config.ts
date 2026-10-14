@@ -16,8 +16,28 @@ import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-option
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ThinkingLevelSchema } from "@earendil-works/pi-ai/providers/model-schema";
 import { Check } from "typebox/value";
-import { object, submissionSchemas } from "./math/contracts.ts";
+import {
+  object,
+  batchSchema,
+  explorationSchema,
+  planSchema,
+  correctnessSchema,
+  verdictSchema,
+  proofSchema,
+} from "../core/math/contracts.ts";
 
+export const submissionSchemas = {
+  explorer: explorationSchema,
+  coordinator: planSchema({
+    literature: true,
+    implementation: true,
+    externalVerifier: true,
+  }),
+  correctness: batchSchema(correctnessSchema),
+  requirements: batchSchema(verdictSchema),
+  proof: batchSchema(proofSchema),
+  reconstruction: batchSchema(verdictSchema),
+};
 export type ProfileName = keyof typeof submissionSchemas;
 export const profileNames = Object.keys(submissionSchemas) as ProfileName[];
 export type Profile = {
@@ -26,6 +46,7 @@ export type Profile = {
   stream?: Models["streamSimple"];
   checkAuth?: () => Promise<boolean>;
 };
+export type Profiles = Record<ProfileName, Profile>;
 export const defaultMaxExplorerReads = 4;
 export const explorerResponseLimit = (settings: {
   maxExplorerResponses?: number;

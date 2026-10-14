@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai/utils/transcript";
 import { inspect, open, readReport, type Note } from "../src/index.ts";
-import type { VerifierInput } from "../src/math/contracts.ts";
+import type { VerifierInput } from "../src/core/math/contracts.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { codex } from "../src/plugins/role-backends/codex.ts";

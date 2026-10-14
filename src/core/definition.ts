@@ -5,12 +5,11 @@ import {
   type Tx,
 } from "@earendil-works/pi-durable";
 import { Check } from "typebox/value";
-import { readSettings, type Settings } from "./config.ts";
 import { taskSchema, type Task } from "./math/contracts.ts";
 
 export type Definition = {
   task: Task;
-  settings: Settings;
+  settings: JsonValue;
   mode?: { role: string; input: JsonValue };
 };
 export class UninitializedResearchError extends Error {
@@ -37,7 +36,7 @@ export function validateDefinition(value: Partial<Definition>): Definition {
     throw new Error("Invalid research mode");
   return {
     task: structuredClone(value.task),
-    settings: readSettings(value.settings),
+    settings: copyJson(value.settings),
     ...(mode ? { mode: structuredClone(mode) } : {}),
   };
 }
