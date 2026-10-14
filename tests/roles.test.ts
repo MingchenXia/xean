@@ -727,10 +727,28 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
     expect(
       new Set(comparisons.slice(2).map(({ session }) => session)).size,
     ).toBe(1);
-    for (const call of [proofs[4]!, proofs.at(-1)!, comparisons.at(-1)!])
-      expect(JSON.stringify(call.transcript)).toContain(
-        "Batch results must contain exactly one result per requested note.",
-      );
+    for (const [call, requested, received, missing, unexpected, duplicates] of [
+      [proofs[4]!, ["n1", "n2"], ["n1", "n1"], ["n2"], [], ["n1"]],
+      [proofs.at(-1)!, ["n3", "n4"], ["n2", "n3", "n4"], [], ["n2"], []],
+      [comparisons.at(-1)!, ["n3", "n4"], ["n3", "n3"], ["n4"], [], ["n3"]],
+    ] as const) {
+      const error = call.transcript.messages
+        .filter((message) => message.role === "toolResult")
+        .findLast((message) => message.isError);
+      expect(error?.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(
+          JSON.stringify({
+            requested,
+            received,
+            missing,
+            unexpected,
+            duplicates,
+            duplicateRequests: [],
+          }),
+        ),
+      });
+    }
   } finally {
     await current.harness.close(context);
   }
