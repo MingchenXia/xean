@@ -729,7 +729,7 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
     ).toBe(1);
     for (const call of [proofs[4]!, proofs.at(-1)!, comparisons.at(-1)!])
       expect(JSON.stringify(call.transcript)).toContain(
-        "Batch results must contain exactly one result per requested note",
+        "Batch results must contain exactly one result per requested note.",
       );
   } finally {
     await current.harness.close(context);
@@ -1399,7 +1399,16 @@ test.each([
             : failure === "cleanup"
               ? "Response incomplete: max_messages"
               : failure === "source IDs"
-                ? "Batch results must contain exactly one result per requested note"
+                ? `Batch results must contain exactly one result per requested note. ${JSON.stringify(
+                    {
+                      requested: input.notes.map((note) => note.id),
+                      received: input.notes.map(() => "unrequested"),
+                      missing: input.notes.map((note) => note.id),
+                      unexpected: ["unrequested"],
+                      duplicates: ["unrequested"],
+                      duplicateRequests: [],
+                    },
+                  )}`
                 : failure === "source premises"
                   ? `Source-checked premises do not match correctness for ${input.notes[0]!.id}`
                   : "proof did not submit a structured result",

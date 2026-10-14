@@ -569,21 +569,32 @@ test("batch results require each requested identity exactly once", () => {
       ],
     ),
   ).toEqual([{ value: 1 }, { value: 2 }]);
-  for (const results of [
-    [{ noteId: "a", value: 1 }],
-    [
-      { noteId: "a", value: 1 },
-      { noteId: "a", value: 2 },
-    ],
-    [
-      { noteId: "a", value: 1 },
-      { noteId: "b", value: 2 },
-      { noteId: "c", value: 3 },
-    ],
-  ])
-    expect(() => batchResults(["a", "b"], results)).toThrow(
-      "exactly one result per requested note",
-    );
+  expect(() => batchResults(["a", "b"], [{ noteId: "a", value: 1 }])).toThrow(
+    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a"],"missing":["b"],"unexpected":[],"duplicates":[],"duplicateRequests":[]}',
+  );
+  expect(() =>
+    batchResults(
+      ["a", "b"],
+      [
+        { noteId: "a", value: 1 },
+        { noteId: "a", value: 2 },
+      ],
+    ),
+  ).toThrow(
+    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a","a"],"missing":["b"],"unexpected":[],"duplicates":["a"],"duplicateRequests":[]}',
+  );
+  expect(() =>
+    batchResults(
+      ["a", "b"],
+      [
+        { noteId: "a", value: 1 },
+        { noteId: "b", value: 2 },
+        { noteId: "c", value: 3 },
+      ],
+    ),
+  ).toThrow(
+    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a","b","c"],"missing":[],"unexpected":["c"],"duplicates":[],"duplicateRequests":[]}',
+  );
   expect(() =>
     batchResults(
       ["a", "a"],
@@ -592,7 +603,9 @@ test("batch results require each requested identity exactly once", () => {
         { noteId: "b", value: 2 },
       ],
     ),
-  ).toThrow("exactly one result per requested note");
+  ).toThrow(
+    'Batch results must contain exactly one result per requested note. {"requested":["a","a"],"received":["a","b"],"missing":[],"unexpected":["b"],"duplicates":[],"duplicateRequests":["a"]}',
+  );
 });
 
 test("note text rejects blank and control characters but preserves mathematical notation", () => {
