@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { SolverCommand } from "../../src/math/commands.ts";
+import type { SolverCommand } from "../../src/core/math/commands.ts";
 
 export type OwnerCommand =
   SolverCommand | { kind: "pause" | "resume" | "cancel" };
@@ -24,9 +24,9 @@ export function socketPath(database: string): string {
 }
 
 /** Failure to connect permits trying exclusive database ownership locally. */
-export async function requestOwner(
+export async function requestOwner<C extends { kind: string } = OwnerCommand>(
   database: string,
-  command: OwnerCommand,
+  command: C,
   expectedOwnerId?: string,
 ): Promise<unknown | undefined> {
   const path = socketPath(database);
@@ -75,9 +75,9 @@ export async function requestOwner(
 }
 
 /** Start only after the native host has acquired exclusive ownership. */
-export async function serveControl(
+export async function serveControl<C extends { kind: string } = OwnerCommand>(
   database: string,
-  execute: (command: OwnerCommand) => Promise<unknown>,
+  execute: (command: C) => Promise<unknown>,
   ownerId?: string,
 ) {
   const path = socketPath(database);
@@ -106,15 +106,15 @@ export async function serveControl(
       )
         return new Response("Not found", { status: 404 });
       try {
-        const { expectedOwnerId, ...command } =
-          (await request.json()) as OwnerCommand & { expectedOwnerId?: string };
+        const { expectedOwnerId, ...command } = (await request.json()) as C & {
+          expectedOwnerId?: string;
+        };
         if (expectedOwnerId !== undefined && expectedOwnerId !== ownerId)
           return reject("owner_changed", "Campaign owner changed");
         if (command.kind === "resume" && stopping)
           return reject("owner_stopping", "Owner is stopping");
-        if (["pause", "resume", "cancel"].includes(command.kind))
-          server.timeout(request, 0);
-        const operation = execute(command);
+        server.timeout(request, 0);
+        const operation = execute(command as C);
         if (command.kind === "resume") resumes.add(operation);
         return Response.json(
           await operation.finally(() => resumes.delete(operation)),
@@ -131,8 +131,7 @@ export async function serveControl(
     // A resume accepted as the original run finishes keeps this owner serving.
     while (!interrupt && resumes.size) await Promise.allSettled(resumes);
     stopping = true;
-    // Interrupt closes incomplete request bodies. Bun still drains handlers
-    // committing parsed commands before removing the socket.
+    // Interrupt closes connections. Pi closure fences any admitted commits.
     return server.stop(interrupt);
   };
   try {

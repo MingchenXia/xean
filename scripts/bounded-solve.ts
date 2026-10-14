@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { ConversationId, EntryId, Tx } from "@earendil-works/pi-durable";
 import { open, readSettings, type Roles } from "../src/index.ts";
-import { scanTasks, type WorkerInput } from "../src/workflow.ts";
+import { scanTasks, type WorkerInput } from "../src/core/workflow.ts";
 import {
   controlCommand,
   observeOwner,
@@ -53,7 +53,7 @@ if (import.meta.main) {
   const directory = resolve(positionals[0]!);
   const roundLimit = Number(values["round-limit"]);
   const task = await Bun.file(resolve(directory, "task.json")).json();
-  let settings = readSettings(
+  const settings = readSettings(
     await Bun.file(resolve(directory, "settings.json")).json(),
   );
   if (values.offline) {
@@ -62,17 +62,6 @@ if (import.meta.main) {
       true,
       "Closed-book runs cannot enable literature",
     );
-    assert.equal(
-      settings.codex,
-      undefined,
-      "Codex implementation cannot enforce closed-book execution",
-    );
-    assert.equal(
-      settings.chatgpt,
-      undefined,
-      "ChatGPT Web cannot enforce closed-book execution",
-    );
-    settings = readSettings({ ...settings, research: false });
   }
   const database = resolve(directory, "campaign.sqlite");
   const owner = await open(database, {

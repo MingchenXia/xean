@@ -1,17 +1,16 @@
+import { selectBatch } from "./batch.ts";
 import type { Context } from "@earendil-works/chord";
+import type { Profiles } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
-import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import { Assert } from "typebox/value";
 import {
   batchResults,
   explorationSchema,
-  codexPlan,
+  implementationPlan,
   planSchema,
-  type CodexInput,
+  type ImplementationInput,
   type Exploration,
-  submissionSchemas,
   literatureResultSchema,
   verdictSchema,
   verificationStageSchema,
@@ -28,7 +27,7 @@ import {
   type VerificationStage,
   type VerificationBackend,
   verificationBackendSchema,
-} from "../math/contracts.ts";
+} from "../core/math/contracts.ts";
 import {
   correctionInstructions,
   noteInfo,
@@ -39,35 +38,30 @@ import {
   statementPrepared,
   validateNotes,
   validateResult,
-} from "../math/notes.ts";
-import { closure, keepsPrior } from "../math/argument.ts";
-import {
-  conversations,
-  type ExplorerLimit,
-  type Submission,
-} from "./conversation.ts";
+} from "../core/math/notes.ts";
+import { closure, keepsPrior } from "../core/math/argument.ts";
+import { conversations, type Submission } from "./conversation.ts";
 import {
   explorerResponseLimit,
   defaultMaxExplorerReads,
+  submissionSchemas,
   type ProfileName,
   type Settings,
-} from "../config.ts";
-import { codexCalls, codexEvidence, type CodexOptions } from "./codex.ts";
+} from "./config.ts";
+import { externalEvidence, type ExternalRoles } from "./backend.ts";
 import {
   RoleFailure,
   type NoteReference,
-  type Profiles,
   type RoleRuntime,
-} from "./types.ts";
+} from "../core/roles.ts";
+import { closedBookResearch } from "./research.ts";
+import type { Research, LiteratureInput } from "./backend.ts";
 import {
-  codexResearch,
-  closedBookResearch,
-  type Research,
-  type LiteratureInput,
-} from "./research.ts";
-import { chatgpt } from "./chatgpt.ts";
-import { publicationResult, type PublishedResult } from "../math/results.ts";
-import { readView, seedNotebook } from "../math/state.ts";
+  publicationResult,
+  type PublishedResult,
+  type ExplorerLimit,
+} from "../core/math/results.ts";
+import { readView, seedNotebook } from "../core/math/state.ts";
 
 const mathematicalCheck = `Judge the authoritative full text first. Check both summaries against it: preserve hypotheses, quantitative guarantees, conditionality, negative conclusions, and unresolved gaps. A summary must not strengthen a claim or present an unresolved result as established. For notes without external trust, PASS requires the original argument to establish the full claimed statement under declared transitive support, listed external premises, and task-permitted assumptions. A substantive argument supplied only in a report or independent proof cannot repair that note. If missing justification is the only blocker, return INCONCLUSIVE even if you can prove the result. Do not omit conclusions to obtain PASS. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. ${correctionInstructions} External trust grants the mathematical claims stated in the supplied note at their exact scope. When an externally trusted support has no checked statement, use its authoritative full text. Treat established support results as given, but verify their applicability against their exact statements, including hypotheses absent from summaries, and check all new reasoning. Do not infer mathematical truth from an earlier model's confidence.`;
 const externalStatementInstructions =
@@ -198,8 +192,6 @@ export type CoordinationInput = {
   limits?: { id: string; reason: ExplorerLimit }[];
   guidance: string[];
   literatureUsed: boolean;
-  /** Any prior work for the current built-in Explorer, including failures. */
-  explorerUsed: boolean;
   recent?: {
     id: string;
     role: string;
@@ -209,42 +201,59 @@ export type CoordinationInput = {
     request?: unknown;
   }[];
 };
-export type RoleOptions = Omit<Settings, "profiles" | "research" | "codex"> & {
-  profiles: Profiles;
-  research?: CodexOptions | false;
-  codex?: CodexOptions & { workspace: string };
-};
+export type RoleOptions = Omit<Settings, "profiles"> & { profiles: Profiles };
 
-export function createRoles(options: RoleOptions, researchOverride?: Research) {
+export function createRoles(options: RoleOptions) {
   const maxExplorerResponses = explorerResponseLimit(options);
   const maxExplorerReads = options.maxExplorerReads ?? defaultMaxExplorerReads;
   const native = conversations(options.profiles);
   const { ask } = native;
-  const askCodex = codexCalls({
-    ...options,
-    research: options.research ?? { model: "gpt-6-astra" },
-  });
-  const research =
-    researchOverride ??
-    (options.research === false ? closedBookResearch : codexResearch(askCodex));
-  const literature = (options.literature ?? false) && research.retrieval;
-  const singleShot = options.chatgpt !== undefined;
-  const batch = async <
+  const research = () => functions.external.research ?? closedBookResearch;
+  const literature = () =>
+    (options.literature ?? false) && research().retrieval;
+  const nextBatch = async <
     P extends Exclude<ProfileName, "explorer" | "coordinator">,
   >(
     profile: P,
     instructions: string,
-    input: { notes: { id: string }[]; [key: string]: unknown },
+    pending: Note[],
+    inputFor: (group: Note[]) => {
+      notes: { id: string }[];
+      [key: string]: unknown;
+    },
     runtime: RoleRuntime,
     context: Context,
-    backend: VerificationBackend = "native",
-  ): Promise<Omit<Submission<P>["results"][number], "noteId">[]> => {
-    if (!input.notes.length) return [];
-    const ids = input.notes.map((note) => note.id);
+    backend: VerificationBackend,
+    writtenTokens = (note: Note) => estimateTextTokens(note.text),
+  ) => {
+    const ref = options.profiles[profile].model;
+    const model =
+      backend === "native"
+        ? runtime.models.getModel(ref.provider, ref.modelId)!
+        : undefined;
+    // External backends own their model capacity; Pi profiles may name another model.
+    const group =
+      backend === "native"
+        ? selectBatch(
+            pending,
+            model!,
+            (selected) => [
+              instructions,
+              inputFor(selected),
+              submissionSchemas[profile],
+              selected.map((note) => note.id),
+            ],
+            writtenTokens,
+          )
+        : profile === "proof" || profile === "reconstruction"
+          ? pending.slice(0, 1)
+          : pending;
+    const input = inputFor(group);
+    const ids = group.map((note) => note.id);
     const system = `Return exactly one result for every requested ID in notes, never additional results for support. ${instructions}`;
     let results: Submission<P>["results"];
-    if (backend === "codex") {
-      const answer = await askCodex(
+    if (backend === "external") {
+      const answer = await functions.external.verifier!(
         "worker",
         submissionSchemas[profile],
         `${system}\nPerform the mathematical check or independent proof required by this assignment, using its stated criteria and output schema. Review the checker against the exact mathematical claim, cover every required case, and use exact arithmetic or certified error bounds where needed. A successful exit or another agent's claim that a checker passed is insufficient. Identify the execution evidence and explain why the checks establish the claim in your result. Supply missing verification, not a missing proof step: substantive repairs belong in the authoritative note. ${profile === "proof" ? "This is blind reconstruction. Use only the supplied task, exact statements, approved premises, and declared support. Do not inspect original proofs, campaign transcripts, or other workspaces. Keep your own programs and results in this fresh workspace; installed tools and libraries may be used." : "Read relevant supplied artifacts as evidence and assess their correspondence to the frozen argument. Preserve original artifacts and do your checking in this fresh workspace. Address the unresolved checks identified in any prior assessment."}`,
@@ -252,22 +261,21 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         runtime,
         context,
       );
+      Assert(submissionSchemas[profile], answer.value);
       results = answer.value.results;
       for (const result of results) {
-        if ("report" in result) result.report += codexEvidence(answer);
-        else if ("proof" in result) result.proof += codexEvidence(answer);
+        if ("report" in result) result.report += externalEvidence(answer);
+        else if ("proof" in result) result.proof += externalEvidence(answer);
       }
     } else {
-      const ref = options.profiles[profile].model;
-      const model = runtime.models.getModel(ref.provider, ref.modelId)!;
       const result = await ask(
         profile,
         system,
         {
           ...input,
           capacity: {
-            contextTokens: model.contextWindow,
-            outputTokens: model.maxTokens,
+            contextTokens: model!.contextWindow,
+            outputTokens: model!.maxTokens,
           },
         },
         runtime,
@@ -276,9 +284,12 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           ids,
         },
       );
-      results = result.at(-1)!.results;
+      results = result.submissions.at(-1)!.results;
     }
-    return batchResults<Submission<P>["results"][number]>(ids, results);
+    return {
+      group,
+      results: batchResults<Submission<P>["results"][number]>(ids, results),
+    };
   };
   const reconstruction = (
     input: ReconstructionInput,
@@ -287,8 +298,8 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
   ) => {
     const backend = input.backend ?? "native";
     Assert(verificationBackendSchema, backend);
-    if (backend === "codex" && !options.codex)
-      throw new Error("Codex verification is disabled");
+    if (backend === "external" && !functions.external.verifier)
+      throw new Error("External verification is disabled");
     const notes = closure(input.targets, refresh(input.notes));
     if (notes.some((note) => !note.verified || !statementPrepared(note)))
       throw new Error(
@@ -323,45 +334,6 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           group.flatMap((note) => note.support),
           notes,
         ).filter((note) => !group.includes(note));
-      const select = (
-        profile: "proof" | "reconstruction",
-        pending: Note[],
-        instructions: string,
-        inputFor: (group: Note[]) => unknown,
-        writtenTokens: (note: Note) => number,
-      ) => {
-        // Codex owns its model context. Do not size its calls using a Pi profile
-        // that may select a different model; give it one complete claim at a time.
-        if (backend === "codex") return pending.slice(0, 1);
-        const ref = options.profiles[profile].model;
-        const model = runtime.models.getModel(ref.provider, ref.modelId)!;
-        let count = 1;
-        let output = 0;
-        for (let size = 1; size <= pending.length; size++) {
-          const group = pending.slice(0, size);
-          // Reserve complete writing, JSON framing, and three times as much
-          // reasoning. These estimates are scheduling hints, never output caps.
-          output += Math.max(512, writtenTokens(group.at(-1)!)) + 128;
-          if (output * (model.reasoning ? 4 : 1) > model.maxTokens * 0.8) break;
-          const content = JSON.stringify([
-            instructions,
-            inputFor(group),
-            submissionSchemas[profile],
-            group.map((note) => note.id),
-          ]);
-          const room = clampMaxTokensToContext(
-            { ...model, contextWindow: model.contextWindow * 0.8 },
-            normalizeContext({
-              messages: [{ role: "user", content, timestamp: 0 }],
-            }),
-            model.maxTokens,
-          );
-          if (room < model.maxTokens) break;
-          count = size;
-        }
-        // An oversized estimate gets one note, subject to Pi's input guard.
-        return pending.slice(0, count);
-      };
       const instructions =
         "Independently prove every requested statement, returning one complete proof per note. Declared support outside the assigned group may be assumed at its exact stated scope without reproving it. Check applicability and submit results for every assigned note. Write complete arguments, not abbreviated sketches. Original arguments, methods, summaries, and comparison reports are withheld. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Approved external premises may be assumed at exactly their stated scope; check their hypotheses and applications. Previously attempted support may be assumed conditionally, but final acceptance still requires reconstruction throughout the dependency chain. Never use a descendant or unrelated claim. Prove every new step, including composition and theorem applicability. To prove P implies Q, assume P and derive Q; this does not establish P. Set complete=false and state the unresolved gap when you cannot complete a proof. Supporting lemmas need not solve the original task.";
       const comparisonInstructions = `${mathematicalCheck} First check that the extracted statement faithfully represents the result asserted in the full text, preserving scope without leaking proof instructions. Also check externally trusted support statements against their supplied full text. A bad extraction gives INCONCLUSIVE and is not a defect in the original mathematics. For notes without external trust, compare the original argument in the full text with the independent proof. Both arguments must establish that statement, including its hypotheses, quantitative guarantees, and permitted assumptions. The supplied premises records bind the exact external claims to source PASS or external trust. Use those approved claims without demanding another proof or source search, but check their exact hypotheses and applications. A stronger theorem, an unmet hypothesis, or an undeclared inference is not approved. Supporting claims must follow declared transitive dependencies, in dependency order, without circular or unrelated assumptions. Code requires the whole dependency chain to pass; supporting lemmas need not solve the original task. An explicit conditional P implies Q may assume P, but does not establish P. For notes without external trust, PASS requires a correct original argument and a correct independent proof of the same claim. For an externally trusted target, caller trust grants the original result and sources; no original proof is required. PASS requires faithful statement extraction and a complete correct independent proof of that exact claim. External trust does not replace reconstruction. FAIL requires a concrete defect in the original statement or argument. An incomplete, incorrect, or unsupported independent proof alone gives INCONCLUSIVE, even if it claims completeness. So do missing approval records or proof recipes leaked through the extracted statement or external premises. Distinguish a construction that is itself the claimed result from guidance for finding its proof. Never silently edit an approved premise. For notes without external trust, audit the original even when reconstruction is incomplete: identify whether it supplies the missing step. For FAIL or INCONCLUSIVE, begin with the exact blocker. Then report Original argument:, Independent proof:, and Statement and premises:. Explain concrete defects with a quotation, formula, or note ID, distinguishing mathematical errors from missing evidence, input problems, and harmless wording. No defect found does not establish correctness. Record unresolved obligations, not work requests.`;
@@ -371,25 +343,20 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           notes: group.map(statement),
           support: supportFor(group).map(statement),
         });
-        const group = select(
+        const { group, results: proofs } = await nextBatch(
           "proof",
-          pending,
           instructions,
+          pending,
           proofInput,
+          runtime,
+          context,
+          backend,
           (note) =>
             3 *
             Math.max(
               estimateTextTokens(note.text),
               estimateTextTokens(JSON.stringify(statement(note))),
             ),
-        );
-        const proofs = await batch(
-          "proof",
-          instructions,
-          proofInput(group),
-          runtime,
-          context,
-          backend,
         );
         let remaining = group;
         while ((remaining = unblocked(remaining)).length) {
@@ -416,25 +383,20 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
               })),
             };
           };
-          const comparisonGroup = select(
+          const { group: selected, results: judgments } = await nextBatch(
             "reconstruction",
-            remaining,
             comparisonInstructions,
+            remaining,
             comparisonInput,
+            runtime,
+            context,
+            backend,
             (note) =>
               estimateTextTokens(note.text) +
               estimateTextTokens(proofs[group.indexOf(note)]!.proof),
           );
-          const judgments = await batch(
-            "reconstruction",
-            comparisonInstructions,
-            comparisonInput(comparisonGroup),
-            runtime,
-            context,
-            backend,
-          );
           for (const [index, judgment] of judgments.entries()) {
-            const note = remaining[index]!;
+            const note = selected[index]!;
             const proof = proofs[group.indexOf(note)]!;
             record(note, "reconstruction", {
               ...judgment,
@@ -447,7 +409,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
                 : {}),
             });
           }
-          remaining = remaining.slice(judgments.length);
+          remaining = remaining.slice(selected.length);
         }
         pending = unblocked(pending.slice(group.length));
         if (
@@ -462,15 +424,15 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
     };
   };
   const functions = {
+    external: {} as ExternalRoles,
     capabilities(input: CoordinationInput) {
       return {
-        verifier: true,
-        explorer: !singleShot || !input.explorerUsed,
-        codex:
-          options.codex !== undefined || functions.codex !== implementation,
-        codexVerifier: options.codex !== undefined,
-        literature: literature && !input.literatureUsed,
-        sourceRetrieval: research.retrieval,
+        implementation:
+          !!functions.external.implementation ||
+          functions.implementation !== implementation,
+        externalVerifier: !!functions.external.verifier,
+        literature: literature() && !input.literatureUsed,
+        sourceRetrieval: research().retrieval,
       };
     },
     async reconstruct(
@@ -481,14 +443,16 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       input = structuredClone(input);
       return collectChecks(context, reconstruction(input, runtime, context));
     },
-    async codex(
-      input: CodexInput,
+    async implementation(
+      input: ImplementationInput,
       runtime: RoleRuntime,
       context: Context,
     ): Promise<SolverResult> {
-      Assert(codexPlan.properties.assignment, input.assignment);
+      Assert(implementationPlan.properties.assignment, input.assignment);
       context.abortSignal?.throwIfAborted();
-      const answer = await askCodex(
+      if (!functions.external.implementation)
+        throw new Error("Implementation backend is disabled");
+      const answer = await functions.external.implementation(
         "worker",
         explorationSchema,
         "Complete the concrete implementation assignment: produce its deliverable for the specified input/domain, expected output, binding constraints, and checks/evidence. Selected notes may define these requirements. The task's completion criteria provide mathematical context; completing the implementation assignment need not solve the whole task. Choose your own implementation and tools. Return useful findings or failed approaches as ordinary notes with local IDs n1, n2, ... . Each note has summary, detailedSummary, full text, and support. Put derivations, artifact filenames, and rerun commands in text, never support. Include the claims, relevant program/output evidence, reasoning, and limitations needed to check the note without opening artifact files. Distinguish observations, exhaustive finite results, and mathematical proofs. Declare as support every supplied or earlier local note whose result you use without proving it. Dead notes are diagnostic only. These are unverified drafts. Set candidate=true on a note only when that note claims a complete solution of the exact task. Return notes=[] only when there is no new information worth retaining.",
@@ -496,7 +460,9 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         runtime,
         context,
       );
-      for (const note of answer.value.notes) note.text += codexEvidence(answer);
+      Assert(explorationSchema, answer.value);
+      for (const note of answer.value.notes)
+        note.text += externalEvidence(answer);
       return validateResult({ kind: "notes", ...answer.value }, input.notes);
     },
     async explorer(
@@ -505,6 +471,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       context: Context,
       source?: NoteReference,
     ): Promise<PublishedResult | SolverResult> {
+      const singleShot = !!functions.external.explorer;
       const maxResponses = singleShot ? 1 : maxExplorerResponses;
       input = structuredClone(input);
       const root = source?.root ?? runtime.conversationId;
@@ -534,17 +501,19 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         assignment: input.assignment,
         allowance: { reads: maxReads, responses: maxResponses },
       };
-      if (options.chatgpt) {
-        const result = await chatgpt(
-          options.chatgpt,
+      if (functions.external.explorer) {
+        const { value: result } = await functions.external.explorer(
+          "worker",
+          explorationSchema,
           instructions,
           prompt,
           runtime,
           context,
         );
+        Assert(explorationSchema, result);
         if (result.edits?.length)
           throw new Error(
-            "ChatGPT Web Explorer cannot edit notes without their full text",
+            "External Explorer cannot edit notes without their full text",
           );
         return validateResult({ kind: "notes", ...result }, input.notes);
       }
@@ -566,7 +535,11 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           },
         },
       );
-      return publicationResult(result as Exploration[], runtime.taskId);
+      return publicationResult(
+        result.submissions as Exploration[],
+        runtime.taskId,
+        result.limit,
+      );
     },
 
     async coordinator(
@@ -576,7 +549,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       source?: NoteReference,
     ): Promise<Plan> {
       input = structuredClone(input);
-      const { notes, task, explorerUsed: _explorerUsed, ...state } = input;
+      const { notes, task, ...state } = input;
       const capabilities = input.capabilities ?? functions.capabilities(input);
       const prompt = {
         ...state,
@@ -586,13 +559,13 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       };
       return ask(
         "coordinator",
-        `Choose the next useful worker for this mathematical task. The outer loop is Coordinator, one worker, Coordinator. You run after the prior worker commits its complete result or failure. You choose mathematical strategy from the supplied index, feedback, and recent outcomes. For Explorer, state the mathematical objective and relevant note IDs. ${singleShot ? "The ChatGPT Web Explorer receives the note index but has no note reader. Read relevant notes and include the authoritative passages needed for its assignment, preserving IDs and exact hypotheses." : "Explorer receives the note index, verification feedback, and a note reader. Reference IDs instead of restating claims or copying historical proofs. Explorer chooses which notes to read and how to develop or edit their arguments."} If an existing claim must appear in the assignment, use its checked statement when available, otherwise its authoritative text, with its note ID and verification status. Preserve hypotheses and scope, and label proposed extensions as unproved. In each assignment, state the remaining obstacle to the exact task, what the work could establish, and how its outcome would affect the next step. Use the latest results to justify continuing or changing approach. Before extending a special case, explain what the extension could teach us about that obstacle, including any missing reduction to the full task. Use only offered work kinds. If codexVerifier is available, select backend=codex on a verifier request when access to code, artifacts, or computation is likely to complete the mathematical checks. When the deliverable is a verdict on existing notes, use this Verifier backend, which judges PASS, FAIL, or INCONCLUSIVE directly under the same rules. The ordinary kind=codex worker returns unverified notes and cannot publish verification checks. You may select the Codex Verifier initially or to settle an INCONCLUSIVE check without changing the argument. Choose it for a specific useful check, not automatically after every uncertainty. Explorer has no external retrieval tools. Use Codex for a concrete implementation deliverable with its domain, constraints, and evidence of completion. Literature is available for at most one completed search and only when enabled. When sourceRetrieval is false, verification cannot retrieve external evidence.
+        `Choose the next useful worker for this mathematical task. The outer loop is Coordinator, one worker, Coordinator. You run after the prior worker commits its complete result or failure. You choose mathematical strategy from the supplied index, feedback, and recent outcomes. For Explorer, state the mathematical objective and relevant note IDs. ${functions.external.explorer ? "The external Explorer receives the note index but has no note reader. Read relevant notes and include the authoritative passages needed for its assignment, preserving IDs and exact hypotheses." : "Explorer receives the note index, verification feedback, and a note reader. Reference IDs instead of restating claims or copying historical proofs. Explorer chooses which notes to read and how to develop or edit their arguments."} If an existing claim must appear in the assignment, use its checked statement when available, otherwise its authoritative text, with its note ID and verification status. Preserve hypotheses and scope, and label proposed extensions as unproved. In each assignment, state the remaining obstacle to the exact task, what the work could establish, and how its outcome would affect the next step. Use the latest results to justify continuing or changing approach. Before extending a special case, explain what the extension could teach us about that obstacle, including any missing reduction to the full task. Use only offered work kinds. If externalVerifier is available, select backend=external on a verifier request when access to code, artifacts, or computation is likely to complete the mathematical checks. When the deliverable is a verdict on existing notes, use this Verifier backend, which judges PASS, FAIL, or INCONCLUSIVE directly under the same rules. The ordinary kind=implementation worker returns unverified notes and cannot publish verification checks. You may select the external Verifier initially or to settle an INCONCLUSIVE check without changing the argument. Choose it for a specific useful check, not automatically after every uncertainty. Explorer has no external retrieval tools. Use implementation for a concrete implementation deliverable with its domain, constraints, and evidence of completion. Literature is available for at most one completed search and only when enabled. When sourceRetrieval is false, verification cannot retrieve external evidence.
 
 Verification runs correctness, source, requirements, then reconstruction. Correctness judges each note's exact mathematics conditionally on its declared support and listed premises. Source checks those exact external premises. All declared dependencies must pass before a note is verified. Requirements judges the original task's full completion criteria. A supporting lemma need not solve the task. For final acceptance, target the complete-solution candidate through reconstruction; code also requires reconstruction throughout its dependency chain. Externally trusted results retain only the caller's exact grant, with declared dependencies checked, and an externally trusted candidate still requires requirements and reconstruction. Reuse applicable PASS checks. A missing proof, changed statement, or changed dependency is repaired in the authoritative note, not by adding an argument to a check report. Verifier may clarify summaries but cannot edit proof text or dependencies. Source approval does not grant a stronger claim or different premises. A source or requirements failure does not by itself refute the mathematical argument. Never declare acceptance yourself.
 
 Stable note IDs are editable. Ask Explorer to repair the affected argument and any consuming dependency declarations, reusing existing lemmas when appropriate. The checked statement is a correctness result, not an Explorer-editable field. If it misstates a note, ask Explorer to clarify the intended mathematical claim in the authoritative text using a mathematical edit, then send the revised note through correctness again. Do not request direct edits to the checked statement. Do not require copied consumer chains or new IDs merely to repair an existing note. Retirement affects discovery, not mathematical truth or dependency redirects. Dead and retired notes can be read for diagnosis. Mathematical edits invalidate affected evidence; unchanged summaries and repeated assessments do not establish new mathematics. Use the actual unresolved stage in feedback, not just the requested final stage. Recent outcomes report completed work and operational failures. Submitted edit counts do not establish that the mathematics changed; inspect the current note feedback before requesting another check.
 
-You may select Codex to reassess INCONCLUSIVE correctness, requirements, or reconstruction whenever a specific computational check could resolve the uncertainty. Decide whether another attempt is useful from the prior reports and available evidence. Xean does not automatically retry these checks. Source checks still require relevant new source evidence. A missing proof or supporting statement requires an authoritative note or dependency repair by Explorer. Preserve diagnostic distinctions between a concrete defect and incomplete checking. Use the observed failure and retained execution evidence when deciding whether another attempt is useful. A failed final response does not establish that no commands ran or no artifacts were produced. Transient provider failures may recover through the existing retry policy. Persistent blockers need a relevant change: changing URL paths on the same host does not repair failed DNS, and repeating a solver request does not supply missing software. Identify what could make another attempt succeed, or select useful work that avoids the blocker.
+You may select the external Verifier to reassess INCONCLUSIVE correctness, requirements, or reconstruction whenever a specific computational check could resolve the uncertainty. Decide whether another attempt is useful from the prior reports and available evidence. Xean does not automatically retry these checks. Source checks still require relevant new source evidence. A missing proof or supporting statement requires an authoritative note or dependency repair by Explorer. Preserve diagnostic distinctions between a concrete defect and incomplete checking. Use the observed failure and retained execution evidence when deciding whether another attempt is useful. A failed final response does not establish that no commands ran or no artifacts were produced. Transient provider failures may recover through the existing retry policy. Persistent blockers need a relevant change: changing URL paths on the same host does not repair failed DNS, and repeating a solver request does not supply missing software. Identify what could make another attempt succeed, or select useful work that avoids the blocker.
 
 Prioritize pivotal claims and useful dependencies rather than checking every speculative note. Before returning work=null, assess the latest substantive results and remaining useful work: verification of new claims worth retaining, repairs identified by checks, and focused exploration or computation. Finishing a worker's local objective does not exhaust the campaign. If a concrete admissible step is reasonably likely to advance the exact task or establish useful progress toward it, select it. Return work=null only when no such step is currently available, and briefly explain why in your response before submitting. Unchecked speculative or irrelevant notes alone do not require further work. Use read_notes for detailed summaries or full arguments when this assessment requires them, batching independent IDs. An idle decision does not claim a solution.`,
         prompt,
@@ -603,7 +576,7 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
           ...(source ? { noteSource: source } : { notes }),
           capabilities: prompt.capabilities,
         },
-      ).then((result) => result.at(-1)!);
+      ).then((result) => result.submissions.at(-1)!);
     },
 
     async verifier(
@@ -616,8 +589,8 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
       Assert(verificationStageSchema, input.through);
       const backend = input.backend ?? "native";
       Assert(verificationBackendSchema, backend);
-      if (backend === "codex" && !options.codex)
-        throw new Error("Codex verification is disabled");
+      if (backend === "external" && !functions.external.verifier)
+        throw new Error("External verification is disabled");
       const pending = pendingChecks(
         input.targets,
         input.through,
@@ -628,16 +601,15 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
         const assess = async (
           stage: "correctness" | "requirements",
           instructions: string,
-          selected = pending(stage),
+          remaining = pending(stage),
         ) => {
-          const support = closure(
-            selected.flatMap((note) => note.support),
-            notes,
-          ).filter((note) => !selected.includes(note));
-          const results = await batch(
-            stage,
-            `Check all requested notes together. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
-            {
+          instructions = `Check all requested notes together. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`;
+          const inputFor = (selected: Note[]) => {
+            const support = closure(
+              selected.flatMap((note) => note.support),
+              notes,
+            ).filter((note) => !selected.includes(note));
+            return {
               task: input.task,
               support: support.map((note) =>
                 stage === "requirements"
@@ -663,14 +635,26 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
                     })),
                   }
                 : {}),
-            },
-            runtime,
-            context,
-            backend,
-          );
-          selected.forEach((note, index) =>
-            record(note, stage, results[index]!),
-          );
+            };
+          };
+          while (remaining.length) {
+            const { group, results } = await nextBatch(
+              stage,
+              instructions,
+              remaining,
+              inputFor,
+              runtime,
+              context,
+              backend,
+            );
+            group.forEach((note, index) =>
+              record(note, stage, results[index]!),
+            );
+            refresh(notes);
+            remaining = remaining
+              .slice(group.length)
+              .filter((note) => !note.dead);
+          }
         };
         await assess(
           "correctness",
@@ -680,7 +664,7 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
         refresh(notes);
         await assess(
           "correctness",
-          `${mathematicalCheck} All requested notes are generated; their results are not caller-granted. For each target: identify the mathematical result expressly claimed by each note and return its exact statement, including definitions, hypotheses, quantifiers, conclusions, and conditionality. Exclude proof recipes, methods, and intermediate proof steps; a construction that is itself the claimed result is legitimate statement content. A research log, question, or strategy suggestion need not assert a result: return statement=null and INCONCLUSIVE when there is no mathematical claim to check. Do not invent a claim or turn conjecture into established fact. The statement will be frozen on PASS and sent to a prover without the full text. Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For an explicit conditional claim P implies Q, check the derivation of Q assuming P. Its hypothetical antecedent P is part of the claim, not an external theorem to establish; omit it from premises. Proving the implication does not establish P. An unstated assumption in an unconditional claim remains a gap: do not silently weaken the claim to an implication or promote a missing proof step to an external theorem. External results actually used to prove an implication still require the normal assessment below. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Check borrowed facts against each support's checked statement or the statement you extract in this batch. For support with external trust and no checked statement, use the granted claims in its supplied full text. Additional facts from a support's proof need their own declared support or a proof in the consuming note. If the only unresolved issue is that a needed fact appears in declared support's proof but is omitted from its checked statement, return INCONCLUSIVE and identify the missing statement. Find missing cases, unsupported inferences, and undeclared substantive dependencies. When a claimed fact relies on campaign notes outside declared transitive support, including in scope remarks or comparisons, return INCONCLUSIVE and identify the missing claim or reference in report; never list that fact as an external premise. Apply the task's proof rules. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. ${research.retrieval ? "Establish routine task-permitted background from mathematical knowledge and explain it in report. Do not externalize a fact proved in the argument, or routine task-permitted background established by your check. List only directly needed nonroutine external claims that remain unproved, with their exact hypotheses and conclusions, including any invoked without citation. A cited theorem note may state such a result conditionally without reproving it. Check each application conditionally and explain it in report." : "This is a closed-book check: source retrieval is disabled. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses and conclusion. Explain their applications in report."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Each premise must be a standalone statement preserving every relevant domain, dimension, compactness, regularity, and other hypothesis. Do not generalize beyond the form actually used in the argument. Source names and citations are allowed. Put proof ideas, application hints, and validation commentary in report, never in premises. Source checking will assess these exact strings, and reconstruction will receive them unchanged. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
+          `${mathematicalCheck} All requested notes are generated; their results are not caller-granted. For each target: identify the mathematical result expressly claimed by each note and return its exact statement, including definitions, hypotheses, quantifiers, conclusions, and conditionality. Exclude proof recipes, methods, and intermediate proof steps; a construction that is itself the claimed result is legitimate statement content. A research log, question, or strategy suggestion need not assert a result: return statement=null and INCONCLUSIVE when there is no mathematical claim to check. Do not invent a claim or turn conjecture into established fact. The statement will be frozen on PASS and sent to a prover without the full text. Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For an explicit conditional claim P implies Q, check the derivation of Q assuming P. Its hypothetical antecedent P is part of the claim, not an external theorem to establish; omit it from premises. Proving the implication does not establish P. An unstated assumption in an unconditional claim remains a gap: do not silently weaken the claim to an implication or promote a missing proof step to an external theorem. External results actually used to prove an implication still require the normal assessment below. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Check borrowed facts against each support's checked statement or the statement you extract in this batch. For support with external trust and no checked statement, use the granted claims in its supplied full text. Additional facts from a support's proof need their own declared support or a proof in the consuming note. If the only unresolved issue is that a needed fact appears in declared support's proof but is omitted from its checked statement, return INCONCLUSIVE and identify the missing statement. Find missing cases, unsupported inferences, and undeclared substantive dependencies. When a claimed fact relies on campaign notes outside declared transitive support, including in scope remarks or comparisons, return INCONCLUSIVE and identify the missing claim or reference in report; never list that fact as an external premise. Apply the task's proof rules. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. ${research().retrieval ? "Establish routine task-permitted background from mathematical knowledge and explain it in report. Do not externalize a fact proved in the argument, or routine task-permitted background established by your check. List only directly needed nonroutine external claims that remain unproved, with their exact hypotheses and conclusions, including any invoked without citation. A cited theorem note may state such a result conditionally without reproving it. Check each application conditionally and explain it in report." : "This is a closed-book check: source retrieval is disabled. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses and conclusion. Explain their applications in report."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Each premise must be a standalone statement preserving every relevant domain, dimension, compactness, regularity, and other hypothesis. Do not generalize beyond the form actually used in the argument. Source names and citations are allowed. Put proof ideas, application hints, and validation commentary in report, never in premises. Source checking will assess these exact strings, and reconstruction will receive them unchanged. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
           pending("correctness").filter((note) => !note.checks.external),
         );
         refresh(notes);
@@ -702,7 +686,7 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
           if (results === undefined) {
             results = batchResults(
               sources.map((note) => note.id),
-              await research.source(sourceInput, runtime, context),
+              await research().source(sourceInput, runtime, context),
             );
             results = await runtime.memo("research.source", results, context);
           }
@@ -734,8 +718,8 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
       runtime: RoleRuntime,
       context: Context,
     ): Promise<SolverResult> {
-      if (!literature) throw new Error("Literature is disabled");
-      const result = await research.literature(
+      if (!literature()) throw new Error("Literature is disabled");
+      const result = await research().literature(
         { ...input, notes: input.notes.filter((note) => !note.retired) },
         runtime,
         context,
@@ -745,8 +729,24 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
       return { kind: "notes", notes: result.notes };
     },
 
-    review: research.review.bind(research),
+    review: (...args: Parameters<Research["review"]>) =>
+      research().review(...args),
   };
-  const implementation = functions.codex;
+  const implementation = functions.implementation;
   return Object.assign(functions, { extension: native.extension });
 }
+
+export {
+  createRuntime,
+  readSettings,
+  defaultSettings,
+  type Settings,
+} from "./config.ts";
+export { externalResearch, closedBookResearch } from "./research.ts";
+export type {
+  ExternalAnswer,
+  ExternalCall,
+  ExternalRoles,
+  Research,
+} from "./backend.ts";
+export { selectBatch } from "./batch.ts";

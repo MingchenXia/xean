@@ -21,7 +21,15 @@ for (const file of Object.values(manifest.bin))
   );
 await access(join(root, "bun.lock"));
 
-const { inspect } = await import(manifest.name);
+const { inspect, createResearch } = await import(manifest.name);
+assert.equal(
+  (await import(`${manifest.name}/core`)).createResearch,
+  createResearch,
+);
+assert.equal(
+  typeof (await import(`${manifest.name}/roles`)).createRoles,
+  "function",
+);
 const { readReport, readStatus } = await import(`${manifest.name}/report`);
 const { cliModels } = await import("../apps/cli/models.ts");
 assert.equal(
@@ -68,7 +76,7 @@ const inspected = JSON.parse(
 assert.deepEqual(inspected.task, await Bun.file(task).json());
 assert.deepEqual(await inspect(quickstart, readStatus), initialized);
 assert.equal(inspected.status.calls.recordedResponses, 0);
-assert.equal(inspected.status.calls.codexInvocations, 0);
+assert.equal(inspected.status.calls.externalInvocations, 0);
 assert.deepEqual(inspected, await inspect(quickstart, readReport));
 for (const [command, expected] of [
   ["pause", "paused"],

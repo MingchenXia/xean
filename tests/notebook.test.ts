@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { temporaryDirectory } from "./directory.ts";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import { readCommand } from "../src/math/commands.ts";
+import { readCommand } from "../src/core/math/commands.ts";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -20,13 +20,13 @@ import {
   readView,
   type MathView,
   type SnapshotReader,
-} from "../src/math/state.ts";
+} from "../src/core/math/state.ts";
 import {
   pendingChecks,
   stagePending,
   validatePlan,
-} from "../src/math/notes.ts";
-import type { Check, Note, SolverResult } from "../src/math/contracts.ts";
+} from "../src/core/math/notes.ts";
+import type { Check, Note, SolverResult } from "../src/core/math/contracts.ts";
 
 const pass = { verdict: "PASS" as const, report: "Checked." };
 const content = (text: string) => ({
@@ -808,7 +808,7 @@ test("retirement hides direct work while existing consumers can finish verificat
           },
         },
         notes,
-        { explorer: true, literature: false, codex: false },
+        { literature: false, implementation: false },
       ),
     ).toThrow("Retired note");
     expect(
@@ -861,7 +861,7 @@ test("a coherent changed-claim batch installs its newly checked consumers after 
             ...pass,
             premises: ["A different premise"],
             passages: [],
-            kind: "codex-report",
+            kind: "external-report",
             operationId: "wrong",
             reportedAt: "now",
           },
@@ -1034,7 +1034,7 @@ test("source approval cannot bind premises from an ignored correctness extractio
           },
           source: {
             ...pass,
-            kind: "codex-report",
+            kind: "external-report",
             operationId: "wrong-premise",
             reportedAt: "now",
             premises: ["Q"],
@@ -1130,7 +1130,7 @@ test("new relevant quotations reopen source checks but fresh receipt IDs do not"
             correctness: { ...pass, statement: premise, premises: [premise] },
             source: {
               ...pass,
-              kind: "codex-report",
+              kind: "external-report",
               operationId: note.id,
               reportedAt: "now",
               premises: [premise],
@@ -1211,7 +1211,7 @@ test.each(["conflict", "batch", "identical", "replaced", "activated"])(
         correctness: { ...pass, statement: "P", premises: ["P"] },
         source: {
           ...pass,
-          kind: "codex-report",
+          kind: "external-report",
           operationId: note.id,
           reportedAt: "now",
           premises: ["P"],
@@ -1285,7 +1285,7 @@ test.each([false, true])(
       };
       const source = {
         ...pass,
-        kind: "codex-report" as const,
+        kind: "external-report" as const,
         operationId: "batch",
         reportedAt: "now",
         premises: ["X"],

@@ -22,7 +22,7 @@ import {
   defaultSettings,
   readSettings,
   type ProfileName,
-} from "../src/config.ts";
+} from "../src/roles/config.ts";
 
 const auth = (values: Record<string, string>): AuthContext => ({
   env: async (name) => values[name],
@@ -130,10 +130,12 @@ test("Pi login credentials persist and refresh across Xean model runtimes", asyn
   expect(await (await reopen()).checkAuth("anthropic")).toBeUndefined();
 });
 
-test("settings reject unsupported fields, unsafe endpoints, and non-ChatGPT browser routes", () => {
+test("core settings reject plugin configuration and unsafe endpoints", () => {
   for (const unsupported of [
     { apiKey: "not-a-setting" },
     { researchPolicy: "model-led" },
+    { codex: { model: "fixture" } },
+    { research: { model: "fixture" } },
   ])
     expect(() => readSettings({ ...defaultSettings, ...unsupported })).toThrow(
       "Invalid research settings",
@@ -149,39 +151,6 @@ test("settings reject unsupported fields, unsafe endpoints, and non-ChatGPT brow
         profiles: { default: { ...defaultSettings.profiles.default, baseUrl } },
       }),
     ).toThrow("baseUrl");
-  expect(() =>
-    readSettings({
-      ...defaultSettings,
-      codex: { model: "gpt-6-astra", workspace: "relative" },
-    }),
-  ).toThrow("absolute");
-  const chatgpt = {
-    baseUrl: "http://127.0.0.1:17841/v1",
-    model: "chatgpt-web/gpt-6-pro",
-  };
-  expect(() =>
-    readSettings({
-      ...defaultSettings,
-      chatgpt: { ...chatgpt, model: "gpt-6-astra" },
-    }),
-  ).toThrow("Invalid research settings");
-  expect(() =>
-    readSettings({
-      ...defaultSettings,
-      chatgpt: { ...chatgpt, baseUrl: "file:///tmp/server" },
-    }),
-  ).toThrow("baseUrl");
-  const settings = readSettings({ ...defaultSettings, chatgpt });
-  expect(() =>
-    readSettings({
-      ...settings,
-      profiles: { ...settings.profiles, explorer: settings.profiles.default },
-    }),
-  ).toThrow("not both");
-  expect(settings.chatgpt).toEqual(chatgpt);
-  expect(
-    createRuntime(settings).models.getProvider("codex-chatgpt-web"),
-  ).toBeUndefined();
 });
 
 test("native routes retain per-profile auth and transport without persisting credentials", async () => {

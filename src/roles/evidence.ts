@@ -5,13 +5,13 @@ import {
   type Task,
   type reviewSchema,
   type sourceSchema,
-} from "./contracts.ts";
-import { sourceEvidence } from "./notes.ts";
+} from "../core/math/contracts.ts";
+import { sourceEvidence } from "../core/math/notes.ts";
 
 export const taskSource = "urn:xean:task";
 
 /** Retain reported passages directly; web activity alone does not authenticate quotes. */
-export function bindCodex(
+export function bindExternal(
   result: {
     value: Static<typeof sourceSchema> | Static<typeof reviewSchema>;
     operationId: string;
@@ -66,13 +66,13 @@ export function bindCodex(
     ...value,
     premises: [...premises],
     passages,
-    kind: "codex-report",
+    kind: "external-report",
     operationId,
     reportedAt: result.reportedAt,
     ...(value.verdict === "PASS" && !valid
       ? {
           verdict: "INCONCLUSIVE",
-          report: `Codex PASS lacked valid task or source evidence for every premise. ${value.report}`,
+          report: `Research PASS lacked valid task or source evidence for every premise. ${value.report}`,
         }
       : {}),
   };
