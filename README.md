@@ -6,7 +6,7 @@ further work. Each campaign runs Coordinator, one worker, then Coordinator again
 A worker may parallelize its own internal work. Pi owns tasks, conversations,
 checkpoints, cancellation, and storage.
 
-This checkout prepares 3.4.0 and requires fresh campaign databases. Notebook and
+Xean 3.4.0 requires fresh campaign databases. Notebook and
 role-conversation document formats have changed. Keep existing campaigns with
 their pinned runtimes. No database migration is provided. The
 [qualification results](#checks-and-current-limits) identify the revisions and
@@ -449,6 +449,12 @@ publication, cancellation, and recovery boundaries when consolidating cases.
 The current checks qualify fresh databases only. Historical campaigns remain
 pinned to their recorded runtimes. Transfer of an in-flight model generation
 remains unqualified.
+
+The 3.4.0 local checks passed 259 tests and 2,533 assertions. The unpacked
+source archive passed 97 tests and 1,257 assertions under Bun 1.4.2. A Linux
+ARM64 package smoke also passed the focused protocol tests and a model-free
+campaign. These checks use scripted providers. Live campaign qualification
+remains pending.
 
 The 3.2.0 qualification passed 213 scripted tests and 2,044 assertions on each
 tested platform: macOS ARM64 with Bun 1.4.3, and Linux ARM64 and x86-64 with

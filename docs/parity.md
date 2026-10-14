@@ -5,7 +5,7 @@ This inventory maps implemented behavior to its code and focused tests. The
 limits. Pi owns execution and storage. Xean adds research policy, mathematical
 verification, and operator interfaces through native tasks and documents.
 
-This checkout prepares 3.4.0 with changed notebook and role-conversation document
+Xean 3.4.0 has changed notebook and role-conversation document
 formats. Start fresh campaigns and retain existing campaigns' frozen runtimes.
 No migration is provided. Historical qualification and measurements below retain
 their original runtime provenance.

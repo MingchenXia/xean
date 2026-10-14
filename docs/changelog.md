@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.4.1 — 2026-10-13
+
+Documentation correction for the 3.4.0 qualification boundaries.
+
 ## 3.4.0 — 2026-10-13
 
 Fresh-database 3.4.0 runtime release.
@@ -11,8 +15,9 @@ recorded as evidence.
 ### Notebook and verification
 
 - Malformed verification and source batches now report requested, received,
-  missing, unexpected, duplicate, and duplicate-request IDs so the same Pi
-  conversation can correct its submission without weakening exact-ID checks.
+  missing, unexpected, duplicate, and duplicate-request IDs. Native Pi roles
+  receive this feedback in the same conversation. External results retain the
+  existing failure handling without weakening exact-ID checks.
 - Each native Explorer submission atomically commits its notes, edits, and replay
   receipt. Explorer can read and edit those notes immediately. Later failure or
   cancellation retains committed batches. Coordinator waits for the worker to
