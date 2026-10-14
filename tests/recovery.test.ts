@@ -10,16 +10,9 @@ import {
 import { awaitWithContext } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { inspect, open } from "../src/host.ts";
-import { scanTasks } from "../src/workflow.ts";
-import { Bodies, readView } from "../src/math/state.ts";
-import {
-  context,
-  fixture,
-  task,
-  settings,
-  noteResult,
-  recoveryRoles,
-} from "./fixture.ts";
+import { scanTasks } from "../src/core/workflow.ts";
+import { Bodies, readView } from "../src/core/math/state.ts";
+import { context, fixture, task, settings, noteResult } from "./fixture.ts";
 
 test.each(["worker", "input"] as const)(
   "Coordinator children settle before %s starts, including after reopening",
@@ -69,10 +62,13 @@ test.each(["worker", "input"] as const)(
                 : null,
           };
         },
-        explorer: async (input) => {
+        explorer: async (input, runtime) => {
           trace.push("explorer");
           expect(input.notes[0].text).toBe(noteResult.notes[0]!.text);
-          return { kind: "notes", ...noteResult };
+          return {
+            kind: "notes",
+            notes: [{ ...noteResult.notes[0]!, id: `${runtime.taskId}/n1` }],
+          };
         },
       }),
     };
@@ -95,11 +91,13 @@ test.each(["worker", "input"] as const)(
             owner.workflow.input(tx, owner.root.id, {
               kind: "submit",
               id: "seed",
-              ...noteResult,
-              notes: noteResult.notes.map((note) => ({
-                ...note,
-                candidate: false,
-              })),
+              notes: [
+                {
+                  ...noteResult.notes[0]!,
+                  id: "input/seed/n1",
+                  candidate: false,
+                },
+              ],
             }),
           context,
         );
@@ -180,7 +178,9 @@ test("closing after immediate role publication reuses each committed native resu
   const path = join(directory, "campaign.sqlite");
   const provider = fixture((role, input) =>
     role === "explorer"
-      ? noteResult
+      ? {
+          notes: [{ ...noteResult.notes[0]!, id: `${input.noteIdPrefix}n1` }],
+        }
       : {
           work: input.notes.length
             ? null
@@ -190,7 +190,6 @@ test("closing after immediate role publication reuses each committed native resu
   let owner = await open(path, {
     create: { task, settings },
     models: provider.models,
-    roles: recoveryRoles,
   });
   try {
     for (const boundary of [
@@ -230,7 +229,6 @@ test("closing after immediate role publication reuses each committed native resu
       );
       owner = await open(path, {
         models: provider.models,
-        roles: recoveryRoles,
       });
     }
     await owner.root.waitForIdle(context);
@@ -253,7 +251,6 @@ test("closing after immediate role publication reuses each committed native resu
     await owner.close();
     owner = await open(path, {
       models: provider.models,
-      roles: recoveryRoles,
     });
     await owner.root.waitForIdle(context);
     expect(provider.calls).toHaveLength(3);
@@ -276,12 +273,15 @@ test("SIGKILL recovers the product's native SQLite work without repeating its or
     expect(new TextDecoder().decode(ready.value)).toContain("ready");
     child.kill("SIGKILL");
     await child.exited;
-    const provider = fixture((role) =>
-      role === "explorer" ? noteResult : { work: null },
+    const provider = fixture((role, input) =>
+      role === "explorer"
+        ? {
+            notes: [{ ...noteResult.notes[0]!, id: `${input.noteIdPrefix}n1` }],
+          }
+        : { work: null },
     );
     const owner = await open(path, {
       models: provider.models,
-      roles: recoveryRoles,
     });
     try {
       await owner.root.waitForIdle(context);

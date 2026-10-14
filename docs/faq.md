@@ -6,41 +6,21 @@ the latest release. Proposed changes are in the [milestones](milestones.md).
 
 ## Can Xean write and run code?
 
-Explorer and the native Verifier reason about mathematics without shell or
-code-execution tools. Configuring `codex` lets Coordinator delegate computation
-and select a Codex Verifier:
+The native Pi Explorer and Verifier reason without shell tools. Register a Codex
+or Claude implementation or verification backend to let Coordinator delegate
+programming and computational checks. Implementation workers return ordinary
+unverified notes. External Verifiers issue PASS, FAIL, or INCONCLUSIVE under the
+same mathematical rules. Programs and outputs remain in retained workspaces.
 
-- **Reasoning without program execution:** leave `codex` unset in settings.
-  Explorer develops arguments and Verifier checks them.
-- **Reasoning with delegated computation:** configure `codex`. Coordinator can
-  assign a concrete implementation or computation to a Codex worker, supplying
-  the relevant notes. That worker can write and run programs and returns its
-  findings as unverified notes. Coordinator can also select Codex to verify
-  claims, write and run checkers, and issue PASS, FAIL, or INCONCLUSIVE directly.
-  Programs and outputs remain in retained workspaces.
+Use an explicit role module as shown in the
+[backend setup instructions](../README.md#optional-role-backends), then pass
+`--roles ./roles.ts` when running work. Install and authenticate the chosen CLI
+separately. Native Pi providers such as `openai-codex` select models, while
+external role factories select tool-using CLIs.
 
-To enable delegation, install and authenticate the Codex CLI, then add a `codex`
-field to your existing settings, for example:
-
-```json
-{
-  "codex": {
-    "model": "gpt-6-astra",
-    "reasoning": "max",
-    "workspace": "/absolute/path/to/workspaces"
-  }
-}
-```
-
-This is a settings fragment. Choose a model available to your Codex CLI and an
-absolute workspace path. Coordinator decides when to use the worker. Selecting
-`openai-codex` as a model provider alone does not enable program execution.
-
-The separate `research` setting controls source retrieval and independent review.
-Setting `research: false` leaves configured Codex implementation and verification
-available. For a closed-book run, the
-[bounded runner](../scripts/bounded-solve.ts) provides `--offline` and rejects
-enabled literature, Codex implementation and verification, and ChatGPT Web.
+The default core uses native Pi roles and closed-book source checking. The
+[bounded runner](../scripts/bounded-solve.ts) keeps that default and rejects
+literature in `--offline` mode.
 
 ## Can I ask for a better bound or a generalization?
 
@@ -83,21 +63,21 @@ is a separate result, and neither assessment is a formal proof certificate.
 `INCONCLUSIVE` means a check remains unresolved.
 
 Computation also needs mathematical justification. A program's successful exit
-does not prove its claim. The Codex Verifier must check that the program covers
+does not prove its claim. The external Verifier must check that the program covers
 the required cases and establishes the exact claim, retaining the checker, inputs,
 commands, outputs, and environment. Missing proof steps require repairs to the
 authoritative note. Dependency checks and the remaining acceptance stages still
-apply. The separate independent reviewer uses `research` and has no execution tool.
+apply. The separate independent reviewer uses an explicitly registered research backend. The Codex research adapter has no shell tool.
 
 ## What happens when verification is inconclusive?
 
-Coordinator chooses work from the unfinished obligation. With `codex` configured,
-it can select `backend: "codex"` on a Verifier request to reassess an
+Coordinator chooses work from the unfinished obligation. With a verifier backend registered,
+it can select `backend: "external"` on a Verifier request to reassess an
 INCONCLUSIVE correctness, requirements, or reconstruction check. It can also
-select Codex initially when computation or artifact access is useful. These are
+select that backend initially when computation or artifact access is useful. These are
 Coordinator decisions, with no automatic fallback.
 
-Coordinator may select Codex again after an INCONCLUSIVE Codex check when
+Coordinator may select the external Verifier again after an INCONCLUSIVE check when
 another attempt could resolve the unfinished obligation. PASS and FAIL checks
 stay closed while their inputs are unchanged. Source checks retain their
 separate rule: new quotations must match the exact unresolved premises.
@@ -107,7 +87,7 @@ unverified. An unresolved claim cannot support an accepted proof.
 ## Can computation run in the background while Xean explores?
 
 The current campaign runs Coordinator, one worker, then Coordinator again after
-that worker returns. A Codex assignment occupies that worker turn, so other
+that worker returns. An implementation assignment occupies that worker turn, so other
 Explorer or Verifier work does not overlap it. A worker may parallelize its own
 work.
 
@@ -116,12 +96,24 @@ Xean has no built-in asynchronous MCP job workflow that submits a long-running
 job, continues exploration, and later collects its result. That behavior is a
 proposed 4.0 milestone.
 
+## Can several campaigns share a process?
+
+`xean host` opens named campaigns under `--campaign-dir` in one foreground
+process. They share Pi's provider registry and retain separate Harnesses and
+databases. Use `attach` for a newly initialized campaign and `detach` to suspend
+and release one. Normal campaign controls remain available.
+
+Host restart scans the directory and recovers saved execution, including campaigns
+that were previously detached. Paused and terminal state remain in each database.
+External CLI children still consume separate memory. See the
+[host commands](../README.md#shared-campaign-host).
+
 ## Can Xean use papers and other external sources?
 
-Source checking and independent review use the configured research backend,
-which defaults to the Codex CLI. Literature search is an optional worker enabled
-with `literature: true`. `research: false` disables the research backend, while
-`literature: false` alone leaves source checking and review available.
+Source checking and independent review use an explicitly registered research
+backend. Without one, unresolved external premises remain INCONCLUSIVE.
+Literature additionally requires `literature: true` in settings. Disabling
+literature leaves an existing research backend available for checking and review.
 
 State any permitted background results and their exact scope in the task.
 External claims that require source checking remain unresolved when retrieval
@@ -173,11 +165,14 @@ the full saved guidance. Pasting a paper into `guide` repeats that paper in each
 decision's input.
 
 Use `submit` for initial notes and reference material after `init`, before the
-first `run`, or during an ongoing campaign. Each new note has a local `id`
-(`n1`, `n2`, and so on), a short `summary`, a `detailedSummary`, full `text`, and a
+first `run`, or during an ongoing campaign. Each new note has a permanent `id`,
+a short `summary`, a `detailedSummary`, full `text`, and a
 `support` array of note IDs. Native Coordinator and Explorer receive the short
 index and can read the detailed summary or full text as needed. Preserve the
 result's hypotheses, proof, and provenance in the note.
+For `submit --id initial-notes`, choose IDs such as
+`input/initial-notes/square-bound`. Use the full ID in text and support, including
+references within the same submission. Publication preserves these names.
 
 New caller notes default to external trust, which grants their mathematical
 claims and sources. Set `"trusted": false` on notes that need ordinary
@@ -215,7 +210,7 @@ from `inspect`, then put the fields to change in a JSON file. For example,
   "notes": [],
   "edits": [
     {
-      "id": "input/lemmas/n1",
+      "id": "input/lemmas/square-bound",
       "revision": 42,
       "summary": "A lower bound under the original hypotheses."
     }
@@ -267,10 +262,10 @@ supporting proofs, into a JSON file such as `review.json`:
 }
 ```
 
-Use a fresh database and settings with the research backend enabled:
+Use a fresh database and a role module registering a research backend:
 
 ```sh
-bun run xean role review review.json .xean/review/campaign.sqlite settings.json
+bun run xean --roles ./roles.ts role review review.json .xean/review/campaign.sqlite settings.json
 bun run xean inspect .xean/review/campaign.sqlite
 ```
 

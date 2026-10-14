@@ -12,20 +12,6 @@ import {
   fauxToolCall,
   type FauxResponseFactory,
 } from "@earendil-works/pi-ai/providers/faux";
-import type { Roles } from "../src/workflow.ts";
-
-export function recoveryRoles(builtins: Roles): Partial<Roles> {
-  const capabilities = builtins.capabilities!;
-  return {
-    capabilities(input) {
-      const available = capabilities(input);
-      return {
-        ...available,
-        explorer: available.explorer && input.notes.length === 0,
-      };
-    },
-  };
-}
 
 export const context = BACKGROUND_CONTEXT;
 export const task = {
@@ -34,7 +20,6 @@ export const task = {
 };
 export const settings = {
   profiles: { default: { provider: "openai" as const, model: "fixture" } },
-  research: false as const,
 };
 export const noteResult = {
   notes: [

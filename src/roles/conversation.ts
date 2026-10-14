@@ -32,31 +32,34 @@ import {
 import {
   batchResults,
   type planSchema,
-  submissionSchemas,
   type Exploration,
   type Note,
-} from "../math/contracts.ts";
-import { validatePlan } from "../math/notes.ts";
-import { publicationResult } from "../math/results.ts";
+} from "../core/math/contracts.ts";
+import { validatePlan } from "../core/math/notes.ts";
+import { publicationResult, type ExplorerLimit } from "../core/math/results.ts";
 import {
   publishExploration,
   readSnapshot,
   readView,
   type SnapshotReader,
-} from "../math/state.ts";
-import { Control } from "../workflow.ts";
+} from "../core/math/state.ts";
+import { Control } from "../core/workflow.ts";
 import {
   RoleFailure,
   type NoteReference,
-  type Profiles,
   type RoleRuntime,
-} from "./types.ts";
-import { profileNames, capacityError, type ProfileName } from "../config.ts";
+} from "../core/roles.ts";
+import {
+  profileNames,
+  capacityError,
+  submissionSchemas,
+  type ProfileName,
+  type Profiles,
+} from "./config.ts";
 
 registerSessionResourceCleanup(resetOpenAICodexWebSocketDebugStats);
 
 const responseLimitError = "Role exhausted its responses";
-export type ExplorerLimit = "context_capacity" | "response_limit";
 type Call = {
   profile?: ProfileName;
   notes?: Note[];
@@ -65,7 +68,6 @@ type Call = {
   capabilities?: Parameters<typeof planSchema>[0];
   maxResponses?: number;
   maxReads?: number;
-  limit?: ExplorerLimit;
   notebook?: {
     root: ConversationId;
     worker: TaskId;
@@ -128,26 +130,6 @@ async function progress<P extends ProfileName>(
   return result;
 }
 
-/** Explain a completed Explorer's forced handoff from Pi's retained settlement. */
-export async function explorerLimit(
-  tx: Tx,
-  owner: TaskId,
-): Promise<ExplorerLimit | undefined> {
-  let cursor: Cursor | undefined;
-  do {
-    const page = await tx.scanConversations(
-      { ownerTaskId: owner },
-      128,
-      cursor,
-    );
-    for (const conversation of page.items) {
-      const call = await tx.doc(Call, conversation.id);
-      if (call.profile !== "explorer") continue;
-      if (call.limit) return call.limit;
-    }
-    cursor = page.next;
-  } while (cursor);
-}
 const responses = (messages: readonly Message[]) =>
   messages.filter(
     (message) =>
@@ -265,7 +247,6 @@ export function conversations(profiles: Profiles) {
                   (draft.notes.length === 0 && !draft.edits?.length);
                 const limited =
                   !voluntary && history.responses >= call.maxResponses!;
-                if (limited) current.limit = "response_limit";
                 return (saved.receipt = {
                   ...publication,
                   done: voluntary || limited,
@@ -285,11 +266,17 @@ export function conversations(profiles: Profiles) {
                 limited: false,
                 notes: undefined,
                 edits: undefined,
+                invalidated: undefined,
               };
             },
             context,
           );
-          const { notes: created, edits, ...remaining } = allowance;
+          const {
+            notes: created,
+            edits,
+            invalidated,
+            ...remaining
+          } = allowance;
           const hasPublication = !!created?.length || !!edits?.length;
           return {
             output: [
@@ -299,6 +286,13 @@ export function conversations(profiles: Profiles) {
                   recorded: true,
                   done,
                   ...(hasPublication ? { notes: created, edits } : {}),
+                  ...(invalidated?.length
+                    ? {
+                        invalidated,
+                        invalidation:
+                          "This submission cleared dependent checks while preserving those notes' text and support. External grants remain. Use the returned revisions when readRequired=false. When readRequired=true, read_notes is required before using or editing that note because its prior revision was not observed.",
+                      }
+                    : {}),
                   ...(done
                     ? {}
                     : {
@@ -467,7 +461,7 @@ export function conversations(profiles: Profiles) {
     runtime: RoleRuntime,
     context: Context,
     options: Omit<Call, "profile"> = {},
-  ): Promise<Submission<P>[]> {
+  ): Promise<{ submissions: Submission<P>[]; limit?: ExplorerLimit }> {
     const profile = profiles[name];
     const assignment = { ...options };
     // Allow completed reads and corrected submissions; Pi continues provider limits.
@@ -531,6 +525,7 @@ export function conversations(profiles: Profiles) {
       const settled = await submission.wait(context);
       await conversation.waitForIdle(context);
       let history!: Awaited<ReturnType<typeof progress<P>>>;
+      let limit: ExplorerLimit | undefined;
       await runtime.commit(async (tx) => {
         history = await progress(tx, conversationId, name);
         if (name !== "explorer") return;
@@ -541,7 +536,7 @@ export function conversations(profiles: Profiles) {
           (last.notes.length > 0 || last.edits?.length) &&
           !last.notes.some((note) => note.candidate) &&
           !last.edits?.some((edit) => edit.candidate);
-        const limit =
+        limit =
           settled.status === "unanswered" &&
           [capacityError, responseLimitError].includes(String(settled.detail))
             ? settled.detail === capacityError
@@ -553,7 +548,6 @@ export function conversations(profiles: Profiles) {
                 partial
               ? "response_limit"
               : undefined;
-        if (limit) call.limit = limit;
       }, context);
       const results = history.submissions;
       if (
@@ -574,15 +568,12 @@ export function conversations(profiles: Profiles) {
           name === "explorer" &&
           results.length
         )
-          error.result = publicationResult(
-            results as Exploration[],
-            runtime.taskId,
-          );
+          error.result = publicationResult(results as Exploration[]);
         throw error;
       }
       if (!results.length)
         throw new RoleFailure(`${name} did not submit a structured result`);
-      return results;
+      return { submissions: results, ...(limit ? { limit } : {}) };
     } catch (error) {
       try {
         await conversation?.abort(BACKGROUND_CONTEXT, { background: true });

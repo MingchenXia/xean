@@ -1,4 +1,3 @@
-import { isAbsolute } from "node:path";
 import {
   defaultProviderAuthContext,
   lazyStream,
@@ -17,8 +16,28 @@ import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-option
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ThinkingLevelSchema } from "@earendil-works/pi-ai/providers/model-schema";
 import { Check } from "typebox/value";
-import { object, submissionSchemas } from "./math/contracts.ts";
+import {
+  object,
+  batchSchema,
+  explorationSchema,
+  planSchema,
+  correctnessSchema,
+  verdictSchema,
+  proofSchema,
+} from "../core/math/contracts.ts";
 
+export const submissionSchemas = {
+  explorer: explorationSchema,
+  coordinator: planSchema({
+    literature: true,
+    implementation: true,
+    externalVerifier: true,
+  }),
+  correctness: batchSchema(correctnessSchema),
+  requirements: batchSchema(verdictSchema),
+  proof: batchSchema(proofSchema),
+  reconstruction: batchSchema(verdictSchema),
+};
 export type ProfileName = keyof typeof submissionSchemas;
 export const profileNames = Object.keys(submissionSchemas) as ProfileName[];
 export type Profile = {
@@ -27,6 +46,7 @@ export type Profile = {
   stream?: Models["streamSimple"];
   checkAuth?: () => Promise<boolean>;
 };
+export type Profiles = Record<ProfileName, Profile>;
 export const defaultMaxExplorerReads = 4;
 export const explorerResponseLimit = (settings: {
   maxExplorerResponses?: number;
@@ -61,12 +81,6 @@ const profileSchema = object({
     StringEnum(["sse", "websocket", "websocket-cached"] as const),
   ),
 });
-const researchSchema = object({
-  model: text,
-  reasoning,
-  command: Type.Optional(text),
-  profile: Type.Optional(text),
-});
 export const settingsSchema = object({
   profiles: object({
     default: profileSchema,
@@ -77,17 +91,7 @@ export const settingsSchema = object({
   }),
   maxExplorerResponses: Type.Optional(positive),
   maxExplorerReads: Type.Optional(positive),
-  chatgpt: Type.Optional(
-    object({
-      baseUrl: text,
-      model: Type.String({ pattern: "^chatgpt-web/\\S+$" }),
-    }),
-  ),
   literature: Type.Optional(Type.Boolean()),
-  research: Type.Optional(Type.Union([researchSchema, Type.Literal(false)])),
-  codex: Type.Optional(
-    object({ ...researchSchema.properties, workspace: text }),
-  ),
   usagePrefix: Type.Optional(Type.String({ ...usageTagSchema, maxLength: 91 })),
 });
 export type Settings = Static<typeof settingsSchema>;
@@ -102,14 +106,7 @@ export function readSettings(value: unknown): Settings {
   if (!Check(settingsSchema, value))
     throw new Error("Invalid research settings");
   const settings = structuredClone(value);
-  if (settings.chatgpt && settings.profiles.explorer)
-    throw new Error("Choose chatgpt or profiles.explorer, not both");
-  if (settings.codex && !isAbsolute(settings.codex.workspace))
-    throw new Error("codex.workspace must be an absolute directory");
-  for (const configured of [
-    ...Object.values(settings.profiles),
-    settings.chatgpt,
-  ]) {
+  for (const configured of Object.values(settings.profiles)) {
     if (!configured) continue;
     if (configured.baseUrl) {
       const url = URL.parse(configured.baseUrl);

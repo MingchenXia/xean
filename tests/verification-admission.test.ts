@@ -9,9 +9,10 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai/utils/transcript";
 import { inspect, open, readReport, type Note } from "../src/index.ts";
-import type { VerifierInput } from "../src/math/contracts.ts";
+import type { VerifierInput } from "../src/core/math/contracts.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
 import { temporaryDirectory } from "./directory.ts";
+import { codex } from "../src/plugins/role-backends/codex.ts";
 
 async function run(scenario: "retry" | "repair" | "idle") {
   const directory = await temporaryDirectory(`xean-verification-${scenario}-`);
@@ -20,13 +21,13 @@ async function run(scenario: "retry" | "repair" | "idle") {
   const owner = await open(database, {
     create: {
       task,
-      settings: {
-        ...settings,
-        codex: { model: "fixture", workspace: directory },
-      },
+      settings,
     },
     models: createModels(),
-    roles: () => ({
+    roles: (builtins) => ({
+      ...codex({ verifier: { model: "fixture", workspace: directory } })(
+        builtins,
+      ),
       coordinator: async ({ notes }: { notes: Note[] }) => {
         if ((scenario === "idle" && rounds === 2) || rounds === 4)
           return { work: null };
@@ -48,21 +49,24 @@ async function run(scenario: "retry" | "repair" | "idle") {
           },
         };
       },
-      explorer: async ({ notes }: { notes: Note[] }) => {
+      explorer: async ({ notes }: { notes: Note[] }, runtime) => {
         rounds++;
         const candidate = notes.find((note) => note.candidate);
         return candidate
           ? {
               kind: "notes",
-              notes: noteResult.notes.map((note) => ({
-                ...note,
-                candidate: false,
-              })),
+              notes: [
+                {
+                  ...noteResult.notes[0]!,
+                  id: `${runtime.taskId}/n1`,
+                  candidate: false,
+                },
+              ],
               edits: [
                 {
                   id: candidate.id,
                   revision: candidate.revision,
-                  support: ["n1"],
+                  support: [`${runtime.taskId}/n1`],
                   text: "By the declared reflexivity lemma, 1 = 1.",
                 },
               ],
@@ -72,6 +76,7 @@ async function run(scenario: "retry" | "repair" | "idle") {
               notes: [
                 {
                   ...noteResult.notes[0]!,
+                  id: `${runtime.taskId}/n1`,
                   text: "Claim: 1 = 1. Proof missing.",
                   candidate: true,
                 },
@@ -124,7 +129,7 @@ test("unchanged completed checks block another worker admission", async () => {
   expect(result.status.status).toBe("blocked");
   expect(result.status.error).toContain("no pending checks");
   expect(result.status.calls.recordedResponses).toBe(0);
-  expect(result.status.calls.codexInvocations).toBe(0);
+  expect(result.status.calls.externalInvocations).toBe(0);
   expect(result.status.acceptedNoteId).toBeNull();
   expect(result.notes).toHaveLength(1);
   expect(result.work.map(({ role }) => role)).toEqual(["explorer", "verifier"]);
@@ -162,7 +167,7 @@ test("Coordinator can leave an inconclusive check idle even with Codex configure
   expect(result.status.acceptedNoteId).toBeNull();
   expect(result.status.pendingDecisions).toBe(0);
   expect(result.status.calls.recordedResponses).toBe(0);
-  expect(result.status.calls.codexInvocations).toBe(0);
+  expect(result.status.calls.externalInvocations).toBe(0);
 });
 
 async function runComputationalVerification(verdict: "PASS" | "INCONCLUSIVE") {
@@ -173,13 +178,13 @@ async function runComputationalVerification(verdict: "PASS" | "INCONCLUSIVE") {
   const owner = await open(database, {
     create: {
       task,
-      settings: {
-        ...settings,
-        codex: { model: "fixture", workspace: directory },
-      },
+      settings,
     },
     models: createModels(),
-    roles: () => ({
+    roles: (builtins) => ({
+      ...codex({ verifier: { model: "fixture", workspace: directory } })(
+        builtins,
+      ),
       coordinator: async ({ notes }: { notes: Note[] }) => {
         const candidate = notes[0];
         if (!candidate)
@@ -201,14 +206,17 @@ async function runComputationalVerification(verdict: "PASS" | "INCONCLUSIVE") {
                 ? "reconstruction"
                 : "correctness",
             ...(correctness?.verdict === "INCONCLUSIVE"
-              ? { backend: "codex" }
+              ? { backend: "external" }
               : {}),
           },
         };
       },
-      explorer: async () => ({ kind: "notes", ...noteResult }),
+      explorer: async (_input, runtime) => ({
+        kind: "notes",
+        notes: [{ ...noteResult.notes[0]!, id: `${runtime.taskId}/n1` }],
+      }),
       verifier: async ({ notes, backend, through }: VerifierInput) => {
-        if (backend === "codex") codexChecks++;
+        if (backend === "external") codexChecks++;
         const candidate = notes[0]!;
         const pass = { verdict: "PASS", report: "Scripted workflow judgment." };
         const check =
@@ -220,7 +228,7 @@ async function runComputationalVerification(verdict: "PASS" | "INCONCLUSIVE") {
               }
             : {
                 correctness: {
-                  verdict: backend === "codex" ? verdict : "INCONCLUSIVE",
+                  verdict: backend === "external" ? verdict : "INCONCLUSIVE",
                   report: "Scripted finite-certificate assessment.",
                   statement: "1 = 1.",
                   premises: [],
@@ -279,7 +287,7 @@ test("Coordinator selects Codex for an unchanged inconclusive claim without bypa
     },
   });
   expect(workers[2]!.input).toMatchObject({
-    request: { kind: "verifier", backend: "codex" },
+    request: { kind: "verifier", backend: "external" },
   });
   const reopened = await inspect(result.database, (tx, root) =>
     readReport(tx, root, { records: true }),
@@ -310,7 +318,7 @@ test("Coordinator can select repeated Codex checks of an unchanged inconclusive 
     .tasks!.filter((task) => task.kind === "research.worker")
     .slice(2))
     expect(worker).toMatchObject({
-      input: { request: { kind: "verifier", backend: "codex" } },
+      input: { request: { kind: "verifier", backend: "external" } },
       state: { outcome: { status: "completed" } },
     });
   expect(result.status.acceptedNoteId).toBeNull();

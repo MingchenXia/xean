@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { open } from "../../src/host.ts";
-import { Control } from "../../src/workflow.ts";
+import { Control } from "../../src/core/workflow.ts";
 import { readStatus } from "../../src/report.ts";
 import { serveControl, type OwnerCommand } from "./control.ts";
 

@@ -70,7 +70,7 @@ test("native read-only storage rejects ID allocation and commits even on a writa
   expect(ended.isOpen).toBe(false);
 });
 
-test("zero retention collects idle values, pins watched values, and reloads committed state", async () => {
+test("zero retention evicts idle documents, pins watched documents, and reloads committed state", async () => {
   const directory = await temporaryDirectory("pi-document-cache-");
   const session = createSession(
     await openNodeSqliteStorage(join(directory, "cache.sqlite")),
@@ -85,7 +85,6 @@ test("zero retention collects idle values, pins watched values, and reloads comm
     initial: () => ({ text: "" }),
   });
   const ids: ConversationId[] = [];
-  const refs: WeakRef<object>[] = [];
   const changed = Promise.withResolvers<string | undefined>();
   try {
     for (const text of ["watched", "idle"]) {
@@ -99,17 +98,20 @@ test("zero retention collects idle values, pins watched values, and reloads comm
       ids.push(id);
       if (text === "watched") {
         const watch = (await session.watchDoc(Doc, id, context))!;
-        refs.push(new WeakRef(watch.value!));
+        expect(watch.value).toEqual({ text });
         watch.start(async (value) => {
           changed.resolve(value?.text);
         });
-      } else
-        refs.push(new WeakRef((await session.snapshot(Doc, id, context))!));
+      } else await session.snapshot(Doc, id, context);
     }
     await setImmediate();
-    Bun.gc(true);
-    expect(refs[0]!.deref()).toEqual({ text: "watched" });
-    expect(refs[1]!.deref()).toBeUndefined();
+    // Pi exposes its cache counts for tests; collection timing belongs to Bun.
+    expect(session).toHaveProperty("documentCacheSizes", {
+      cached: 1,
+      idle: 0,
+      attached: 1,
+      sweeps: expect.any(Number),
+    });
     expect(await session.snapshot(Doc, ids[1]!, context)).toEqual({
       text: "idle",
     });
@@ -121,8 +123,7 @@ test("zero retention collects idle values, pins watched values, and reloads comm
     );
     expect(await changed.promise).toBe("Updated after eviction");
     await setImmediate();
-    Bun.gc(true);
-    expect(refs[0]!.deref()).toBeUndefined();
+    expect(session).toHaveProperty("documentCacheSizes.cached", 1);
   } finally {
     await session.close(context);
   }

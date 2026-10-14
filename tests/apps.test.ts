@@ -18,13 +18,13 @@ import {
 } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { defaultSettings } from "../src/config.ts";
+import { defaultSettings } from "../src/roles/config.ts";
 import { inspect, open } from "../src/host.ts";
-import { readDefinition, type Definition } from "../src/definition.ts";
-import { Control, type Roles } from "../src/workflow.ts";
+import { readDefinition, type Definition } from "../src/core/definition.ts";
+import { Control, type Roles } from "../src/core/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
-import { Bodies, Catalog } from "../src/math/state.ts";
-import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
+import { Bodies, Catalog, noteIdPrefix } from "../src/core/math/state.ts";
+import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
 import { limitRounds, readRounds } from "../scripts/bounded-solve.ts";
@@ -33,7 +33,7 @@ const task = {
   problem: "Prove 1 = 1.",
   completionCriteria: "A self-contained proof.",
 };
-const settings = { ...defaultSettings, research: false as const };
+const settings = defaultSettings;
 const definition: Definition = { task, settings };
 const draft = {
   id: "n1",
@@ -180,7 +180,6 @@ test("CLI doctor reuses saved Pi ChatGPT and Claude logins without refreshing or
         profiles: {
           default: { provider, model: getBuiltinModels(provider)[0]!.id },
         },
-        research: false,
       }),
     );
     await Bun.write(authFile, bytes);
@@ -230,8 +229,13 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
     input,
     JSON.stringify({
       notes: [
-        { ...draft, candidate: true, support: ["n2"] },
-        { ...draft, id: "n2" },
+        {
+          ...draft,
+          id: "input/import/n1",
+          candidate: true,
+          support: ["input/import/n2"],
+        },
+        { ...draft, id: "input/import/n2" },
       ],
     }),
   );
@@ -338,8 +342,12 @@ test("CLI role review executes and reopens an independent review without the ret
     settingsFile,
     JSON.stringify({
       profiles: { default: { provider: "openai", model: "unavailable" } },
-      research: { model: "fixture", command: executable },
     }),
+  );
+  const rolesFile = join(directory, "roles.ts");
+  await Bun.write(
+    rolesFile,
+    `import { codex } from ${JSON.stringify(join(root, "src/plugins/role-backends/codex.ts"))};\nexport default codex({research: {model: "fixture", command: ${JSON.stringify(executable)}}});\n`,
   );
   const obsolete = await cli("review", input, input, database, settingsFile);
   expect(obsolete.code).not.toBe(0);
@@ -349,6 +357,8 @@ test("CLI role review executes and reopens an independent review without the ret
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const completed = await cli(
+      "--roles",
+      rolesFile,
       "role",
       "review",
       input,
@@ -375,7 +385,7 @@ test("CLI role review executes and reopens an independent review without the ret
   const report = await inspect(database, readReport);
   expect(report.kind).toBe("review");
   expect(report.result).toMatchObject(result);
-  expect(report.status.calls.codexInvocations).toBe(1);
+  expect(report.status.calls.externalInvocations).toBe(1);
   expect(report.notes).toEqual([]);
 }, 30_000);
 
@@ -398,9 +408,18 @@ test("sealed acceptance and native note IDs reach reports and CLI export", async
             : { kind: "explorer", assignment: "Prove equality." },
         };
       },
-      explorer: async () => {
+      explorer: async (_input, runtime) => {
         trace.push("explorer");
-        return { kind: "notes", notes: [{ ...draft, candidate: true }] };
+        return {
+          kind: "notes",
+          notes: [
+            {
+              ...draft,
+              id: noteIdPrefix(runtime.taskId) + "n1",
+              candidate: true,
+            },
+          ],
+        };
       },
       verifier: async (input) => {
         trace.push("verifier");
@@ -513,6 +532,15 @@ test("sealed acceptance and native note IDs reach reports and CLI export", async
 }, 30_000);
 
 test("standalone retries report only the latest result and CLI reopening does not rerun work", async () => {
+  const pass = {
+    verdict: "PASS",
+    report: "Checked.",
+    kind: "external-report",
+    operationId: "fixture",
+    reportedAt: "2026-10-13",
+    premises: [],
+    passages: [],
+  };
   const directory = await temporaryDirectory("xean-standalone-retry-");
   const standalonePath = join(directory, "standalone.sqlite");
   let attempts = 0;
@@ -584,6 +612,15 @@ test("standalone retries report only the latest result and CLI reopening does no
 }, 30_000);
 
 test("standalone completion waits for owned children and still permits cancellation", async () => {
+  const pass = {
+    verdict: "PASS",
+    report: "Checked.",
+    kind: "external-report",
+    operationId: "fixture",
+    reportedAt: "2026-10-13",
+    premises: [],
+    passages: [],
+  };
   const directory = await temporaryDirectory("xean-apps-");
   const completing = Promise.withResolvers<void>();
   let aborted = false;
@@ -685,9 +722,11 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
         ["zero", { input_tokens: 0 }],
         ["interrupted", undefined],
       ] as const) {
-        await tx.appendEntry(CodexRequest, owner.root.id, {
+        await tx.appendEntry(ExternalRequest, owner.root.id, {
           data: {
             operationId,
+            provider: "codex-cli",
+            api: "codex-exec",
             model: "codex",
             workspace: "/fixture",
             reasoning: "max",
@@ -697,7 +736,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
         });
         if (usage !== undefined)
           for (const recorded of [{ input_tokens: 999 }, usage])
-            await tx.appendEntry(CodexLog, owner.root.id, {
+            await tx.appendEntry(ExternalLog, owner.root.id, {
               data: {
                 operationId,
                 stdout: "",
@@ -721,7 +760,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
     const usage = await owner.root.commit((tx) => readUsage(tx, true), context);
     expect(usage.calls).toMatchObject({
       recordedResponses: 5,
-      codexInvocations: 3,
+      externalInvocations: 3,
       unknownUsage: 4,
       byModel: { omitted: 0 },
     });
@@ -755,7 +794,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
     expect(bounded.calls.byModel.items).toHaveLength(10);
     expect(bounded.calls).toMatchObject({
       recordedResponses: 11,
-      codexInvocations: 3,
+      externalInvocations: 3,
       unknownUsage: 10,
       byModel: { omitted: 1 },
     });
@@ -796,9 +835,9 @@ test("live owner controls admit revision-checked submissions and reject foreign 
     expect((await inspect(path, readReport)).inputs).toHaveLength(1);
     const file = join(directory, "submission.json");
     const notes = [
-      { ...draft, trusted: true },
-      { ...draft, id: "n2", trusted: false },
-      { ...draft, id: "n3" },
+      { ...draft, id: "input/seed/n1", trusted: true },
+      { ...draft, id: "input/seed/n2", trusted: false },
+      { ...draft, id: "input/seed/n3" },
     ];
     await Bun.write(file, JSON.stringify({ notes }));
     expect((await cli("submit", path, file, "--id", "seed")).code).toBe(0);
@@ -807,7 +846,15 @@ test("live owner controls admit revision-checked submissions and reject foreign 
         (note) => !!note.checks.external,
       ),
     ).toEqual([true, false, true]);
-    await Bun.write(file, JSON.stringify({ notes: [notes[0], notes[2]] }));
+    await Bun.write(
+      file,
+      JSON.stringify({
+        notes: [
+          { ...notes[0], id: "input/forced/n1" },
+          { ...notes[2], id: "input/forced/n3" },
+        ],
+      }),
+    );
     for (let attempt = 0; attempt < 2; attempt++)
       expect(
         (await cli("submit", path, file, "--id", "forced", "--untrusted")).code,
@@ -952,11 +999,7 @@ test("live owner controls admit revision-checked submissions and reject foreign 
 test("closed-book executable rejects retrieval and reopens without calls", async () => {
   const directory = await temporaryDirectory("xean-apps-");
   const profiles = { default: { provider: "openai", model: "unavailable" } };
-  const configured = { profiles, research: { model: "unused" } };
-  const browser = {
-    baseUrl: "http://127.0.0.1:17841/v1",
-    model: "chatgpt-web/gpt-6-pro",
-  };
+  const configured = { profiles };
   const file = join(directory, "settings.json");
   const database = join(directory, "campaign.sqlite");
   await Bun.write(join(directory, "task.json"), JSON.stringify(task));
@@ -969,11 +1012,6 @@ test("closed-book executable rejects retrieval and reopens without calls", async
       "0",
     );
   for (const [override, error] of [
-    [{ chatgpt: browser }, "ChatGPT Web cannot enforce closed-book execution"],
-    [
-      { codex: { model: "unused", workspace: directory } },
-      "Codex implementation cannot enforce closed-book execution",
-    ],
     [{ literature: true }, "Closed-book runs cannot enable literature"],
   ] as const) {
     await Bun.write(file, JSON.stringify({ ...configured, ...override }));
@@ -994,11 +1032,11 @@ test("closed-book executable rejects retrieval and reopens without calls", async
     });
     expect((await inspect(database, readReport)).status.calls).toMatchObject({
       recordedResponses: 0,
-      codexInvocations: 0,
+      externalInvocations: 0,
       unknownUsage: 0,
     });
-    expect((await inspect(database, readDefinition)).settings.research).toBe(
-      false,
+    expect((await inspect(database, readDefinition)).settings).toEqual(
+      configured,
     );
   }
 });

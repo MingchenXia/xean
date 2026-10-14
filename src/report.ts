@@ -7,21 +7,28 @@ import type {
   Tx,
 } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord";
-import { readDefinition } from "./definition.ts";
+import { readDefinition } from "./core/definition.ts";
 import {
   Control,
   scanTasks,
   blockedDecision,
   pendingDecisions,
   type WorkerInput,
-} from "./workflow.ts";
-import { readView } from "./math/state.ts";
-import { publicationResult, type PublishedResult } from "./math/results.ts";
-import { closure } from "./math/argument.ts";
-import { stagePassed } from "./math/notes.ts";
-import { verificationStages, type SolverResult } from "./math/contracts.ts";
-import { CodexLog, CodexRequest } from "./roles/codex.ts";
-import { explorerLimit } from "./roles/conversation.ts";
+} from "./core/workflow.ts";
+import { readView } from "./core/math/state.ts";
+import {
+  explorerLimit,
+  publicationResult,
+  type PublishedResult,
+} from "./core/math/results.ts";
+import { closure } from "./core/math/argument.ts";
+import { stagePassed } from "./core/math/notes.ts";
+import {
+  verificationStages,
+  type SolverResult,
+  type Note,
+} from "./core/math/contracts.ts";
+import { ExternalLog, ExternalRequest } from "./roles/backend.ts";
 
 const statusText = (value: string | null | undefined): string | null =>
   value == null ? null : value.length > 500 ? `${value.slice(0, 499)}…` : value;
@@ -76,7 +83,10 @@ export async function readUsage(tx: Tx, includeRecords = false) {
     groups.set(key, group);
   };
   const records: EntryRecord[] = [];
-  const codex = new Map<string, string>();
+  const external = new Map<
+    string,
+    { provider: string; model: string; api: string }
+  >();
   const settlements = new Map<string, Record<string, number> | null>();
   let cursor: Cursor | undefined;
   do {
@@ -97,9 +107,9 @@ export async function readUsage(tx: Tx, includeRecords = false) {
         for (const entry of page.items) {
           if (entry.conversationId !== conversation.id) continue;
           if (includeRecords) records.push(entry);
-          if (CodexRequest.is(entry))
-            codex.set(entry.data.operationId, entry.data.model);
-          if (CodexLog.is(entry)) {
+          if (ExternalRequest.is(entry))
+            external.set(entry.data.operationId, entry.data);
+          if (ExternalLog.is(entry)) {
             const receipt = entry.data;
             if (!settlements.has(receipt.operationId))
               settlements.set(receipt.operationId, receipt.usage);
@@ -128,19 +138,15 @@ export async function readUsage(tx: Tx, includeRecords = false) {
     }
     cursor = conversations.next;
   } while (cursor);
-  for (const [operationId, requestedModel] of codex)
-    accumulate(
-      { provider: "codex-cli", model: requestedModel, api: "codex-exec" },
-      "invocations",
-      settlements.get(operationId) ?? null,
-    );
+  for (const [operationId, identity] of external)
+    accumulate(identity, "invocations", settlements.get(operationId) ?? null);
   const byModel = [...groups.values()];
   const total = (field: "responses" | "invocations" | "unknownUsage") =>
     byModel.reduce((sum, group) => sum + group[field], 0);
   return {
     calls: {
       recordedResponses: total("responses"),
-      codexInvocations: total("invocations"),
+      externalInvocations: total("invocations"),
       unknownUsage: total("unknownUsage"),
       byModel: preview(byModel, (item) => item),
     },
@@ -164,7 +170,7 @@ async function readOverview(
   const workers = tasks.filter((task) => task.kind === "research.worker");
   const standalone = definition.mode ? workers.at(-1) : undefined;
   let standaloneResult: JsonValue | undefined;
-  const summarizeWorker = async (task: (typeof workers)[number]) => {
+  const work = workers.map((task) => {
     const input = task.input as unknown as WorkerInput;
     const request = "request" in input ? input.request : undefined;
     const result =
@@ -178,14 +184,14 @@ async function readOverview(
     if (task === standalone) standaloneResult = result as JsonValue | undefined;
     const publication =
       result?.kind === "notes" && request
-        ? publicationResult([result], task.id)
+        ? publicationResult([result])
         : result?.kind === "published"
           ? result
           : undefined;
     const limit =
       (request?.kind ?? definition.mode?.role) === "explorer" &&
       task.state.outcome?.status === "completed"
-        ? await explorerLimit(tx, task.id)
+        ? explorerLimit(task.state.outcome.result)
         : undefined;
     return {
       id: String(task.id),
@@ -214,9 +220,7 @@ async function readOverview(
           : [],
       checkCount: result?.kind === "verification" ? result.checks.length : 0,
     };
-  };
-  const work: Awaited<ReturnType<typeof summarizeWorker>>[] = [];
-  for (const task of workers) work.push(await summarizeWorker(task));
+  });
   const metadata = ({ id, role, status }: (typeof work)[number]) => ({
     id,
     role,
@@ -350,7 +354,7 @@ export async function readReport(
       ...summary,
       calls: usage.calls,
       usageNote:
-        "Counts describe native assistant responses, not outbound retries or Codex internal requests. Native numeric usage fields can overlap. Subscription usage stays unknown unless reported; price estimates are omitted. Direct ChatGPT Web usage is unmeasured and excluded.",
+        "Counts describe native assistant responses, not outbound retries or external CLI internal requests. Native numeric usage fields can overlap. Subscription usage stays unknown unless reported; price estimates are omitted.",
     },
     notes: view.notes,
     work,
@@ -361,3 +365,20 @@ export async function readReport(
 }
 export type Report = Awaited<ReturnType<typeof readReport>>;
 export type Status = Awaited<ReturnType<typeof readStatus>>;
+
+export function acceptedArgument(
+  notes: readonly Note[],
+  noteId: string,
+): string {
+  if (!notes.find((note) => note.id === noteId)?.accepted)
+    throw new Error("No accepted argument");
+  return closure([noteId], notes)
+    .map(
+      (note) =>
+        `## ${note.id}\n\n${note.text}` +
+        (note.checks.external
+          ? `\n\n### Independent proof\n\n${note.checks.reconstruction!.proof}`
+          : ""),
+    )
+    .join("\n\n");
+}

@@ -1,7 +1,15 @@
 import { temporaryDirectory } from "./directory.ts";
 import { fixtureTask } from "./task.ts";
 import { expect, spyOn, test } from "bun:test";
-import { copyFile, link, readFile, symlink, unlink } from "node:fs/promises";
+import {
+  copyFile,
+  link,
+  readFile,
+  readdir,
+  readlink,
+  symlink,
+  unlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -27,7 +35,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { defaultSettings } from "../src/config.ts";
+import { defaultSettings } from "../src/roles/config.ts";
 import {
   inspect,
   open,
@@ -38,9 +46,9 @@ import {
   DefinitionDoc,
   readDefinition,
   UninitializedResearchError,
-} from "../src/definition.ts";
-import { Control } from "../src/workflow.ts";
-import { Catalog } from "../src/math/state.ts";
+} from "../src/core/definition.ts";
+import { Control } from "../src/core/workflow.ts";
+import { Catalog } from "../src/core/math/state.ts";
 
 const definition = {
   task: {
@@ -51,7 +59,7 @@ const definition = {
 };
 const Event = defineEntry<string>("fixture.event");
 
-test.each([1, 2])(
+test.each([1, 2, 3])(
   "older definition version %s requires its matching runtime",
   async (version) => {
     const directory = await temporaryDirectory("host-old-definition-");
@@ -344,12 +352,10 @@ test("usage overrides preserve frozen settings and completed custom-provider wor
         guidance: [],
         failures: [],
         literatureUsed: false,
-        explorerUsed: false,
       },
     },
     settings: {
       profiles: { default: { provider: "custom", model: "fixture" } },
-      research: false as const,
       usagePrefix: "frozen",
     },
   };
@@ -487,7 +493,6 @@ test("custom role extensions compose with built-in mathematical conversations", 
       },
       settings: {
         profiles: { default: { provider: "custom", model: "fixture" } },
-        research: false,
       },
     },
     models,
@@ -617,43 +622,27 @@ test.each([false, true])(
   },
 );
 
-test("replacement roles preserve the browser quota and expose custom Codex", async () => {
+test("replacement roles expose custom implementation and keep Explorer available", async () => {
   const directory = await temporaryDirectory("host-replacements-");
   const path = join(directory, "campaign.sqlite");
   let explorers = 0,
-    codex = 0,
+    implementations = 0,
     decisions = 0;
-  const observations: {
-    explorerUsed: boolean;
-    capabilities: { explorer: boolean; codex: boolean };
-  }[] = [];
+  const observations: { implementation: boolean }[] = [];
   const empty = () => ({ kind: "notes" as const, notes: [] });
   const owner = await open(path, {
-    create: {
-      ...definition,
-      settings: {
-        ...defaultSettings,
-        research: false,
-        chatgpt: {
-          baseUrl: "http://127.0.0.1:17841/v1",
-          model: "chatgpt-web/gpt-6-pro",
-        },
-      },
-    },
+    create: definition,
     roles: () => ({
       coordinator: async (input) => {
-        observations.push({
-          explorerUsed: input.explorerUsed,
-          capabilities: input.capabilities,
-        });
+        observations.push(input.capabilities);
         decisions++;
         return {
           work:
-            decisions === 1
-              ? { kind: "explorer", assignment: "first" }
+            decisions === 1 || decisions === 3
+              ? { kind: "explorer", assignment: "Explore another approach." }
               : decisions === 2
                 ? {
-                    kind: "codex",
+                    kind: "implementation",
                     notes: [],
                     assignment: "fixture implementation",
                   }
@@ -664,20 +653,20 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
         explorers++;
         return empty();
       },
-      codex: async () => {
-        codex++;
+      implementation: async () => {
+        implementations++;
         return empty();
       },
     }),
   });
   try {
     await owner.harness.waitForIdle(context);
-    expect(observations[0]?.capabilities.codex).toBe(true);
+    expect(observations).toHaveLength(4);
     expect(
-      observations.find((input) => input.explorerUsed)?.capabilities.explorer,
-    ).toBe(false);
-    expect(explorers).toBe(1);
-    expect(codex).toBe(1);
+      observations.every((capabilities) => capabilities.implementation),
+    ).toBe(true);
+    expect(explorers).toBe(2);
+    expect(implementations).toBe(1);
     const tasks = await owner.harness.commit(
       (tx) => tx.scanTasks({}, 30),
       context,
@@ -763,3 +752,38 @@ test("inspection does not recover work or alter unsupported databases", async ()
   );
   expect(await readFile(unrelated)).toEqual(original);
 });
+
+test.skipIf(process.platform !== "linux" && !Bun.which("lsof"))(
+  "closed campaign and inspection connections release file descriptors before statement collection",
+  async () => {
+    const directory = await temporaryDirectory("host-sqlite-close-");
+    const path = join(directory, "campaign.sqlite");
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const owner = await open(path, { create: definition });
+      await inspect(path, readDefinition);
+      const reader = openReadDatabase(path);
+      const statement = reader.query("SELECT * FROM durable_metadata");
+      statement.all();
+      reader.close();
+      await owner.close();
+      let files: string[];
+      if (process.platform === "linux") {
+        files = await Promise.all(
+          (await readdir("/proc/self/fd")).map((fd) =>
+            readlink(`/proc/self/fd/${fd}`).catch(() => ""),
+          ),
+        );
+      } else {
+        const probe = Bun.spawn(
+          ["lsof", "-F", "n", "-p", String(process.pid)],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        files = (await new Response(probe.stdout).text()).split("\n");
+        expect(await probe.exited).toBe(0);
+      }
+      expect(files.filter((file) => file.includes(directory))).toEqual([]);
+      // Keep the prepared statement reachable: cleanup must not depend on GC.
+      expect(() => statement.all()).toThrow();
+    }
+  },
+);

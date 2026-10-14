@@ -87,7 +87,11 @@ export const noteContentSchema = object({
 });
 export type NoteContent = Static<typeof noteContentSchema>;
 export const noteDraftSchema = object({
-  id: Type.String({ pattern: "^n[1-9][0-9]*$" }),
+  id: Type.String({
+    pattern: "^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$",
+    description:
+      "Permanent note ID: the supplied noteIdPrefix followed by a fresh short descriptive name. Use this exact ID in text, support, reads, and edits. Existing notes are changed through edits, keeping their IDs.",
+  }),
   ...noteContentSchema.properties,
   support: Type.Array(text),
   candidate: Type.Optional(Type.Boolean()),
@@ -114,6 +118,17 @@ export const literatureResultSchema = object({
   ),
 });
 export type LiteratureResult = Static<typeof literatureResultSchema>;
+/** Constrain one-shot output to the permanent namespace supplied to that worker. */
+export function noteResultSchema<
+  S extends typeof explorationSchema | typeof literatureResultSchema,
+>(schema: S, prefix: string): S {
+  const result = Value.Clone(schema);
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  Object.assign(result.properties.notes.items.properties.id, {
+    pattern: `^${escaped}[A-Za-z0-9_-]+$`,
+  });
+  return result;
+}
 const correctionSchema = object({
   summary: Type.Union([noteContentSchema.properties.summary, Type.Null()]),
   detailedSummary: Type.Union([
@@ -184,7 +199,7 @@ export const researchReportSchema = object({
       premise: passageSchema.properties.premise,
     }),
   ),
-  kind: Type.Literal("codex-report"),
+  kind: Type.Literal("external-report"),
   operationId: text,
   reportedAt: text,
 });
@@ -221,7 +236,7 @@ export const checkSchema = object({
   ),
 });
 export type Check = Static<typeof checkSchema>;
-/** Published IDs include their worker/input prefix; draft IDs are local. */
+/** Note IDs include their worker/input prefix and stay unchanged from drafting. */
 export type Note = Exploration["notes"][number] & {
   revision: number;
   checks: Omit<Check, "noteId" | "correction"> & {
@@ -248,10 +263,10 @@ export const verificationStages = [
 export type VerificationStage = (typeof verificationStages)[number];
 export const verificationStageSchema = StringEnum(verificationStages);
 export const verificationBackendSchema = StringEnum(
-  ["native", "codex"] as const,
+  ["native", "external"] as const,
   {
     description:
-      "Use codex when checking existing claims needs code or artifact access. It can execute checks and issue mathematical verdicts. Native is the default reasoning verifier.",
+      "Use external when checking existing claims needs code or artifact access. It can execute checks and issue mathematical verdicts. Native is the default reasoning verifier.",
   },
 );
 export type VerificationBackend = Static<typeof verificationBackendSchema>;
@@ -265,16 +280,16 @@ export const literaturePlan = object({
   kind: Type.Literal("literature"),
   assignment: text,
 });
-export const codexPlan = object({
-  kind: Type.Literal("codex", {
+export const implementationPlan = object({
+  kind: Type.Literal("implementation", {
     description:
-      "Use Codex rarely for a concrete implementation needed by the mathematical task. Explorer handles mathematical reasoning. Codex writes and runs programs and returns ordinary unverified notes with retained artifacts. To issue mathematical verdicts on existing notes, select verifier with backend codex instead.",
+      "Use implementation rarely for a concrete implementation needed by the mathematical task. Explorer handles mathematical reasoning. The implementation backend writes and runs programs and returns ordinary unverified notes with retained artifacts. To issue mathematical verdicts on existing notes, select verifier with backend external instead.",
   }),
   assignment: Type.String({
     minLength: 1,
     pattern: "\\S",
     description:
-      "State the concrete deliverable, input/domain, expected output, binding constraints, and checks/evidence that complete this implementation assignment. Selected notes may define these requirements. The task's completion criteria provide mathematical context. Codex chooses the implementation and tools.",
+      "State the concrete deliverable, input/domain, expected output, binding constraints, and checks/evidence that complete this implementation assignment. Selected notes may define these requirements. The task's completion criteria provide mathematical context. The implementation backend chooses the implementation and tools.",
   }),
   notes: Type.Array(text, {
     uniqueItems: true,
@@ -286,48 +301,32 @@ export const workPlan = Type.Union([
   explorePlan,
   verifyPlan,
   literaturePlan,
-  codexPlan,
+  implementationPlan,
 ]);
 export const planSchema = (capabilities: {
   literature: boolean;
-  codex: boolean;
-  explorer: boolean;
-  codexVerifier?: boolean;
+  implementation: boolean;
+  externalVerifier?: boolean;
 }) =>
   object({
     work: Type.Unsafe<Static<typeof workPlan> | null>(
       Type.Union([
+        explorePlan,
         object({
           ...verifyPlan.properties,
           backend: Type.Optional(
-            capabilities.codexVerifier
+            capabilities.externalVerifier
               ? verificationBackendSchema
               : Type.Literal("native"),
           ),
         }),
-        ...workPlan.anyOf.filter(
-          (plan) =>
-            plan.properties.kind.const !== "verifier" &&
-            capabilities[plan.properties.kind.const],
-        ),
+        ...(capabilities.literature ? [literaturePlan] : []),
+        ...(capabilities.implementation ? [implementationPlan] : []),
         Type.Null(),
       ]),
     ),
   });
 export type Plan = Static<ReturnType<typeof planSchema>>;
-export const submissionSchemas = {
-  explorer: explorationSchema,
-  coordinator: planSchema({
-    explorer: true,
-    literature: true,
-    codex: true,
-    codexVerifier: true,
-  }),
-  correctness: batchSchema(correctnessSchema),
-  requirements: batchSchema(verdictSchema),
-  proof: batchSchema(proofSchema),
-  reconstruction: batchSchema(verdictSchema),
-};
 export type SolverInput = { task: Task; notes: Note[] };
 export type NoteInfo = Pick<
   Note,
@@ -347,7 +346,7 @@ export type NoteInfo = Pick<
 export type ExplorerInput = SolverInput & {
   assignment: string;
 };
-export type CodexInput = SolverInput & { assignment: string };
+export type ImplementationInput = SolverInput & { assignment: string };
 export type VerifierInput = SolverInput & {
   targets: string[];
   through: VerificationStage;

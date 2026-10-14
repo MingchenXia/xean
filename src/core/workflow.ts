@@ -1,4 +1,5 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
+import { Assert } from "typebox/value";
 import {
   defineDoc,
   defineEntry,
@@ -14,11 +15,17 @@ import {
 } from "@earendil-works/pi-durable";
 import {
   workPlan,
+  researchReportSchema,
   type Plan,
   type planSchema,
   type SolverResult,
 } from "./math/contracts.ts";
-import { noteInfo, sourceEvidence, validatePlan } from "./math/notes.ts";
+import {
+  noteInfo,
+  sourceEvidence,
+  validatePlan,
+  validateResult,
+} from "./math/notes.ts";
 import { closure } from "./math/argument.ts";
 import {
   Catalog,
@@ -26,17 +33,16 @@ import {
   readSnapshot,
   publishResult,
   publishCommand,
+  noteIdPrefix,
 } from "./math/state.ts";
 import { readCommand } from "./math/commands.ts";
 import { readDefinition } from "./definition.ts";
-import type { PublishedResult } from "./math/results.ts";
 import {
-  RoleFailure,
-  type NoteReference,
-  type RoleRuntime,
-} from "./roles/types.ts";
-
-import { explorerLimit, type ExplorerLimit } from "./roles/conversation.ts";
+  explorerLimit,
+  type ExplorerLimit,
+  type PublishedResult,
+} from "./math/results.ts";
+import { RoleFailure, type NoteReference, type RoleRuntime } from "./roles.ts";
 
 // These are application admission choices. Pi retains all execution state.
 export const Control = defineDoc({
@@ -67,11 +73,13 @@ export const roleNames = [
   "review",
 ] as const;
 export type RoleName = (typeof roleNames)[number];
-export type Roles = Record<RoleName, Role> & {
-  capabilities: (input: any) => Parameters<typeof planSchema>[0] & {
-    sourceRetrieval?: boolean;
+export type Roles = Record<"coordinator" | "explorer" | "verifier", Role> &
+  Partial<Record<RoleName, Role>> & {
+    external?: Record<string, unknown>;
+    capabilities: (input: any) => Parameters<typeof planSchema>[0] & {
+      sourceRetrieval?: boolean;
+    };
   };
-};
 type Request = NonNullable<Plan["work"]>;
 export type WorkerInput = { retryOf?: TaskId } & (
   { at: EntryId; request: Request } | { standalone: true }
@@ -195,7 +203,22 @@ export function createResearch(roles: Roles) {
         }
         let outcome: TaskOutcome<JsonValue>;
         try {
-          const result = await roles[name!](value, runtime, context, source);
+          const mode = JSON.stringify(
+            Object.entries(roles.external ?? {})
+              .filter(([, enabled]) => enabled)
+              .map(([name]) => name)
+              .sort(),
+          );
+          if (
+            (await runtime.memo("research.backend-mode", mode, context)) !==
+            mode
+          )
+            throw new Error(
+              "Role backend registration changed during recovery",
+            );
+          const role = roles[name!];
+          if (!role) throw new Error(`Role is not registered: ${name!}`);
+          const result = await role(value, runtime, context, source);
           outcome = { status: "completed", result };
         } catch (error) {
           if (!(error instanceof RoleFailure)) throw error;
@@ -204,6 +227,33 @@ export function createResearch(roles: Roles) {
             error: { message: error.message },
             ...(error.result ? { result: error.result } : {}),
           };
+        }
+        if (outcome.result !== undefined) {
+          const input = value as {
+            notes?: Parameters<typeof validateResult>[1];
+          };
+          const result = outcome.result as SolverResult | PublishedResult;
+          if (name! === "coordinator")
+            validatePlan(result, input.notes ?? [], roles.capabilities(value));
+          else if (name! === "review") Assert(researchReportSchema, result);
+          else if (result.kind === "published") {
+            if (name! !== "explorer")
+              throw new Error("Only Explorer publishes during execution");
+          } else {
+            if ("standalone" in task.input)
+              validateResult(
+                result,
+                input.notes ?? [],
+                outcome.status === "failed",
+                noteIdPrefix(task.id),
+              );
+            const expected =
+              name! === "verifier" || name! === "reconstruct"
+                ? "verification"
+                : "notes";
+            if (result.kind !== expected)
+              throw new Error(`Invalid ${name!} result kind`);
+          }
         }
         await runtime.commit(async (tx) => {
           const control = await tx.doc(Control, task.conversationId);
@@ -300,7 +350,7 @@ export function createResearch(roles: Roles) {
             const outcome = worker.state.outcome;
             const limit =
               request?.kind === "explorer" && outcome?.status === "completed"
-                ? await explorerLimit(tx, worker.id)
+                ? explorerLimit(outcome?.result)
                 : undefined;
             const summary: (typeof workers)[number] = {
               id: worker.id,
@@ -339,9 +389,6 @@ export function createResearch(roles: Roles) {
             };
         } else if (!acceptedNote) {
           // Freeze waits for prior workers to settle. Their outcomes are immutable.
-          const explorerUsed = workers.some(
-            (worker) => worker.role === "explorer",
-          );
           const coordination = {
             task: definition.task,
             notes: frozen.notes,
@@ -349,7 +396,6 @@ export function createResearch(roles: Roles) {
             literatureUsed: workers.some(
               (worker) => worker.role === "literature" && worker.completed,
             ),
-            explorerUsed,
             failures: workers
               .filter((worker) => worker.failed)
               .map(({ id, role, error }) => ({ id: String(id), role, error })),

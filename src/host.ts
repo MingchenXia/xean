@@ -2,8 +2,8 @@ import { lstatSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Database } from "bun:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -17,30 +17,34 @@ import {
   type Session,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
-  openNodeSqliteDatabase,
-  NodeSqliteDatabase,
-} from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createRuntime } from "./config.ts";
+  SqliteStorage,
+  type SqliteValue,
+} from "@earendil-works/pi-durable/storage/sqlite";
+import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createRuntime, readSettings } from "./roles/config.ts";
 import {
   DefinitionDoc,
   readDefinition,
   UninitializedResearchError,
   validateDefinition,
   type Definition,
-} from "./definition.ts";
+} from "./core/definition.ts";
 import { createRoles } from "./roles/index.ts";
-import type { Research } from "./roles/research.ts";
+import type { ExternalRoles } from "./roles/backend.ts";
 import {
   Control,
   createResearch,
   roleNames,
   type RoleName,
   type Roles,
-} from "./workflow.ts";
-import { Catalog, readSnapshot, type SnapshotReader } from "./math/state.ts";
-import { acceptedArgument } from "./math/argument.ts";
+} from "./core/workflow.ts";
+import {
+  Catalog,
+  readSnapshot,
+  type SnapshotReader,
+} from "./core/math/state.ts";
+import { acceptedArgument } from "./report.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -51,8 +55,9 @@ export class ResearchOwnedError extends Error {
 export type OpenOptions = {
   create?: Definition;
   models?: Models;
-  research?: Research;
-  roles?: (builtins: Roles) => Partial<Roles>;
+  roles?: (
+    builtins: ReturnType<typeof createRoles>,
+  ) => Partial<Roles> & { external?: ExternalRoles };
   key?: string;
   usagePrefix?: string;
   registry?: Registry;
@@ -73,7 +78,7 @@ async function canonicalPath(path: string, create: boolean) {
   }
 }
 
-function acquire(path: string) {
+export function acquireOwnership(path: string) {
   const lock = new DatabaseSync(`${path}.owner.sqlite`);
   try {
     lock.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
@@ -92,7 +97,11 @@ function assertSingleLink(nlink: number) {
 
 /** Reject SQL writes and missing files while allowing SQLite to maintain WAL sidecars. */
 export function openReadDatabase(path: string) {
-  const database = new DatabaseSync(`${pathToFileURL(path).href}?mode=rw`);
+  const database = new Database(path, {
+    create: false,
+    readwrite: true,
+    strict: true,
+  });
   try {
     database.exec("PRAGMA query_only = ON");
     return database;
@@ -105,7 +114,7 @@ export function openReadDatabase(path: string) {
 function recognize(path: string) {
   using database = openReadDatabase(path);
   const tables = database
-    .prepare(
+    .query(
       "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
     )
     .all() as { name: string }[];
@@ -116,9 +125,13 @@ function recognize(path: string) {
 }
 
 async function openOwnedStorage(path: string) {
-  const database = await openNodeSqliteDatabase(path, { busyTimeoutMs: 0 });
+  const database = piDatabase(
+    new Database(path, { create: true, strict: true }),
+  );
   try {
-    await database.exec("PRAGMA synchronous = FULL");
+    await database.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 0",
+    );
     return await SqliteStorage.open(database);
   } catch (error) {
     await database.close().catch(() => {});
@@ -126,11 +139,36 @@ async function openOwnedStorage(path: string) {
   }
 }
 
+/** Keep Pi's queue and transactions, with Bun's deterministic statement cleanup. */
+function piDatabase(database: Database, readOnly = false) {
+  const driver = {
+    exec: (sql: string) => database.exec(sql),
+    prepare: (sql: string) => {
+      // query() gives Bun ownership so close() finalizes retained statements.
+      const statement = database.query(sql);
+      return {
+        run: statement.run.bind(statement),
+        all: statement.all.bind(statement),
+        get: (...args: SqliteValue[]) => statement.get(...args) ?? undefined,
+      };
+    },
+    get isTransaction() {
+      return database.inTransaction;
+    },
+    close: () => database.close(true),
+  };
+  // Pi uses this subset of DatabaseSync; Bun returns null for absent rows.
+  return new NodeSqliteDatabase(driver as unknown as DatabaseSync, {
+    readOnly,
+  });
+}
+
 /** Own one native Harness. Close it to suspend; reopen it to recover. */
 export async function open(path: string, options: OpenOptions = {}) {
   const requested = options.create && validateDefinition(options.create);
+  if (requested) readSettings(requested.settings);
   const canonical = await canonicalPath(path, requested !== undefined);
-  const release = acquire(canonical);
+  const release = acquireOwnership(canonical);
   let storage: Storage | undefined;
   let harness: Harness | undefined;
   let closing: Promise<void> | undefined;
@@ -169,21 +207,19 @@ export async function open(path: string, options: OpenOptions = {}) {
     if (!definition) throw new UninitializedResearchError();
     if (!stored && (await storage.conversation(ROOT_CONVERSATION_ID, context)))
       throw new UninitializedResearchError();
+    const configured = readSettings(definition.settings);
     const settings =
       options.usagePrefix === undefined
-        ? definition.settings
+        ? configured
         : {
-            ...definition.settings,
+            ...configured,
             usagePrefix: options.usagePrefix,
           };
     const runtime = createRuntime(settings, {
       models: options.models,
       key: options.key,
     });
-    const builtins = createRoles(
-      { ...settings, profiles: runtime.profiles },
-      options.research,
-    );
+    const builtins = createRoles({ ...settings, profiles: runtime.profiles });
     const roles = Object.assign(builtins, options.roles?.({ ...builtins }));
     const workflow = createResearch(roles);
     const registry = options.registry ?? createRegistry();
@@ -243,10 +279,9 @@ async function inspectSession<T>(
   if (!recognize(path)) throw new UninitializedResearchError();
   using database = openReadDatabase(path);
   database.exec("BEGIN");
-  const storage = await SqliteStorage.open(
-    new NodeSqliteDatabase(database, { readOnly: true }),
-    { readOnly: true },
-  );
+  const storage = await SqliteStorage.open(piDatabase(database, true), {
+    readOnly: true,
+  });
   const session = createSession(storage, { documentRetentionMs: 0 });
   try {
     validateDefinition(

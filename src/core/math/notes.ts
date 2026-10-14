@@ -42,7 +42,10 @@ export function validateNotes(
 ): void {
   const ids = new Set(known.map((note) => note.id));
   for (const note of drafts) {
-    if (ids.has(note.id)) throw new Error(`Duplicate new note: ${note.id}`);
+    if (ids.has(note.id))
+      throw new Error(
+        `Duplicate new note: ${note.id}. Choose another name, or edit the existing note with its current revision.`,
+      );
     ids.add(note.id);
   }
   const all = [...known, ...drafts];
@@ -57,7 +60,19 @@ export function validateNotes(
 export function validateExploration(
   value: Exploration,
   known: readonly Note[],
+  prefix?: string,
 ): void {
+  if (prefix) {
+    const invalid = value.notes.filter(
+      ({ id }) =>
+        !id.startsWith(prefix) ||
+        !/^[A-Za-z0-9_-]+$/.test(id.slice(prefix.length)),
+    );
+    if (invalid.length)
+      throw new Error(
+        `New note IDs must use prefix ${prefix} followed by a short name: ${invalid.map(({ id }) => id).join(", ")}. Use the full permanent ID in text and support.`,
+      );
+  }
   const edited = known.map((note) => ({ ...note }));
   const ids = new Set<string>();
   for (const edit of value.edits ?? []) {
@@ -107,7 +122,7 @@ export function stagePending(
   if (stagePassed(note, stage) || result?.verdict === "FAIL") return false;
   if (result) {
     const reassess =
-      stage === "source" ? note.sourceChanged : backend === "codex";
+      stage === "source" ? note.sourceChanged : backend === "external";
     if (result.verdict !== "INCONCLUSIVE" || !reassess) return false;
   }
   if (stage === "correctness") return true;
@@ -280,7 +295,7 @@ export function validatePlan(
   capabilities: Parameters<typeof planSchema>[0],
 ): Plan {
   const plan = decode(planSchema(capabilities), value);
-  if (plan.work?.kind === "codex") closure(plan.work.notes, notes);
+  if (plan.work?.kind === "implementation") closure(plan.work.notes, notes);
   if (plan.work?.kind === "verifier") {
     for (const id of plan.work.notes) {
       const note = notes.find((note) => note.id === id);
@@ -304,13 +319,14 @@ export function validateResult(
   value: unknown,
   notes: readonly Note[],
   failed = false,
+  prefix?: string,
 ): SolverResult {
   const result = decode(solverResultSchema, value);
   if (failed && result.kind !== "verification")
     throw new Error(
       "Failed work can publish only completed verification checks",
     );
-  if (result.kind === "notes") validateExploration(result, notes);
+  if (result.kind === "notes") validateExploration(result, notes, prefix);
   else {
     const checked = new Set<string>();
     for (const check of result.checks) {

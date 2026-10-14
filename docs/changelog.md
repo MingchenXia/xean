@@ -1,5 +1,57 @@
 # Changelog
 
+## 3.5.0 — development
+
+External role backends are opt-in, and multiple campaigns can share a foreground
+host while Pi owns each campaign's execution and recovery. This version is unreleased.
+
+- Note IDs are permanent names under the worker's Pi task prefix or the caller's
+  command prefix. Producers use the full ID in text, dependencies, reads, and edits.
+  Publication preserves IDs and rejects duplicate creations. Local aliases and
+  invocation-wide numbering are removed.
+- Explorer publication receipts report dependent revision changes. Previously
+  observed dependents can use the returned revisions. Unseen intervening edits
+  still require a read. Publication and its receipt recover atomically through Pi.
+- Source backend failures identify their stage and retain completed verification
+  work. Coordinator instructions explain the shared source backend and recommend
+  independent work after repeated operational failures.
+- Pin Pi to an unreleased snapshot after 1.2.0. It classifies
+  `unable to forward upstream` as retryable and repairs invalid Unicode escapes
+  in streamed JSON. The frozen model catalog and existing Xean patches remain.
+- Import `xean/core` for the workflow, notebook rules, and role contracts without
+  loading bundled role implementations, CLI, or adapters. `xean/roles` exports
+  the default roles, and `xean/report` provides inspection. `open` from `xean`
+  retains the default setup. Core records role settings as JSON, while the
+  default setup validates its model profiles and options.
+- Campaign workers now enforce the same role/result-kind contract as standalone
+  calls. A Verifier cannot publish notes, and Explorer cannot submit verification checks.
+- Native correctness, requirements, proof generation, and proof comparison share
+  `selectBatch` in `xean/roles`. Large assessments split with support and source
+  records scoped to each group. Completed groups survive interruption through Pi.
+- Register Codex, Claude, or ChatGPT adapters through `open({ roles })` or an explicit CLI
+  `--roles` module. Default installation uses native Pi roles and closed-book
+  source checking without external CLI dependencies.
+- ChatGPT Pro uses the same external Explorer interface as other backends,
+  selected by the caller's role module. Remove its campaign-wide quota and
+  browser-specific state from the core.
+- Implementation work uses `kind: "implementation"`. External verification uses
+  `backend: "external"`. Core retains schemas, frozen inputs,
+  dependency checks, and acceptance. Bundled roles perform blind reconstruction.
+  External request receipts identify their provider.
+- Codex and Claude share Execa process handling and native Pi memos. Completed calls
+  are reused and interrupted CLI calls use fresh workspaces. Native Pi memos guard
+  worker backend registration and packaged adapter request configuration.
+  Standalone results receive role-specific validation.
+- `host`, `attach`, and `detach` share a Pi `Models` instance across independently
+  owned campaigns. Restart discovers campaign databases under the selected directory.
+  Per-campaign controls and Pi checkpoints remain authoritative.
+- Pi's existing SQLite adapter uses Bun's native driver through a small application
+  adapter. Closing finalizes prepared statements and releases database handles
+  without waiting for garbage collection. This adds no Pi patch.
+- Start fresh campaign databases. External backend configuration moves from
+  `settings.codex` and `settings.research` into role modules.
+  Preserve historical campaigns with their pinned runtimes. No migration is provided.
+
 ## 3.4.1 — 2026-10-13
 
 Documentation correction for the 3.4.0 qualification boundaries.

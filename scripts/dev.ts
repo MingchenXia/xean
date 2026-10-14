@@ -78,6 +78,18 @@ if (command === "check" || command === "test") {
   const source = resolve(directory.path, "package");
   assert.equal(await Bun.file(resolve(source, "bun.lock")).text(), lockfile);
   await run(
+    [
+      "install",
+      "--production",
+      "--omit=optional",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+    ],
+    source,
+    env,
+  );
+  await run(["tests/distribution.ts"], source, env);
+  await run(
     ["install", "--production", "--frozen-lockfile", "--ignore-scripts"],
     source,
     env,
@@ -92,7 +104,6 @@ if (command === "check" || command === "test") {
     source,
     env,
   );
-  await run(["tests/distribution.ts"], source, env);
   const output =
     command === "pack"
       ? resolve(args[0] ?? `dist/${manifest.name}-${manifest.version}.tgz`)
