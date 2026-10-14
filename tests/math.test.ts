@@ -45,7 +45,6 @@ const note = (id: string, support: string[] = [], imported = false): Note => ({
   dead: false,
 });
 const capabilities = {
-  explorer: true,
   literature: false,
   implementation: false,
 };

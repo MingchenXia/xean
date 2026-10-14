@@ -135,7 +135,6 @@ test("core settings reject plugin configuration and unsafe endpoints", () => {
     { apiKey: "not-a-setting" },
     { researchPolicy: "model-led" },
     { codex: { model: "fixture" } },
-    { chatgpt: { model: "chatgpt-web/gpt-6-pro" } },
     { research: { model: "fixture" } },
   ])
     expect(() => readSettings({ ...defaultSettings, ...unsupported })).toThrow(

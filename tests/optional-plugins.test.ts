@@ -9,8 +9,8 @@ import {
   claudeCall,
   claudeTranscript,
 } from "../src/plugins/role-backends/claude.ts";
+import { codex, codexCall } from "../src/plugins/role-backends/codex.ts";
 import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
-import { codexCall } from "../src/plugins/role-backends/codex.ts";
 import { explorationSchema } from "../src/math/contracts.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
@@ -164,31 +164,42 @@ test.each([
   expect(parsed.value).toBeUndefined();
 });
 
-test.each(["browser", "cli"] as const)(
-  "interrupted %s Explorer cannot recover under the other adapter or dispatch again",
-  async (first) => {
+test.each([
+  ["codex", "claude"],
+  ["claude", "codex"],
+  ["browser", "codex"],
+  ["codex", "browser"],
+] as const)(
+  "interrupted %s Explorer cannot recover under %s or dispatch again",
+  async (first, second) => {
     const started = Promise.withResolvers<void>();
-    const calls = { browser: 0, cli: 0 };
+    const calls = { codex: 0, claude: 0, browser: 0 };
     const server = Bun.serve({
       port: 0,
       fetch(request) {
+        const path = new URL(request.url).pathname;
         const kind =
-          new URL(request.url).pathname === "/cli" ? "cli" : "browser";
+          path === "/codex"
+            ? "codex"
+            : path === "/claude"
+              ? "claude"
+              : "browser";
         calls[kind]++;
         started.resolve();
-        return kind === "cli"
-          ? new Response("ready")
-          : new Promise<Response>(() => {});
+        return kind === "browser"
+          ? new Promise<Response>(() => {})
+          : new Response("ready");
       },
     });
     let owner: Awaited<ReturnType<typeof open>> | undefined;
     try {
       const options = await command(
-        `await fetch(${JSON.stringify(new URL("/cli", server.url).href)}); setInterval(() => {}, 1000);`,
+        `await fetch(${JSON.stringify(server.url.href)} + (process.argv.includes("--print") ? "claude" : "codex")); setInterval(() => {}, 1000);`,
       );
       const path = join(options.workspace, "campaign.sqlite");
       const roles = {
-        cli: claude({ explorer: options }),
+        codex: codex({ explorer: options }),
+        claude: claude({ explorer: options }),
         browser: chatgpt({
           baseUrl: server.url.href.replace(/\/$/, ""),
           model: "chatgpt-web/fixture",
@@ -210,11 +221,9 @@ test.each(["browser", "cli"] as const)(
       await owner.close();
       owner = undefined;
       const admitted = { ...calls };
-      expect(admitted).toEqual(
-        first === "browser" ? { browser: 1, cli: 0 } : { browser: 0, cli: 1 },
-      );
+      expect(admitted).toEqual({ codex: 0, claude: 0, browser: 0, [first]: 1 });
       owner = await open(path, {
-        roles: roles[first === "browser" ? "cli" : "browser"],
+        roles: roles[second],
       });
       await owner.root.waitForIdle(context);
       const root = owner.root;
@@ -224,7 +233,7 @@ test.each(["browser", "cli"] as const)(
       );
       expect(report.status.status).toBe("blocked");
       expect(report.status.error).toContain(
-        "Role backend registration changed",
+        "External backend configuration changed",
       );
       expect(calls).toEqual(admitted);
     } finally {

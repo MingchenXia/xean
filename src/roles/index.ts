@@ -196,8 +196,6 @@ export type CoordinationInput = {
   limits?: { id: string; reason: ExplorerLimit }[];
   guidance: string[];
   literatureUsed: boolean;
-  /** Any prior work for the current built-in Explorer, including failures. */
-  explorerUsed: boolean;
   recent?: {
     id: string;
     role: string;
@@ -454,8 +452,6 @@ export function createRoles(options: RoleOptions) {
     external: {} as ExternalRoles,
     capabilities(input: CoordinationInput) {
       return {
-        verifier: true,
-        explorer: !functions.external.explorerOnce || !input.explorerUsed,
         implementation:
           !!functions.external.implementation ||
           functions.implementation !== implementation,
@@ -574,7 +570,7 @@ export function createRoles(options: RoleOptions) {
       source?: NoteReference,
     ): Promise<Plan> {
       input = structuredClone(input);
-      const { notes, task, explorerUsed: _explorerUsed, ...state } = input;
+      const { notes, task, ...state } = input;
       const capabilities = input.capabilities ?? functions.capabilities(input);
       const prompt = {
         ...state,

@@ -386,9 +386,6 @@ export function createResearch(roles: Roles) {
             };
         } else if (!acceptedNote) {
           // Freeze waits for prior workers to settle. Their outcomes are immutable.
-          const explorerUsed = workers.some(
-            (worker) => worker.role === "explorer",
-          );
           const coordination = {
             task: definition.task,
             notes: frozen.notes,
@@ -396,7 +393,6 @@ export function createResearch(roles: Roles) {
             literatureUsed: workers.some(
               (worker) => worker.role === "literature" && worker.completed,
             ),
-            explorerUsed,
             failures: workers
               .filter((worker) => worker.failed)
               .map(({ id, role, error }) => ({ id: String(id), role, error })),

@@ -60,7 +60,6 @@ async function setup(
 ) {
   const roles: Roles = {
     capabilities: () => ({
-      explorer: true,
       literature: false,
       implementation: false,
     }),
@@ -194,7 +193,6 @@ test.each(["empty", "independent", "retired-support"] as const)(
     };
     const owner = await setup({
       capabilities: () => ({
-        explorer: true,
         literature: true,
         implementation: false,
       }),

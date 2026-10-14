@@ -12,14 +12,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { inspect, open } from "../src/host.ts";
 import { scanTasks } from "../src/workflow.ts";
 import { Bodies, readView } from "../src/math/state.ts";
-import {
-  context,
-  fixture,
-  task,
-  settings,
-  noteResult,
-  recoveryRoles,
-} from "./fixture.ts";
+import { context, fixture, task, settings, noteResult } from "./fixture.ts";
 
 test.each(["worker", "input"] as const)(
   "Coordinator children settle before %s starts, including after reopening",
@@ -190,7 +183,6 @@ test("closing after immediate role publication reuses each committed native resu
   let owner = await open(path, {
     create: { task, settings },
     models: provider.models,
-    roles: recoveryRoles,
   });
   try {
     for (const boundary of [
@@ -230,7 +222,6 @@ test("closing after immediate role publication reuses each committed native resu
       );
       owner = await open(path, {
         models: provider.models,
-        roles: recoveryRoles,
       });
     }
     await owner.root.waitForIdle(context);
@@ -253,7 +244,6 @@ test("closing after immediate role publication reuses each committed native resu
     await owner.close();
     owner = await open(path, {
       models: provider.models,
-      roles: recoveryRoles,
     });
     await owner.root.waitForIdle(context);
     expect(provider.calls).toHaveLength(3);
@@ -281,7 +271,6 @@ test("SIGKILL recovers the product's native SQLite work without repeating its or
     );
     const owner = await open(path, {
       models: provider.models,
-      roles: recoveryRoles,
     });
     try {
       await owner.root.waitForIdle(context);

@@ -23,7 +23,6 @@ export type ExternalRoles = {
   implementation?: ExternalCall;
   verifier?: ExternalCall;
   explorer?: ExternalCall;
-  explorerOnce?: boolean;
   research?: Research;
 };
 export const externalEvidence = (answer: {

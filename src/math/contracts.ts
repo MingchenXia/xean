@@ -267,12 +267,12 @@ export const workPlan = Type.Union([
 export const planSchema = (capabilities: {
   literature: boolean;
   implementation: boolean;
-  explorer: boolean;
   externalVerifier?: boolean;
 }) =>
   object({
     work: Type.Unsafe<Static<typeof workPlan> | null>(
       Type.Union([
+        explorePlan,
         object({
           ...verifyPlan.properties,
           backend: Type.Optional(
@@ -281,11 +281,8 @@ export const planSchema = (capabilities: {
               : Type.Literal("native"),
           ),
         }),
-        ...workPlan.anyOf.filter(
-          (plan) =>
-            plan.properties.kind.const !== "verifier" &&
-            capabilities[plan.properties.kind.const],
-        ),
+        ...(capabilities.literature ? [literaturePlan] : []),
+        ...(capabilities.implementation ? [implementationPlan] : []),
         Type.Null(),
       ]),
     ),
@@ -294,7 +291,6 @@ export type Plan = Static<ReturnType<typeof planSchema>>;
 export const submissionSchemas = {
   explorer: explorationSchema,
   coordinator: planSchema({
-    explorer: true,
     literature: true,
     implementation: true,
     externalVerifier: true,

@@ -104,7 +104,6 @@ export function chatgpt(settings: ChatGPTOptions) {
     external: {
       ...builtins.external,
       explorer: chatgptCall(settings),
-      explorerOnce: true,
     },
   });
 }

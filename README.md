@@ -191,6 +191,16 @@ The native Pi Explorer retains its reading, editing, and continued-submission be
 Claude uses its native restricted mode and requires its native shell sandbox.
 Codex retains workspace-write mode for workers and read-only mode for research.
 
+The caller's role module can instead export `chatgpt({baseUrl, model})` from
+`xean/plugins/chatgpt` to use ChatGPT Pro through the external browser service.
+Run [`codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web) separately
+in `browser-only` mode with an authenticated browser. Codex, Claude, and ChatGPT
+all register through `external.explorer`. Other services can implement the same
+[`ExternalCall`](src/roles/backend.ts) contract. Xean validates their returned notes.
+The browser adapter reuses completed Pi memos and refuses ambiguous replay of
+an interrupted request. Each new Explorer invocation can make a new request.
+Browser usage is unmeasured and excluded from usage reports.
+
 Source retrieval and independent review require `research`. Literature additionally
 requires `literature: true` in settings. The Codex research adapter uses native
 web search with shell execution disabled. To disable Codex plugins for these
@@ -198,14 +208,6 @@ calls, use [xean-research.config.toml](examples/xean-research.config.toml) in
 `CODEX_HOME` and set `research.profile: "xean-research"` in the factory options.
 Codex worker profiles are configured independently on `implementation`, `verifier`,
 and `explorer`.
-
-For the browser service, export `chatgpt({baseUrl:
-"http://127.0.0.1:17841/v1", model: "chatgpt-web/gpt-6-pro"})` from a module,
-importing the factory from `xean/plugins/chatgpt`. Run the external
-[`codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web) service in
-`browser-only` mode with its authenticated browser available. This Explorer is
-available once per campaign. An ambiguously sent browser request requires operator
-attention and is not replayed. Completed results reuse their Pi memo.
 
 Keep the module and configuration stable across recovery. A native Pi memo rejects
 changes to enabled backend registrations while recovering an interrupted worker.
@@ -331,9 +333,8 @@ and replacement roles returning a batch retain publication on completion.
 
 The native Pi Explorer defaults to eight completed responses and up to four
 note-read calls, including reads of its own published notes when the notebook
-starts empty. ChatGPT Web uses one response without reads. Each read can request
-several notes. Reads and rejected submissions consume responses, and reading is
-disabled on the final response. These are ceilings, not a minimum amount of
+starts empty. Each read can request several notes. Reads and rejected submissions
+consume responses, and reading is disabled on the final response. These are ceilings, not a minimum amount of
 exploration.
 
 Other native Pi role conversations allow up to sixteen completed responses.
@@ -421,11 +422,11 @@ its current notebook after each durable submission.
 Pi rejects writes from inspection callbacks. Acceptance atomically checks the
 current dependency closure and pins its snapshot for export.
 Closing suspends unfinished execution. Reopening reuses Pi's committed private
-progress. A request interrupted before its answer commits may repeat, except
-that an ambiguously sent ChatGPT Web request is rejected on recovery.
+progress. A request interrupted before its answer commits may repeat.
 Codex and Claude adapters share Execa process handling and Pi request receipts. Pi memoizes each completed request within its worker. Interrupted calls
 restart in a fresh workspace. Source checks also retain results from custom
-research implementations before later stages. The built-in Verifier preserves
+research implementations before later stages. The browser adapter refuses to
+resend an ambiguously admitted request. The built-in Verifier preserves
 structurally validated completed checks when a stage fails. Invalid submissions and faults in
 opaque custom roles publish no partial results. A new Verifier reuses
 applicable completed checks. Cleanup errors use Pi's nonfatal
@@ -474,8 +475,8 @@ keep only the latest compact status. Run `inspect --records` on demand for
 diagnostics instead of retaining repeated transcript copies.
 
 Usage reports count committed assistant responses and recorded external CLI invocations.
-They cannot establish every outbound request or provider retry. Direct ChatGPT
-Web usage is unmeasured and excluded. Missing native usage remains unknown.
+They cannot establish every outbound request or provider retry. Missing native
+usage remains unknown.
 Process health, internal acceptance, and independent review are
 separate observations.
 
@@ -594,13 +595,7 @@ completed-result recovery, and dependency-complete export.
 Public OpenAI, the new direct OpenAI subscription login, fresh login, OAuth
 refresh, Anthropic, and Google remain unqualified live. Available credentials
 covered only the gateway and existing OpenAI Codex login for those native-provider
-checks. A later ChatGPT Web check at `7e6e5fd` passed after repairing the external
-bridge's model selectors. One standalone Explorer response produced a proof
-note, which passed the native Verifier through reconstruction. The saved ChatGPT
-conversation matched the complete prompt and answer and reported `gpt-6-pro`.
-Both completed roles reopened without credentials or further HTTP requests.
-This check covered standalone roles. Live browser cancellation remains
-unqualified. Receipts are in `runs/chatgpt-web-fix-20261008/`.
+checks.
 Literature retrieval passed with independently checked quotations.
 At `e40b85e`, the implementation worker passed on native macOS, including
 independent artifact checks and credential-free reopening. At that revision, the

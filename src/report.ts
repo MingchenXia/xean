@@ -349,7 +349,7 @@ export async function readReport(
       ...summary,
       calls: usage.calls,
       usageNote:
-        "Counts describe native assistant responses, not outbound retries or Codex internal requests. Native numeric usage fields can overlap. Subscription usage stays unknown unless reported; price estimates are omitted. Direct ChatGPT Web usage is unmeasured and excluded.",
+        "Counts describe native assistant responses, not outbound retries or external CLI internal requests. Native numeric usage fields can overlap. Subscription usage stays unknown unless reported; price estimates are omitted.",
     },
     notes: view.notes,
     work,

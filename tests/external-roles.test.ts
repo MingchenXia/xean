@@ -54,7 +54,6 @@ test("default core has no external backend and registration changes capabilities
     notes: [],
     failures: [],
     guidance: [],
-    explorerUsed: false,
     literatureUsed: false,
   };
   expect(builtins.capabilities(input)).toMatchObject({
@@ -73,15 +72,11 @@ test("default core has no external backend and registration changes capabilities
     implementation: answer({ notes: [] }),
     verifier: answer({ results: [] }),
     explorer: answer({ notes: [] }),
-    explorerOnce: true,
   };
-  expect(builtins.capabilities({ ...input, explorerUsed: true })).toMatchObject(
-    {
-      implementation: true,
-      externalVerifier: true,
-      explorer: false,
-    },
-  );
+  expect(builtins.capabilities(input)).toMatchObject({
+    implementation: true,
+    externalVerifier: true,
+  });
 });
 
 test("core rejects malformed external implementation and unsupported dependency results", async () => {
@@ -98,19 +93,39 @@ test("core rejects malformed external implementation and unsupported dependency 
   ).rejects.toThrow("missing");
 });
 
-test("external Explorer gets only the index and cannot edit unseen full text", async () => {
-  const builtins = roles();
-  builtins.external.explorer = async (...args) => {
-    expect(JSON.stringify(args[3])).not.toContain(note.text);
-    return answer({
-      notes: [],
-      edits: [{ id: note.id, revision: 0, text: "Replacement." }],
-    })(...args);
-  };
-  await expect(builtins.explorer(input, runtime, context)).rejects.toThrow(
-    "without their full text",
-  );
-});
+test.each(["new notes", "blind edit"])(
+  "external Explorer receives only the index and validates %s",
+  async (mode) => {
+    const builtins = roles();
+    const result =
+      mode === "new notes"
+        ? {
+            notes: noteResult.notes.map((value) => ({
+              ...value,
+              support: [note.id],
+            })),
+          }
+        : {
+            notes: [],
+            edits: [{ id: note.id, revision: 0, text: "Replacement." }],
+          };
+    let calls = 0;
+    builtins.external.explorer = async (...args) => {
+      calls++;
+      const input = JSON.stringify(args[3]);
+      expect(input).toContain(note.summary);
+      expect(input).not.toContain(JSON.stringify(note.text));
+      expect(input).not.toContain(note.detailedSummary);
+      return answer(result)(...args);
+    };
+    const invocation = builtins.explorer(input, runtime, context);
+    if (mode === "blind edit")
+      await expect(invocation).rejects.toThrow("without their full text");
+    else
+      await expect(invocation).resolves.toEqual({ kind: "notes", ...result });
+    expect(calls).toBe(1);
+  },
+);
 
 test("external verification must return exactly the requested IDs", async () => {
   const builtins = roles();

@@ -40,7 +40,6 @@ import { closedBookResearch, type Research } from "../src/roles/research.ts";
 import { capacityError, createRuntime } from "../src/config.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { codex } from "../src/plugins/role-backends/codex.ts";
-import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
 import type { Note, SolverResult } from "../src/math/contracts.ts";
 import { DefinitionDoc, type Definition } from "../src/definition.ts";
 import { createResearch, scanTasks } from "../src/workflow.ts";
@@ -1112,7 +1111,6 @@ test.each([false, true])(
           failures: [],
           guidance: [],
           literatureUsed: false,
-          explorerUsed: false,
         },
       });
       const result = await resultOf(current.harness, id);
@@ -2386,8 +2384,6 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
   let retried = false;
   const provider = fixture((_name, input, transcript) => {
     expect(input.capabilities).toMatchObject({
-      verifier: true,
-      explorer: false,
       literature: false,
       implementation: count >= 3,
       externalVerifier: false,
@@ -2405,7 +2401,11 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
     count++;
     if (count === 1)
       return {
-        work: { kind: "explorer", assignment: "Unavailable Explorer" },
+        work: {
+          kind: "implementation",
+          assignment: "Unavailable implementation",
+          notes: [],
+        },
       };
     if (count === 2)
       expect(
@@ -2430,13 +2430,6 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
           },
         };
   }, {});
-  Object.assign(
-    provider.roles,
-    chatgpt({
-      baseUrl: "http://127.0.0.1:17841/v1",
-      model: "chatgpt-web/gpt-6-pro",
-    })(provider.roles),
-  );
   let current = await provider.open(directory, undefined, true);
   try {
     const stopped = current.closeAfterEntry(
@@ -2452,7 +2445,6 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
       failures: [],
       guidance: [],
       literatureUsed: false,
-      explorerUsed: true,
     };
     for (let i = 0; i < 2; i++) {
       const id = await current.invoke({ role: "coordinator", input });
@@ -2493,7 +2485,6 @@ test("Coordinator rejects used literature and multiple workers", async () => {
     (_name, input, transcript) => {
       response++;
       expect(input.capabilities).toMatchObject({
-        explorer: true,
         literature: response > 2,
       });
       if (response === 1)
@@ -2525,7 +2516,6 @@ test("Coordinator rejects used literature and multiple workers", async () => {
     failures: [],
     guidance: [],
     literatureUsed: false,
-    explorerUsed: false,
   };
   try {
     for (const literatureUsed of [true, false]) {
@@ -2902,7 +2892,6 @@ test("Coordinator admits four reads by default and can hand off after a denied f
         failures: [],
         guidance: [],
         literatureUsed: false,
-        explorerUsed: false,
       },
     });
     expect(await resultOf(current.harness, id)).toEqual({
@@ -3238,7 +3227,6 @@ test.each([
             : {
                 guidance: [],
                 failures: [],
-                explorerUsed: false,
                 literatureUsed: false,
               }),
         },
@@ -3726,7 +3714,6 @@ test("Coordinator can idle with Explorer available", async () => {
   const provider = fixture((_name, input) => {
     expect(input).toMatchObject({
       recent,
-      capabilities: { explorer: true },
     });
     return { work: null };
   }, {});
@@ -3740,7 +3727,6 @@ test("Coordinator can idle with Explorer available", async () => {
         failures: [],
         guidance: [],
         literatureUsed: false,
-        explorerUsed: false,
         recent,
       },
     });

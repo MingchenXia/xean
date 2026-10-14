@@ -1,4 +1,3 @@
-import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { fixtureTask } from "./task.ts";
 import { expect, spyOn, test } from "bun:test";
@@ -353,7 +352,6 @@ test("usage overrides preserve frozen settings and completed custom-provider wor
         guidance: [],
         failures: [],
         literatureUsed: false,
-        explorerUsed: false,
       },
     },
     settings: {
@@ -624,39 +622,24 @@ test.each([false, true])(
   },
 );
 
-test("replacement roles preserve the browser quota and expose custom implementation", async () => {
+test("replacement roles expose custom implementation and keep Explorer available", async () => {
   const directory = await temporaryDirectory("host-replacements-");
   const path = join(directory, "campaign.sqlite");
   let explorers = 0,
-    codex = 0,
+    implementations = 0,
     decisions = 0;
-  const observations: {
-    explorerUsed: boolean;
-    capabilities: { explorer: boolean; implementation: boolean };
-  }[] = [];
+  const observations: { implementation: boolean }[] = [];
   const empty = () => ({ kind: "notes" as const, notes: [] });
   const owner = await open(path, {
-    create: {
-      ...definition,
-      settings: {
-        ...defaultSettings,
-      },
-    },
-    roles: (builtins) => ({
-      ...chatgpt({
-        baseUrl: "http://127.0.0.1:17841/v1",
-        model: "chatgpt-web/gpt-6-pro",
-      })(builtins),
+    create: definition,
+    roles: () => ({
       coordinator: async (input) => {
-        observations.push({
-          explorerUsed: input.explorerUsed,
-          capabilities: input.capabilities,
-        });
+        observations.push(input.capabilities);
         decisions++;
         return {
           work:
-            decisions === 1
-              ? { kind: "explorer", assignment: "first" }
+            decisions === 1 || decisions === 3
+              ? { kind: "explorer", assignment: "Explore another approach." }
               : decisions === 2
                 ? {
                     kind: "implementation",
@@ -671,19 +654,19 @@ test("replacement roles preserve the browser quota and expose custom implementat
         return empty();
       },
       implementation: async () => {
-        codex++;
+        implementations++;
         return empty();
       },
     }),
   });
   try {
     await owner.harness.waitForIdle(context);
-    expect(observations[0]?.capabilities.implementation).toBe(true);
+    expect(observations).toHaveLength(4);
     expect(
-      observations.find((input) => input.explorerUsed)?.capabilities.explorer,
-    ).toBe(false);
-    expect(explorers).toBe(1);
-    expect(codex).toBe(1);
+      observations.every((capabilities) => capabilities.implementation),
+    ).toBe(true);
+    expect(explorers).toBe(2);
+    expect(implementations).toBe(1);
     const tasks = await owner.harness.commit(
       (tx) => tx.scanTasks({}, 30),
       context,

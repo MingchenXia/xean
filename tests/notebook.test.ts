@@ -808,7 +808,7 @@ test("retirement hides direct work while existing consumers can finish verificat
           },
         },
         notes,
-        { explorer: true, literature: false, implementation: false },
+        { literature: false, implementation: false },
       ),
     ).toThrow("Retired note");
     expect(
