@@ -1,9 +1,8 @@
 # Changelog
 
-## 3.4.0-rc.1 — 2026-10-13
+## 3.4.0 — 2026-10-13
 
-Release candidate for the fresh-database 3.4.0 runtime. Stable release
-remains pending the campaign qualification.
+Fresh-database 3.4.0 runtime release.
 
 Explorer publishes each submission while continuing its conversation. Caller
 notes and model-generated notes share verification rules, with external trust
@@ -11,6 +10,9 @@ recorded as evidence.
 
 ### Notebook and verification
 
+- Malformed verification and source batches now report requested, received,
+  missing, unexpected, duplicate, and duplicate-request IDs so the same Pi
+  conversation can correct its submission without weakening exact-ID checks.
 - Each native Explorer submission atomically commits its notes, edits, and replay
   receipt. Explorer can read and edit those notes immediately. Later failure or
   cancellation retains committed batches. Coordinator waits for the worker to
