@@ -164,3 +164,91 @@ test.skipIf(!bootstrapAvailable)(
     }
   },
 );
+
+test("cloud implementation uses the current role module and reopens without a new Codex call", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-cloud-role-"));
+  try {
+    const executable = join(directory, "codex-fixture");
+    const receipt = join(directory, "receipt.json");
+    const settings = join(directory, "settings.json");
+    const database = join(directory, "campaign.sqlite");
+    const auth = join(directory, "fixture-auth");
+    await mkdir(auth);
+    await writeFile(
+      executable,
+      `#!${process.execPath}
+const input = JSON.parse(await Bun.stdin.text());
+await Bun.write(process.env.XEAN_CLOUD_RECEIPT, JSON.stringify({
+  args: process.argv.slice(2), workspace: process.cwd()
+}));
+const result = { notes: [{
+  id: input.noteIdPrefix + "implementation", summary: "Fixture implementation",
+  detailedSummary: "Checks the cloud role integration without model calls.",
+  text: "Scripted backend result; no mathematical claim.", support: [], candidate: false
+}] };
+console.log(JSON.stringify({ type: "item.completed", item: {
+  type: "agent_message", text: JSON.stringify(result)
+} }));
+console.log(JSON.stringify({ type: "turn.completed", usage: { output_tokens: 7 } }));
+`,
+    );
+    await chmod(executable, 0o700);
+    const env = {
+      ...process.env,
+      XEAN_CODEX_COMMAND: executable,
+      XEAN_CLOUD_DIR: join(directory, "cloud"),
+      XEAN_CLOUD_RECEIPT: receipt,
+      CODEX_HOME: auth,
+    };
+    async function run(...args: string[]) {
+      const child = Bun.spawn([process.execPath, "--no-env-file", ...args], {
+        cwd: root,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exit] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(exit, stderr).toBe(0);
+      return stdout;
+    }
+    await run("scripts/cloud-settings.ts", settings);
+    await run(
+      "apps/cli/index.ts",
+      "init",
+      "examples/task.json",
+      join(directory, "native.sqlite"),
+      settings,
+    );
+    const flags = ["apps/cli/index.ts", "--roles", "scripts/cloud-roles.ts"];
+    const result = JSON.parse(
+      await run(
+        ...flags,
+        "role",
+        "implementation",
+        "examples/codex-worker-input.json",
+        database,
+        settings,
+      ),
+    );
+    expect(result.status).toBe("completed");
+    const call = JSON.parse(await readFile(receipt, "utf8"));
+    expect(call.args).toContain("workspace-write");
+    expect(call.args).toContain("gpt-6.1-sol");
+    expect(call.args).toContain('model_reasoning_effort="xhigh"');
+    expect(
+      call.workspace.startsWith(join(root, "runs/cloud-codex/artifacts/")),
+    ).toBe(true);
+    expect(await readdir(auth)).toEqual([]);
+    await rm(executable);
+    const reopened = JSON.parse(await run(...flags, "run", database));
+    expect(reopened.status).toBe("completed");
+    expect(await readFile(receipt, "utf8")).toBe(JSON.stringify(call));
+    await rm(call.workspace, { recursive: true });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

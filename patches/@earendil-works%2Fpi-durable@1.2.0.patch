@@ -1,0 +1,417 @@
+diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
+index 80e15fe..38804b4 100644
+--- a/dist/harness/context.d.ts
++++ b/dist/harness/context.d.ts
+@@ -1,8 +1,13 @@
+ import type { Context } from "@earendil-works/chord";
+-import type { Message } from "@earendil-works/pi-ai";
++import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+ import type { SessionImpl } from "../session/session.ts";
+ import type { ConversationId, EntryId, EntryRecord, Storage } from "../types.ts";
+ import type { ContextView } from "./types.ts";
++/** Reusable output from an interrupted response; tool drafts are text, never executable calls. */
++export declare function continuationContent(message: AssistantMessage): AssistantMessage["content"];
++/** Identity of a completed, replayable OpenAI Responses reasoning item. */
++export declare function responsesReasoningId(part: AssistantMessage["content"][number]): string | undefined;
++export declare function isIncompleteResponse(message: AssistantMessage): boolean;
+ /** Head marker and newest visible entry that fix one committed context range. */
+ export type ContextBounds = {
+     readonly head: (EntryRecord & {
+diff --git a/dist/harness/context.js b/dist/harness/context.js
+index 8675a14..f32c9ca 100644
+--- a/dist/harness/context.js
++++ b/dist/harness/context.js
+@@ -1,4 +1,8 @@
+ import { idFromNumber } from "../ids.js";
++import { Type } from "typebox";
++import { Check } from "typebox/value";
++import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
++import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
+ const SCAN_PAGE_SIZE = 256;
+ const EXCLUDED_STOP_REASONS = new Set(["aborted", "error", "deferred"]);
+ const MISSING_RESULT_TEXT = "Tool result unavailable: history ends before this call completed.";
+@@ -127,7 +131,48 @@ function contribute(entry, edit) {
+     if (edit?.action === "omit")
+         return Object.freeze([]);
+     const contributed = edit?.action === "replace" ? edit.messages : (entry.model ?? []);
+-    return Object.freeze(contributed.filter((message) => message.role !== "assistant" || !EXCLUDED_STOP_REASONS.has(message.stopReason)));
++    return Object.freeze(contributed.flatMap((message) => {
++        if (message.role !== "assistant")
++            return [message];
++        if (!isIncompleteResponse(message))
++            return EXCLUDED_STOP_REASONS.has(message.stopReason) ? [] : [message];
++        const content = continuationContent(message);
++        return content.length === 0 ? [] : [freezeJson({ ...message, content, stopReason: "length" })];
++    }));
++}
++export function isIncompleteResponse(message) {
++    return message.stopReason === "length" || (isRetryableAssistantError(message) && !isContextOverflow(message));
++}
++const reasoningItem = Type.Object({
++    type: Type.Literal("reasoning"),
++    id: Type.String({ minLength: 1 }),
++    encrypted_content: Type.String({ minLength: 1 }),
++    status: Type.Optional(Type.Union([Type.Literal("completed"), Type.Null()])),
++    summary: Type.Array(Type.Object({ type: Type.Literal("summary_text"), text: Type.String() })),
++});
++/** Identity of a completed, replayable OpenAI Responses reasoning item. */
++export function responsesReasoningId(part) {
++    if (part.type === "thinking" && part.thinkingSignature) {
++        try {
++            const item = JSON.parse(part.thinkingSignature);
++            if (Check(reasoningItem, item)) return item.id;
++        } catch {}
++    }
++}
++/** Reusable output from an interrupted response; tool drafts are text, never executable calls. */
++export function continuationContent(message) {
++    const responses = ["openai-responses", "openai-codex-responses"].includes(message.api);
++    const sameResponseModel = message.responseModel === undefined || message.responseModel === message.model;
++    return message.content.map((part) => {
++        if (part.type === "toolCall")
++            return { type: "text", text: `Unexecuted tool draft (possibly incomplete) for ${part.name}:\n${JSON.stringify(part.arguments)}\nReissue the complete tool call to execute it.` };
++        if (part.type === "text") return { type: "text", text: part.text };
++        if (part.type === "thinking" && !part.redacted && !(sameResponseModel && (responses ? responsesReasoningId(part) : part.thinkingSignature)))
++            return { type: "text", text: part.thinking };
++        return part;
++    }).filter((part) => part.type === "text"
++        ? part.text.trim().length > 0
++        : part.type === "thinking" && (!part.redacted || sameResponseModel) && (part.thinking.trim().length > 0 || Boolean(part.thinkingSignature)));
+ }
+ /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
+ const deeplyFrozen = new WeakSet();
+diff --git a/dist/harness/generation.js b/dist/harness/generation.js
+index 136bed4..5963691 100644
+--- a/dist/harness/generation.js
++++ b/dist/harness/generation.js
+@@ -6,6 +6,7 @@ import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.j
+ import { defineTask } from "../tasks.js";
+ import { addTools } from "./agent.js";
+ import { createCompaction, estimateContext, selectCut } from "./compaction.js";
++import { continuationContent, isIncompleteResponse } from "./context.js";
+ import { applyBoundary, prepareBoundary } from "./inbox.js";
+ import { assignJson } from "./json.js";
+ import { endRun, LiveDoc } from "./live.js";
+@@ -114,10 +115,11 @@ export const GenerationTask = defineTask({
+                 return failNoModel(runtime, ref, context);
+             const view = await runtime.context(conversationId, context, { at: cutoff });
+             let messages = view.messages;
++            let stream = runtime.models.streamSimple.bind(runtime.models);
+             await runtime.hooks.each("beforeRequest", async (hook) => {
+-                const replaced = await hook({ messages }, runtime, context);
+-                if (replaced !== undefined)
+-                    messages = replaced.messages;
++                const replaced = await hook({ messages, stream, entries: view.entries }, runtime, context);
++                messages = replaced?.messages ?? messages;
++                stream = replaced?.stream ?? stream;
+             });
+             const options = {
+                 ...streamOptions,
+@@ -125,7 +127,7 @@ export const GenerationTask = defineTask({
+                 sessionId: await ensureProviderSessionId(runtime, context),
+                 ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
+             };
+-            const message = await streamResponse(runtime, model, messages, options, attempt, context);
++            const message = await streamResponse(runtime, model, messages, options, attempt, context, stream);
+             const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
+             await classify(runtime, request, message, context);
+         },
+@@ -278,7 +280,7 @@ export async function convertPartial(tx, live, conversationId) {
+  * `progress.partialIntervalMs` (default 100 ms) with one commit in flight; `finally` stops the throttle and awaits that
+  * commit, so no stale partial lands after the outcome.
+  */
+-async function streamResponse(runtime, model, messages, options, attempt, context) {
++async function streamResponse(runtime, model, messages, options, attempt, context, stream) {
+     const interval = runtime.settings.progress.partialIntervalMs;
+     let pending;
+     let timer;
+@@ -312,7 +314,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
+         });
+     };
+     try {
+-        const events = runtime.models.streamSimple(model, { messages: [...messages] }, options);
++        const events = stream(model, { messages: [...messages] }, options);
+         for await (const event of events) {
+             // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
+             // never gets past it, so it never leaves a partial.
+@@ -355,12 +357,13 @@ async function classify(runtime, request, message, context) {
+         return;
+     }
+     await runtime.hooks.each("afterResponse", (hook) => hook(message, runtime, context));
++    const incomplete = isIncompleteResponse(message) && continuationContent(message).length > 0;
+     const calls = message.content.filter((content) => content.type === "toolCall");
+     if (message.stopReason === "toolUse" && calls.length > 0) {
+         return startToolRound(runtime, request, message, calls, context);
+     }
+-    if (message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse") {
+-        return answer(runtime, message, context);
++    if (incomplete || message.stopReason === "stop" || message.stopReason === "toolUse") {
++        return answer(runtime, message, context, incomplete);
+     }
+     // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
+     const settings = runtime.settings;
+@@ -402,7 +405,9 @@ async function classify(runtime, request, message, context) {
+             };
+             return { status: "running", checkpoint };
+         }
+-        const text = message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
++        const text = message.stopReason === "length"
++            ? "Model response reached its output limit without resumable text or reasoning"
++            : message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
+         endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "model_error", detail: text });
+         return {
+             status: "terminal",
+@@ -411,12 +416,14 @@ async function classify(runtime, request, message, context) {
+     }, context);
+ }
+ /**
+- * A final answer; the final boundary places queued items (spec §6). The first `onYield` continuation appends a user
+- * message and hands the run to a successor generation, but only when the boundary selected no user item and no reset.
+- * Otherwise the run's inputs settle `done`, and selected user items start the next run.
++ * A truncated answer keeps the current inputs and admits steering at the post-tools boundary. A complete answer
++ * reaches the final boundary; its first `onYield` continuation keeps the run only when no user item or reset intervenes.
++ * Both use the ordinary atomic handoff to a successor generation. A reset ends a truncated run without an answer.
+  */
+-async function answer(runtime, message, context) {
+-    let continuation;
++async function answer(runtime, message, context, incomplete) {
++    let continuation = incomplete
++        ? "Continue from the preceding incomplete response. Finish the response; reissue any incomplete tool call with complete arguments."
++        : undefined;
+     await runtime.hooks.each("onYield", async (hook) => {
+         if (continuation !== undefined)
+             return;
+@@ -429,15 +436,19 @@ async function answer(runtime, message, context) {
+         const live = await tx.doc(LiveDoc, conversationId);
+         const entry = await appendAssistant(tx, conversationId, message);
+         const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
+-        const { users, reset } = await applyBoundary(tx, boundary, "final", runtime.now());
+-        if (continuation !== undefined && users.length === 0 && !reset) {
++        const { users, reset } = await applyBoundary(tx, boundary, incomplete ? "postTools" : "final", runtime.now());
++        if (continuation !== undefined && (incomplete || users.length === 0) && !reset) {
++            if (incomplete && live.run?.taskId === runtime.taskId)
++                live.run.inputs.push(...users);
+             const user = { role: "user", content: continuation, timestamp: runtime.now() };
+             await tx.appendEntry(UserEntry, conversationId, { model: [user] });
+             handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
+             delete live.generation;
+             return result;
+         }
+-        endRun(tx, live, runtime.taskId, { status: "done", answer: entry.id });
++        endRun(tx, live, runtime.taskId, incomplete
++            ? { status: "unanswered", reason: "reset" }
++            : { status: "done", answer: entry.id });
+         if (users.length > 0)
+             await startRun(tx, conversationId, live, users);
+         return result;
+diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
+index ea3adc9..bec59c2 100644
+--- a/dist/harness/types.d.ts
++++ b/dist/harness/types.d.ts
+@@ -680,17 +680,25 @@ export interface HookApi extends DocumentReader {
+     readonly conversationId: ConversationId;
+     /** `HarnessOptions.models`. */
+     readonly models: Models;
++    /** Committed raw active transcript and model context, optionally cut off at a visible entry. */
++    context(conversationId: ConversationId, context: Context, options?: {
++        readonly at?: EntryId;
++    }): Promise<ContextView>;
+     memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
+     memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
+ }
+ export type HookResult<T> = T | undefined | Promise<T | undefined>;
+ /** Hooks of the built-in generation task. */
+ export interface GenerationHooks {
+-    /** Before every request attempt, including recovery; the result is used for that request only. */
++    /** Before every request attempt, including recovery; replacements apply only to that request. */
+     beforeRequest(request: {
+         readonly messages: readonly Message[];
++        readonly stream: Models["streamSimple"];
++        /** Raw active entries at this request's cutoff, before model filtering. */
++        readonly entries: readonly EntryRecord[];
+     }, api: HookApi, context: Context): HookResult<{
+-        readonly messages: readonly Message[];
++        readonly messages?: readonly Message[];
++        readonly stream?: Models["streamSimple"];
+     }>;
+     /** Every terminal provider message, before classification. */
+     afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 47a494d..8cff5a7 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -3,6 +3,7 @@ export { AssistantEntry, CompactionEntry, defineEntry, ResetEntry, SystemEntry,
+ export { ConversationBusy, ReadAfterWrite, SessionFailed, StorageRequestError } from "./errors.ts";
+ export { AgentDoc, configure, DEFAULT_COMPACTION_POLICY, DEFAULT_PROGRESS_POLICY, DEFAULT_RETRY_POLICY, } from "./harness/agent.ts";
+ export { type CompactionCheckpoint, type CompactionInput, CompactionTask, type SummaryRequest, } from "./harness/compaction.ts";
++export { continuationContent, responsesReasoningId } from "./harness/context.ts";
+ export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.ts";
+ export { type AgentEvent, type AgentEventStream, type MessageChange, type SnapshotEvent, type ToolEventCall, watchEvents, } from "./harness/events.ts";
+ export { type GenerationCheckpoint, type GenerationInput, type GenerationResult, GenerationTask, } from "./harness/generation.ts";
+diff --git a/dist/index.js b/dist/index.js
+index aed8e9d..4c165bd 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3,6 +3,7 @@ export { AssistantEntry, CompactionEntry, defineEntry, ResetEntry, SystemEntry,
+ export { ConversationBusy, ReadAfterWrite, SessionFailed, StorageRequestError } from "./errors.js";
+ export { AgentDoc, configure, DEFAULT_COMPACTION_POLICY, DEFAULT_PROGRESS_POLICY, DEFAULT_RETRY_POLICY, } from "./harness/agent.js";
+ export { CompactionTask, } from "./harness/compaction.js";
++export { continuationContent, responsesReasoningId } from "./harness/context.js";
+ export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.js";
+ export { watchEvents, } from "./harness/events.js";
+ export { GenerationTask, } from "./harness/generation.js";
+diff --git a/dist/session/session.js b/dist/session/session.js
+index 7b7c028..89a6658 100644
+--- a/dist/session/session.js
++++ b/dist/session/session.js
+@@ -603,9 +603,10 @@ export class SessionImpl {
+             throw error;
+         }
+         const observed = { version: loaded.valueVersion };
++        const recordId = loaded.record.id;
+         unsubscribeCommit = this.observeCommits((publication, context) => {
+             for (const change of publication.changes) {
+-                if (change.type !== "document" || change.record.id !== loaded.record.id)
++                if (change.type !== "document" || change.record.id !== recordId)
+                     continue;
+                 // A document state's frames carry no caller cancellation; a watch observes its own cancellation.
+                 const frameContext = observer instanceof CommittedStateSource ? withoutAbortSignal(context) : context;
+diff --git a/dist/storage/sqlite/node.d.ts b/dist/storage/sqlite/node.d.ts
+index 45c897f..922a09e 100644
+--- a/dist/storage/sqlite/node.d.ts
++++ b/dist/storage/sqlite/node.d.ts
+@@ -28,7 +28,8 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
+ export declare class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
+     private readonly access;
+     private closed;
+-    constructor(database: DatabaseSync);
++    private readonly readOnly;
++    constructor(database: DatabaseSync, options?: { readOnly?: boolean });
+     transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T>;
+     close(): Promise<void>;
+     protected runOperation<T>(operation: () => T): Promise<T>;
+diff --git a/dist/storage/sqlite/node.js b/dist/storage/sqlite/node.js
+index 7770888..e9d9f31 100644
+--- a/dist/storage/sqlite/node.js
++++ b/dist/storage/sqlite/node.js
+@@ -105,8 +105,9 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
+ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+     access = new SerialOperationQueue();
+     closed = false;
+-    constructor(database) {
++    constructor(database, { readOnly = false } = {}) {
+         super(database, new Map());
++        this.readOnly = readOnly;
+     }
+     transaction(callback) {
+         return this.access.runAsync(async () => {
+@@ -137,7 +138,8 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+             this.closed = true;
+             this.statements.clear();
+             try {
+-                this.database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
++                if (!this.readOnly || this.database.isTransaction)
++                    this.database.exec(this.readOnly ? "ROLLBACK" : "PRAGMA wal_checkpoint(TRUNCATE)");
+             }
+             finally {
+                 this.database.close();
+diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
+index 8c323ba..f99bd92 100644
+--- a/dist/storage/sqlite/storage.d.ts
++++ b/dist/storage/sqlite/storage.d.ts
+@@ -10,9 +10,10 @@ export declare class SqliteStorage implements Storage {
+     private closing;
+     private admittedReads;
+     private readsDrained;
++    private readonly readOnly;
+     private constructor();
+-    /** Initialize storage over an owned SQLite database facade. */
+-    static open(db: SqliteDatabase): Promise<SqliteStorage>;
++    /** readOnly requires the caller to hold a SQLite read transaction until close. */
++    static open(db: SqliteDatabase, options?: { readOnly?: boolean }): Promise<SqliteStorage>;
+     commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq>;
+     mintId<I extends Id<string>>(): Promise<I>;
+     conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;
+diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
+index 86b5fe4..10a12ea 100644
+--- a/dist/storage/sqlite/storage.js
++++ b/dist/storage/sqlite/storage.js
+@@ -2,7 +2,7 @@ import { apply } from "@earendil-works/chord/delta";
+ import { StorageRequestError } from "../../errors.js";
+ import { idFromNumber, seqFromNumber } from "../../ids.js";
+ import { nextCursor, scanStart } from "../scan.js";
+-import { applySqliteMigrations } from "./migrations.js";
++import { applySqliteMigrations, CURRENT_SQLITE_SCHEMA_VERSION } from "./migrations.js";
+ const parseJson = (value) => JSON.parse(value);
+ const encodeJson = (value) => JSON.stringify(value);
+ // Some SQLite bindings replace lone UTF-16 surrogates. JSON encoding keeps indexed identities lossless.
+@@ -77,18 +77,23 @@ export class SqliteStorage {
+     closing;
+     admittedReads = 0;
+     readsDrained;
+-    constructor(db, nextId) {
++    constructor(db, nextId, readOnly) {
++        this.readOnly = readOnly;
+         this.db = db;
+         this.nextId = nextId;
+     }
+-    /** Initialize storage over an owned SQLite database facade. */
+-    static async open(db) {
++    /** readOnly requires the caller to hold a SQLite read transaction until close. */
++    static async open(db, { readOnly = false } = {}) {
+         try {
+-            await applySqliteMigrations(db);
++            if (readOnly) {
++                const schema = await db.get("SELECT version FROM durable_schema WHERE singleton = 1");
++                if (schema?.version !== CURRENT_SQLITE_SCHEMA_VERSION)
++                    throw new Error("Unsupported durable SQLite schema version");
++            } else await applySqliteMigrations(db);
+             const metadata = await db.get("SELECT next_id, next_seq FROM durable_metadata WHERE singleton = 1");
+             if (metadata === undefined)
+                 throw new Error("Durable SQLite metadata is missing");
+-            return new SqliteStorage(db, Number(metadata.next_id));
++            return new SqliteStorage(db, Number(metadata.next_id), readOnly);
+         }
+         catch (error) {
+             try {
+@@ -101,7 +106,7 @@ export class SqliteStorage {
+         }
+     }
+     async commit(writes, _context) {
+-        this.assertOpen();
++        this.assertOpen(true);
+         const documentActions = this.prepareDocumentActions(writes);
+         const candidateNextId = this.candidateNextId(writes);
+         const seq = await this.db.transaction(async (transaction) => {
+@@ -121,7 +126,7 @@ export class SqliteStorage {
+         return seq;
+     }
+     async mintId() {
+-        this.assertOpen();
++        this.assertOpen(true);
+         if (!Number.isSafeInteger(this.nextId))
+             throw new Error("ID space is exhausted");
+         return idFromNumber(this.nextId++);
+@@ -362,6 +367,8 @@ export class SqliteStorage {
+     }
+     async document(id, at, _context) {
+         this.assertOpen();
++        if (this.readOnly)
++            return this.admitRead(() => this.materializeDocument(this.db, id, at));
+         // The record and revision queries must observe one committed state; a commit between them can replace the base.
+         return this.db.transaction((transaction) => this.materializeDocument(transaction, id, at));
+     }
+@@ -662,9 +669,11 @@ export class SqliteStorage {
+             }
+         }
+     }
+-    assertOpen() {
++    assertOpen(write = false) {
+         if (this.closed)
+             throw new Error("SqliteStorage is closed");
++        if (write && this.readOnly)
++            throw new Error("SqliteStorage is read-only");
+     }
+ }
+ //# sourceMappingURL=storage.js.map
+\ No newline at end of file

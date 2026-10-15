@@ -1,102 +1,41 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { realpath, writeFile } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { ROOT_CONVERSATION_ID, type Cursor } from "@earendil-works/pi-durable";
-import { Xean, openXeanStorage, type XeanOptions } from "xean";
-import { chatGptWebProviderId } from "xean/pi";
-import { serveControl } from "xean-cli/control";
-import { verifyInstall } from "./dependencies.ts";
+import type { ConversationId, EntryId, Tx } from "@earendil-works/pi-durable";
+import { open, readSettings, type Roles } from "../src/index.ts";
+import { scanTasks, type WorkerInput } from "../src/core/workflow.ts";
 import {
-  createSolver,
-  codexResearch,
-  declarationVersion,
-  piRuntime,
-  project,
-  readSettings,
-  decode,
-  taskSchema,
-  submitCommand,
-  type Research,
-} from "xean/solve";
+  controlCommand,
+  observeOwner,
+  runOwner,
+} from "../apps/cli/lifecycle.ts";
 
-/** Correctness checks task-permitted background; unresolved premises stay blocked. */
-export const offlineResearch: Research = {
-  retrieval: false,
-  async source({ notes }) {
-    return notes.map(({ id, premises }) => ({
-      noteId: id,
-      result: premises.length
-        ? {
-            verdict: "INCONCLUSIVE" as const,
-            report:
-              "Source retrieval is disabled. These premises remain unresolved under the task's proof rules. Prove them in notes before relying on them.",
-          }
-        : {
-            verdict: "PASS" as const,
-            report:
-              "Correctness left no unresolved external premise under the task's proof rules.",
-          },
-    }));
-  },
-  async literature() {
-    throw new Error(
-      "Literature retrieval is disabled for this closed-book run",
-    );
-  },
-  async review() {
-    throw new Error("Online review is disabled for this closed-book run");
-  },
-};
-
-/** This experiment counts planning invocations, including interrupted ones. */
-export function limitRounds(
-  solver: ReturnType<typeof createSolver>,
-  directory: string,
-  allowance = 20,
-) {
-  assert.ok(
-    Number.isSafeInteger(allowance) && allowance >= 0,
-    "Invalid round allowance",
-  );
-  const plan = solver.functions.coordinator;
-  let rounds = 0;
-  while (existsSync(resolve(directory, `round-${rounds + 1}.json`))) rounds++;
-  assert.ok(rounds <= allowance, "Experiment exceeded its round allowance");
-  solver.functions.coordinator = async (...args) => {
-    if (rounds === allowance) return { work: [] };
-    const marker = {
-      round: rounds + 1,
-      attemptId: args[1].attemptId,
-      startedAt: new Date().toISOString(),
-    };
-    await writeFile(
-      resolve(directory, `round-${rounds + 1}.json`),
-      JSON.stringify(marker) + "\n",
-      { flag: "wx", flush: true },
-    );
-    rounds++;
-    console.log(JSON.stringify(marker));
-    return plan(...args);
-  };
-  return () => rounds;
+export async function readRounds(tx: Tx, root: ConversationId) {
+  const rounds: EntryId[] = [];
+  for (const task of await scanTasks(tx, root, "research.worker")) {
+    const input = task.input as WorkerInput;
+    if ("at" in input) rounds.push(input.at);
+  }
+  return rounds;
 }
 
-/** A drained campaign needs a new signal as well as a higher outer allowance. */
-export async function resumeExperiment(engine: Xean, allowance: number) {
-  if ((await engine.inspect()).status === "blocked") return engine.resume();
-  await submitCommand(engine, {
-    kind: "guide",
-    id: `bounded-continue-${allowance}`,
-    text: "Continue the exact task using the recorded mathematical notes and verification feedback.",
-  });
-  return engine.resume();
+/** Each admitted worker counts once, outside role inputs. */
+export function limitRounds(plan: Roles["coordinator"], limit = 20) {
+  assert.ok(Number.isSafeInteger(limit) && limit >= 0, "Invalid round limit");
+  return async (...args: Parameters<Roles["coordinator"]>) => {
+    const [, runtime, context] = args;
+    let available = false;
+    await runtime.commit(async (tx) => {
+      const rounds = await readRounds(tx, runtime.conversationId);
+      assert.ok(rounds.length <= limit, "Experiment exceeded its round limit");
+      available = rounds.length < limit;
+    }, context);
+    return available ? plan(...args) : { work: null };
+  };
 }
 
 if (import.meta.main) {
-  await verifyInstall(resolve(import.meta.dir, ".."));
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     allowPositionals: true,
@@ -106,159 +45,66 @@ if (import.meta.main) {
       "round-limit": { type: "string", default: "20" },
     },
   });
-  const offline = values.offline;
-  const allowance = Number(values["round-limit"]);
-  assert.ok(
-    positionals.length === 1,
-    "Usage: scripts/bounded-solve.ts RUN_DIRECTORY [--offline] [--round-limit TOTAL] [--resume]",
+  assert.equal(
+    positionals.length,
+    1,
+    "Usage: scripts/bounded-solve.ts RUN_DIRECTORY [--offline] [--resume] [--round-limit TOTAL]",
   );
   const directory = resolve(positionals[0]!);
-  const task = decode(
-    taskSchema,
-    await Bun.file(resolve(directory, "task.json")).json(),
-  );
+  const roundLimit = Number(values["round-limit"]);
+  const task = await Bun.file(resolve(directory, "task.json")).json();
   const settings = readSettings(
     await Bun.file(resolve(directory, "settings.json")).json(),
   );
-  if (offline) {
-    assert.notEqual(settings.literature, true);
-    assert.equal(
-      settings.codex,
-      undefined,
-      "Codex worker cannot enforce closed-book execution",
-    );
+  if (values.offline) {
     assert.notEqual(
-      settings.profiles.explorer?.provider,
-      chatGptWebProviderId,
-      "ChatGPT Web cannot enforce closed-book execution",
+      settings.literature,
+      true,
+      "Closed-book runs cannot enable literature",
     );
   }
-  const solver = createSolver(
-    task,
-    () => piRuntime(settings),
-    settings,
-    offline
-      ? offlineResearch
-      : codexResearch(settings.research, settings.usagePrefix),
-  );
-  const rounds = limitRounds(solver, directory, allowance);
-  const options: XeanOptions = {
-    ...solver,
-    // A separate kind prevents the online CLI from resuming this experiment.
-    task: {
-      kind: offline ? "xean.solve.offline" : "xean.solve",
-      version: declarationVersion,
-      task,
-      settings,
-    },
-    limits: settings.limits,
-  };
   const database = resolve(directory, "campaign.sqlite");
-  const storage = await openXeanStorage(database);
-  const engine = await Xean.open(storage, options);
-  let control: Awaited<ReturnType<typeof serveControl>> | undefined;
-  let shutdown: Promise<unknown> | undefined;
-  const interrupt = () => {
-    shutdown ??= Promise.all([control?.close(true), engine.close()]);
-    void shutdown.catch(() => {});
-  };
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
-  const heartbeat = setInterval(() => {
-    void engine
-      .inspect()
-      .then((view) =>
-        console.log(
-          JSON.stringify({
-            status: view.status,
-            rounds: rounds(),
-            calls: view.providerCalls,
-            active: view.work
-              .filter((work) => work.status === "active")
-              .map((work) => ({ id: work.id, role: work.role })),
-          }),
-        ),
-      )
-      .catch(() => {});
-  }, 30_000);
-  const write = (name: string, value: unknown) =>
-    Bun.write(resolve(directory, name), JSON.stringify(value, null, 2) + "\n");
-  const exportRecords = async () => {
-    // The campaign is quiescent here. Pi pages newest first; retain only page
-    // cursors so export can revisit them in chronological order.
-    const page = (cursor?: Cursor) =>
-      storage.scanEntries(
-        { conversationId: ROOT_CONVERSATION_ID },
-        64,
-        cursor,
-        BACKGROUND_CONTEXT,
-      );
-    const cursors: (Cursor | undefined)[] = [];
-    let cursor: Cursor | undefined;
-    do {
-      cursors.push(cursor);
-      cursor = (await page(cursor)).next;
-    } while (cursor);
-    const output = Bun.file(resolve(directory, "records.json")).writer();
-    try {
-      output.write("[");
-      let separator = "\n";
-      for (const cursor of cursors.reverse()) {
-        for (const record of (await page(cursor)).items.toReversed()) {
-          output.write(
-            separator + JSON.stringify(record, null, 2).replace(/^/gm, "  "),
-          );
-          separator = ",\n";
-        }
-        await output.flush();
-      }
-      output.write(separator === "\n" ? "]\n" : "\n]\n");
-    } finally {
-      await output.end();
-    }
-  };
+  const owner = await open(database, {
+    create: { task, settings },
+    roles: ({ coordinator }) => ({
+      coordinator: limitRounds(coordinator, roundLimit),
+    }),
+  });
   try {
-    control = await serveControl(await realpath(database), engine);
-    if (values.resume) await resumeExperiment(engine, allowance);
-    else await engine.run();
-    await control.close();
-    if (shutdown) process.exitCode = 130;
-    else {
-      let campaign = await engine.inspect();
-      const roundLimit =
-        rounds() === allowance && campaign.status === "running";
-      if (roundLimit) {
-        await engine.pause();
-        campaign = await engine.inspect();
-      }
-      clearInterval(heartbeat);
-      await write("result.json", {
-        outcome:
-          campaign.status === "completed"
-            ? "accepted"
-            : roundLimit
-              ? "round_limit"
-              : campaign.status,
-        rounds: rounds(),
-        campaign,
-        notes: project(campaign),
-      });
-      await exportRecords();
-      console.log(
-        JSON.stringify({
-          status: campaign.status,
+    await runOwner(
+      owner,
+      await realpath(database),
+      async () => {
+        let status = await observeOwner(owner);
+        const rounds = Object.values(status.work).reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        const hitRoundLimit = rounds === roundLimit && status.status === "idle";
+        if (hitRoundLimit) {
+          await controlCommand(owner, { kind: "pause" });
+          status = await observeOwner(owner);
+        }
+        const result = {
+          ...status,
+          outcome:
+            status.status === "completed"
+              ? "accepted"
+              : hitRoundLimit
+                ? "round_limit"
+                : status.status,
           roundLimit,
-          rounds: rounds(),
-          calls: campaign.providerCalls,
-        }),
-      );
-    }
+          rounds,
+        };
+        await Bun.write(
+          resolve(directory, "result.json"),
+          JSON.stringify(result, null, 2) + "\n",
+        );
+        console.log(JSON.stringify(result));
+      },
+      { resume: values.resume },
+    );
   } finally {
-    clearInterval(heartbeat);
-    process.off("SIGINT", interrupt);
-    process.off("SIGTERM", interrupt);
-    await control?.close(true);
-    await shutdown;
-    await engine.close();
+    await owner.close();
   }
 }

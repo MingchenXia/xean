@@ -17,7 +17,7 @@ if [[ "$action" != xean && $# != 0 ]]; then
   exit 2
 fi
 if [[ "$(uname -s)/$(uname -m)" != Linux/x86_64 ]]; then
-  printf 'Cloud bootstrap supports Linux x86_64. Use README portable Bun setup on other platforms.\n' >&2
+  printf 'Cloud bootstrap supports Linux x86_64. Use the README Bun installation on other platforms.\n' >&2
   exit 1
 fi
 for tool in node npm curl tar; do command -v "$tool" >/dev/null; done
@@ -67,15 +67,13 @@ for (const entry of [...provenance.artifacts, ...provenance.patches]) {
     throw new Error(`Dependency provenance mismatch: ${entry.path}`);
 }
 JS
-if ! "$bun" --no-install --no-env-file --eval 'import { verifyInstall } from "./scripts/dependencies.ts"; await verifyInstall(process.cwd());' >/dev/null 2>&1; then
-  "$tini" -s -g -- "$bun" run setup >&2
-fi
+"$tini" -s -g -- "$bun" install --frozen-lockfile --ignore-scripts >&2
 # This file is generated, contains no auth, and follows the current checkout path.
 "$bun" --no-install --no-env-file scripts/cloud-settings.ts "$cloud_dir/codex-settings.json"
 case "$action" in
   setup) "$tini" -s -g -- "$bun" run xean --version ;;
   check) exec "$tini" -s -g -- "$bun" run check ;;
-  xean) exec "$tini" -s -g -- "$bun" --no-install --no-env-file packages/cli/src/index.ts "$@" ;;
+  xean) exec "$tini" -s -g -- "$bun" --no-install --no-env-file apps/cli/index.ts "$@" ;;
   login) exec "$tini" -s -g -- "$root/scripts/cloud-codex.sh" login --device-auth ;;
   doctor)
     "$tini" --version
